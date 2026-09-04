@@ -1,7 +1,8 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { COM_InitArgv, COM_InitFilesystem } from "../src/common/common";
+import { COM_InitArgv, COM_InitFilesystem, COM_CheckRegistered, pop } from "../src/common/common";
+import { writePakToDisk } from "./support/pak_builder";
 import { SysError } from "../src/platform/sys";
 import { SynctypeT } from "../src/common/modelgen";
 import { CONTENTS_EMPTY, CONTENTS_SOLID, MAX_MAP_LEAFS } from "../src/common/bspfile";
@@ -70,8 +71,23 @@ beforeAll(() => {
   writeGameFile(baseDir, "id1/progs/test.mdl", buildMdl({ numframes: 3, synctype: 1, flags: EF_ROCKET }));
   writeGameFile(baseDir, "id1/progs/test.spr", buildSpr({ numframes: 2, width: 32, height: 64, synctype: 0 }));
 
+  // gfx/pop.lmp inside id1/pak0.pak: the registered-version check's 128
+  // big-endian shorts. Without it COM_CheckRegistered leaves the engine in
+  // shareware mode, and COM_FindFile then never searches loose directories
+  // for a path containing a slash ("maps/test.bsp") -- exactly as the C does.
+  // It must sit in a pak because that same rule would hide a loose pop.lmp.
+  // Another suite in the same process may already have run the check, so
+  // this one re-runs it.
+  const popLmp = new Uint8Array(256);
+  for (let i = 0; i < 128; i++) {
+    popLmp[i * 2] = (pop[i] >> 8) & 0xff;
+    popLmp[i * 2 + 1] = pop[i] & 0xff;
+  }
+  writePakToDisk(join(baseDir, "id1", "pak0.pak"), [{ name: "gfx/pop.lmp", data: popLmp }]);
+
   COM_InitArgv(["quake", "-basedir", baseDir]);
   COM_InitFilesystem();
+  COM_CheckRegistered();
   Mod_Init();
 });
 
