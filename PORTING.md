@@ -195,9 +195,12 @@ allocation-free wrappers:
 - `Sys_Error` → `class SysError extends Error`; `Host_Error` → `class HostError`
   thrown and caught by `Host_Frame`'s `longjmp` equivalent (`try/catch` around
   `_Host_Frame`); `Host_EndGame` → `class HostEndGame`. Never throw bare strings.
-- `Con_Printf`/`Con_DPrintf`/`Sys_Printf` varargs → `Com_sprintf(fmt, ...args)` ported
-  once in `src/common/common.ts` (`%s %d %i %u %f %g %c %x %%`, width/precision as
-  used, printf rounding for `%f`); `va()` → template literals when trivial.
+- `Con_Printf`/`Con_DPrintf`/`Sys_Printf` varargs → `Com_sprintf(fmt, ...args)` in
+  `src/common/sprintf.ts` (libc's vsprintf, not a Quake file; `%s %d %i %u %f %g %c %x
+  %%`, width/precision as used, printf rounding for `%f`); `va()` → template literals
+  when trivial. `Sys_Error`/`Sys_Printf`/`Sys_Quit`/`Sys_FloatTime` are already in
+  `src/platform/sys.ts` and `Con_Printf`/`Con_DPrintf`/`Con_SafePrintf` in
+  `src/client/console.ts` (a placeholder U047 replaces); import them, never redeclare.
 - `strcpy/strncpy/Q_strcasecmp/strtok` → string operations; `COM_Parse` keeps a
   parse-state object; `com_token` becomes its return value.
 - `#ifdef _WIN32/__linux__/id386/GLQUAKE/QUAKE2/SWDS` → take the portable, non-asm
