@@ -101,10 +101,11 @@ Deviations from PORTING.md / the C source (ruled under "Memory (zone.c)"):
 - `Hunk_Alloc`/`Hunk_AllocName`/`Hunk_HighAllocName`/`Hunk_TempAlloc` each
   return a fresh zero-filled `Uint8Array`. The C rounds the requested size up
   to a 16-byte boundary before adding the `hunk_t` header
-  (`sizeof(hunk_t) + ((size+15)&~15)`); this port keeps the `(size+15)&~15`
-  rounding on the returned array's length (there is no header to add, since
-  there is no shared hunk buffer for one to live in) so the "how many bytes
-  did I actually get" arithmetic observable at call sites matches the C.
+  (`sizeof(hunk_t) + ((size+15)&~15)`); this port applies that rounding only
+  to the mark counters. The returned array has exactly `size` bytes: in the C
+  the padding is invisible (callers only ever index inside `size`), but a
+  TypedArray's `length` is observable, and lump loaders (model.ts's visdata/
+  lightdata) hand these arrays on as the lump's exact contents.
   `hunk_low_used`/`hunk_high_used` are kept as monotonically increasing
   counters bumped by each alloc's rounded size, so `Hunk_LowMark`/
   `Hunk_HighMark` still return values that increase in call order, which is
@@ -273,10 +274,9 @@ Hunk_AllocName
 export function Hunk_AllocName(size: number, _name: string): Uint8Array {
   if (size < 0) Sys_Error("Hunk_Alloc: bad size: %i", size);
 
-  const rounded = roundHunkSize(size);
-  hunkLowUsed += rounded;
+  hunkLowUsed += roundHunkSize(size);
 
-  return new Uint8Array(rounded);
+  return new Uint8Array(size);
 }
 
 /*
@@ -312,10 +312,9 @@ Hunk_HighAllocName
 export function Hunk_HighAllocName(size: number, _name: string): Uint8Array {
   if (size < 0) Sys_Error("Hunk_HighAllocName: bad size: %i", size);
 
-  const rounded = roundHunkSize(size);
-  hunkHighUsed += rounded;
+  hunkHighUsed += roundHunkSize(size);
 
-  return new Uint8Array(rounded);
+  return new Uint8Array(size);
 }
 
 /*
@@ -326,8 +325,7 @@ Return space from the top of the hunk
 =================
 */
 export function Hunk_TempAlloc(size: number): Uint8Array {
-  const rounded = roundHunkSize(size);
-  return Hunk_HighAllocName(rounded, "temp");
+  return Hunk_HighAllocName(size, "temp");
 }
 
 /*

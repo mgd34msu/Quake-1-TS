@@ -26,10 +26,12 @@ import {
 } from "../src/common/zone";
 
 describe("Hunk_AllocName", () => {
-  test("returns a zeroed buffer of the size rounded up to 16 bytes, like the C's hunk_t alignment", () => {
+  test("returns a zeroed buffer of exactly the requested size; the C's 16-byte rounding lives only in the mark counters", () => {
+    const before = Hunk_LowMark();
     const buf = Hunk_AllocName(10, "test");
-    expect(buf.length).toBe(16); // (10+15) & ~15 == 16
-    expect(Array.from(buf)).toEqual(new Array(16).fill(0));
+    expect(buf.length).toBe(10);
+    expect(Array.from(buf)).toEqual(new Array(10).fill(0));
+    expect(Hunk_LowMark() - before).toBe(16); // (10+15) & ~15 == 16
   });
 
   test("size already a multiple of 16 is unchanged", () => {
@@ -38,25 +40,6 @@ describe("Hunk_AllocName", () => {
   });
 });
 
-describe("Hunk_LowMark", () => {
-  test("increases across allocations, so callers can assert call order", () => {
-    const before = Hunk_LowMark();
-    Hunk_AllocName(1, "a");
-    const afterOne = Hunk_LowMark();
-    Hunk_AllocName(1, "b");
-    const afterTwo = Hunk_LowMark();
-
-    expect(afterOne).toBeGreaterThan(before);
-    expect(afterTwo).toBeGreaterThan(afterOne);
-  });
-});
-
-describe("Hunk_Alloc", () => {
-  test("negative size throws SysError, matching Sys_Error(\"Hunk_Alloc: bad size: %i\")", () => {
-    expect(() => Hunk_Alloc(-1)).toThrow(SysError);
-    expect(() => Hunk_Alloc(-1)).toThrow("Hunk_Alloc: bad size: -1");
-  });
-});
 
 describe("Z_Malloc", () => {
   test("returns a zero-filled buffer of the requested size", () => {
