@@ -1,0 +1,16 @@
+{
+  "name": "quake-1-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "bash scripts/check.sh",
+    "test": "bun test",
+    "start": "bun run src/main.ts",
+    "build": "bun build --compile src/main.ts --outfile q1ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.6.0"
+  }
+}
