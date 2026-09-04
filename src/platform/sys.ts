@@ -23,6 +23,7 @@ Deviations from the C:
   variant are the `#if 0`/dead alternates in sys_linux.c and are dropped.
 */
 
+import { appendFileSync } from "node:fs";
 import { Com_sprintf } from "../common/sprintf";
 
 export class SysError extends Error {
@@ -85,5 +86,5 @@ export function Sys_FloatTime(): number {
 export function Sys_DebugLog(file: string, fmt: string, ...args: Array<string | number>): void {
   const data = Com_sprintf(fmt, ...args);
   // open(file, O_WRONLY | O_CREAT | O_APPEND, 0666); write; close
-  require("node:fs").appendFileSync(file, data);
+  appendFileSync(file, data);
 }
