@@ -9,7 +9,10 @@
     "start": "bun run src/main.ts",
     "build": "bun build --compile src/main.ts --outfile q1ts",
     "start:qwsv": "bun run src/qw/main_sv.ts",
-    "build:qwsv": "bun build --compile src/qw/main_sv.ts --outfile qwsv"
+    "build:qwsv": "bun build --compile src/qw/main_sv.ts --outfile qwsv",
+    "start:qwcl": "bun run src/qw/main_cl.ts",
+    "build:qwcl": "bun build --compile src/qw/main_cl.ts --outfile qwcl",
+    "build:all": "bun run build && bun run build:qwsv && bun run build:qwcl"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",

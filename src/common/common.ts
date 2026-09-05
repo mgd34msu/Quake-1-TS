@@ -107,7 +107,7 @@ Deviations from PORTING.md / the C source:
 import { GAMENAME, MAX_NUM_ARGVS, QuakeParmsT } from "./quakedef";
 import { CRC_Init, CRC_ProcessByte } from "./crc";
 import { Con_Printf } from "../client/console";
-import { Sys_Error, Sys_Printf } from "../platform/sys";
+import { Sys_Error, Sys_FileRead, Sys_FileSeek, Sys_Printf } from "../platform/sys";
 import { Com_sprintf } from "./sprintf";
 import type { CvarT } from "./cvar";
 import type * as CvarModule from "./cvar";
@@ -705,7 +705,14 @@ const handleTable = new Map<number, HandleEntry>();
 
 function handleRead(handle: number, buf: Uint8Array, len: number): number {
   const entry = handleTable.get(handle);
-  if (!entry) return 0;
+  // A pack opened by src/qw/common.ts's COM_LoadPackFile (the qwcl/qwsv
+  // binaries' own filesystem) lives in src/platform/sys.ts's file table, not
+  // this one, and COM_FindFile below hands its `pack.handle` straight back
+  // for a pak hit -- both tables are keyed by the real fd, so a handle is in
+  // exactly one of them. Without this the read silently returns a zero-filled
+  // buffer for every pak-resident file the shared modules load (wad.ts's
+  // W_LoadWadFile, ref_soft/draw.ts's Draw_CachePic, model.ts, snd_mem.ts).
+  if (!entry) return Sys_FileRead(handle, buf, len);
   const n = readSync(entry.fd, buf, 0, len, entry.pos);
   entry.pos += n;
   return n;
@@ -867,8 +874,9 @@ export function COM_FindFile(
         com_filesize = pak.files[i].filelen;
 
         if (mode === "handle") {
-          const entry = handleTable.get(pak.handle);
-          if (entry) entry.pos = pak.files[i].filepos; // Sys_FileSeek (pak->handle, filepos)
+          const entry = handleTable.get(pak.handle); // Sys_FileSeek (pak->handle, filepos)
+          if (entry) entry.pos = pak.files[i].filepos;
+          else Sys_FileSeek(pak.handle, pak.files[i].filepos); // a src/qw/common.ts pack -- see handleRead
           return { handle: pak.handle, length: com_filesize };
         }
 

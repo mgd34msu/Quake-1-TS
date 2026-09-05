@@ -37,10 +37,10 @@ Deviations from PORTING.md / the C source:
   not the installed one. See cl_ents.ts's header for why `gl_flashblend`
   itself is read from the cvar registry by name rather than through a
   Renderer member.
-- `con_ormask = 128` around svc_print's PRINT_CHAT case: QW's console.c adds
-  that global, src/client/console.ts (WinQuake's console) has none, and that
-  file is outside this unit's SCOPE. Both assignments are dropped; the chat
-  line prints uncolored. Reported.
+- `con_ormask = 128` around svc_print's PRINT_CHAT case: QW's console.c owns
+  that global, and it is `conState.con_ormask` on src/qw/client/console.ts's
+  reassigned-globals holder (PORTING.md's rule), so the two assignments are
+  made on the holder rather than through a live binding.
 - `dlight_t.color[4]` (QW/client/client.h) is a field on
   src/client/client.ts's `DlightT`, inert on the WinQuake path;
   CL_MuzzleFlash writes `dl.color[0..3]` exactly where the C writes
@@ -94,7 +94,7 @@ import { AngleVectors, VectorCopy, VectorMA, vec3 } from "../../common/mathlib";
 import { Hunk_Check } from "../../common/zone";
 import { cdAudio } from "../../client/cdaudio";
 import { CactiveT, MAX_STATIC_ENTITIES, cl, cl_dlights, cl_lightstyle, cl_static_entities, cls } from "../../client/client";
-import { Con_DPrintf, Con_Printf } from "../../client/console";
+import { Con_DPrintf, Con_Printf, conState } from "./console";
 import { BOTTOM_RANGE, TOP_RANGE, getRenderer } from "../../client/render";
 import { S_LocalSound, S_PrecacheSound, S_StartSound, S_StaticSound, S_StopSound } from "../../client/snd_dma";
 import { VID_GRADES, vid } from "../../client/vid";
@@ -1053,10 +1053,10 @@ export function CL_ParseServerMessage(): void {
         i = MSG_ReadByte();
         if (i === PRINT_CHAT) {
           S_LocalSound("misc/talk.wav");
-          // con_ormask = 128; -- see file header
+          conState.con_ormask = 128;
         }
         Con_Printf("%s", MSG_ReadString());
-        // con_ormask = 0; -- see file header
+        conState.con_ormask = 0;
         break;
 
       case SvcOpsT.svc_centerprint:

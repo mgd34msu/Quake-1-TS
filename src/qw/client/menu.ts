@@ -140,7 +140,7 @@ import { host } from "../../common/host";
 import { Cvar_SetValue, Cvar_VariableValue } from "../../common/cvar";
 import { Sys_Error, Sys_Quit } from "../../platform/sys";
 import { _windowed_mouse } from "../../platform/sdl";
-import { Con_ToggleConsole_f } from "../../client/console";
+import { Con_ToggleConsole_f } from "./console";
 import { S_LocalSound, S_ExtraUpdate } from "../../client/snd_dma";
 import { Cmd_AddCommand, Cbuf_AddText, Cbuf_InsertText } from "../cmd";
 import { CL_NextDemo, CL_Disconnect, cl_sbar, cl_hudswap } from "./cl_main";

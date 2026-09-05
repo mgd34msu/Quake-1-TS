@@ -29,7 +29,7 @@ Deviations from PORTING.md / the C source:
 
 import { AngleVectors, M_PI, type Vec3, vec3, vec3_origin, VectorAdd, VectorCompare, VectorCopy, VectorMA, VectorNormalize, VectorSubtract } from "../../common/mathlib";
 import { CactiveT, cl, cls } from "../../client/client";
-import { Con_Printf } from "../../client/console";
+import { Con_Printf } from "./console";
 import { Sbar_Changed } from "../../client/sbar";
 import { clMainState } from "./cl_main";
 import { Com_sprintf } from "../../common/sprintf";

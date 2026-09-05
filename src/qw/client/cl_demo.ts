@@ -83,7 +83,7 @@ import { NET_GetPacket, net_from } from "../net_udp";
 import { COM_FClose, COM_FOpenFile, COM_FRead, type FileHandle } from "../../common/common";
 import { SizeBuf } from "../../common/sizebuf";
 import { CactiveT, cl, cl_lightstyle, cl_static_entities, cls } from "../../client/client";
-import { Con_Printf } from "../../client/console";
+import { Con_Printf } from "./console";
 import { Sys_Error, Sys_FileClose, Sys_FileOpenWrite, Sys_FileWrite, Sys_FloatTime } from "../../platform/sys";
 import { cl_baselines } from "./client";
 import { CL_BeginServerConnect, CL_Disconnect, Host_Error, clMainState } from "./cl_main";

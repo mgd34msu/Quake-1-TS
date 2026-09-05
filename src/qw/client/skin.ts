@@ -29,7 +29,7 @@ Deviations from PORTING.md / the C source:
 */
 
 import { CactiveT, cl, cls } from "../../client/client";
-import { Con_Printf } from "../../client/console";
+import { Con_Printf } from "./console";
 import { Cache_Alloc, Cache_Check, Cache_Free, Cache_Report } from "../../common/zone";
 import { Cmd_Argv } from "../../common/cmd";
 import { CvarT } from "../../common/cvar";

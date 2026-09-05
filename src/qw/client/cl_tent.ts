@@ -96,7 +96,7 @@ Deviations from PORTING.md / the C source:
   wrapper.
 */
 
-import { Con_Printf } from "../../client/console";
+import { Con_Printf } from "./console";
 import { M_PI, VectorCopy, VectorNormalize, VectorSubtract, vec3, vec3_origin } from "../../common/mathlib";
 import { Mod_ForName, type ModelT } from "../../common/model";
 import { MSG_ReadByte, MSG_ReadCoord, MSG_ReadShort } from "../../common/sizebuf";

@@ -91,7 +91,7 @@ Deviations from PORTING.md / the C source:
 - `Netchan_Transmit` from src/qw/net_chan.ts (landed).
 */
 
-import { Con_Printf } from "../../client/console";
+import { Con_Printf } from "./console";
 import { Cmd_AddCommand, Cmd_Argv } from "../cmd";
 import { Q_atoi } from "../../common/common";
 import { CvarT, Cvar_RegisterVariable } from "../../common/cvar";

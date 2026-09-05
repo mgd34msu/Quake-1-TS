@@ -20,7 +20,7 @@ import { type Vec3, vec3, VectorCopy } from "../../common/mathlib";
 import { CONTENTS_EMPTY } from "../../common/bspfile";
 import { STAT_HEALTH } from "../../common/quakedef";
 import { CactiveT, cl, cls } from "../../client/client";
-import { Con_DPrintf } from "../../client/console";
+import { Con_DPrintf } from "./console";
 import { clMainState } from "./cl_main";
 import { Cvar_RegisterVariable, Cvar_Set, CvarT } from "../../common/cvar";
 import { pmove, pmState } from "../pmove_types";

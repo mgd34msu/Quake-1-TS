@@ -191,6 +191,31 @@ export const CON_TEXTSIZE = 16384;
 const NUM_CON_TIMES = 4;
 const CON_CURSORSPEED = 4;
 
+/*
+The qwcl binary links QW/client/console.c, not this file. Nine modules under
+src/qw/ are shared by BOTH QuakeWorld binaries (src/qw/common.ts, cmd.ts,
+net_chan.ts, net_udp.ts, pmovetst.ts, src/qw/server/pr_edict.ts, pr_exec.ts)
+and import their Con_Printf/Con_DPrintf from here, because qwsv links no
+console module at all and the `qw.active` fold in Con_Printf below is what
+gives those calls QW's semantics there. In qwcl the same calls have to reach
+QW's console instead, or "Playing registered version." and "UDP Initialized"
+would go to stdout and to a `con_text` no Con_Init ever allocated, instead of
+into `con_main.text` where the C puts them. src/qw/main_cl.ts installs the
+three forwards at composition time -- the C's link step; qwsv installs none
+and keeps this file's own bodies.
+*/
+type PrintfFn = (fmt: string, ...args: Array<string | number>) => void;
+
+export const qwConsoleHooks: {
+  Con_Printf: PrintfFn | null;
+  Con_DPrintf: PrintfFn | null;
+  Con_SafePrintf: PrintfFn | null;
+} = {
+  Con_Printf: null,
+  Con_DPrintf: null,
+  Con_SafePrintf: null,
+};
+
 // reassigned-globals holder -- exactly these nine names, per this unit's
 // brief (keys.ts (U048) already imports this shape).
 export const conState = {
@@ -496,6 +521,9 @@ Handles cursor positioning, line wrapping, etc
 let inupdate = false; // static qboolean inupdate; in the C
 
 export function Con_Printf(fmt: string, ...args: Array<string | number>): void {
+  const qwcl = qwConsoleHooks.Con_Printf; // see qwConsoleHooks
+  if (qwcl) return qwcl(fmt, ...args);
+
   const msg = Com_sprintf(fmt, ...args);
 
   // also echo to debugging console
@@ -541,6 +569,9 @@ A Con_Printf that only shows up if the "developer" cvar is set
 ================
 */
 export function Con_DPrintf(fmt: string, ...args: Array<string | number>): void {
+  const qwcl = qwConsoleHooks.Con_DPrintf; // see qwConsoleHooks
+  if (qwcl) return qwcl(fmt, ...args);
+
   if (!developer || !developer.value) return; // don't confuse non-developers with techie stuff...
 
   const msg = Com_sprintf(fmt, ...args);
@@ -555,6 +586,9 @@ Okay to call even when the screen can't be updated
 ==================
 */
 export function Con_SafePrintf(fmt: string, ...args: Array<string | number>): void {
+  const qwcl = qwConsoleHooks.Con_SafePrintf; // see qwConsoleHooks
+  if (qwcl) return qwcl(fmt, ...args);
+
   const msg = Com_sprintf(fmt, ...args);
 
   const temp = scrState.scr_disabled_for_loading;

@@ -51,10 +51,12 @@ own header table:
     shape; this only affects the cosmetic timestamp string
     SCR_DrawStringToSnap burns into the corner of a `snap` screenshot.
 
-Cvars declared in screen.c/gl_screen.c themselves stay here (`scr_viewsize`,
-`scr_fov` ("fov"), `scr_conspeed`, `scr_centertime`, `scr_showram`,
+Cvars declared in screen.c/gl_screen.c themselves stay here (`scr_conspeed`,
+`scr_centertime`, `scr_showram`,
 `scr_showturtle`, `scr_showpause`, `scr_printspeed`, `scr_allowsnap` -- new in
-QW, default "1", not archived). `cl_sbar` and `show_fps` are cl_main.c's
+QW, default "1", not archived), except `scr_viewsize` and `scr_fov`, which are
+one shared object each with WinQuake's screen.ts (see the comment on their
+re-export below). `cl_sbar` and `show_fps` are cl_main.c's
 (imported from src/qw/client/cl_main.ts, already landed).
 
 Deviations from PORTING.md / the C source:
@@ -68,13 +70,12 @@ Deviations from PORTING.md / the C source:
   `scr_ram`/`scr_net`/`scr_turtle` are typed `QpicT` here, not `QpicT | null`
   -- one fewer null-guard than the WinQuake module needs for the same three
   pictures. `Draw_Pic` itself (drawing them) still crosses the seam.
-- `Con_DrawConsole` (src/client/console.ts, shared) still takes WinQuake's
-  `(lines, drawinput)` signature; QW/client/console.c's own `Con_DrawConsole`
-  drops `drawinput` entirely. console.ts's own QW fold (a concurrent unit's
-  scope, not landed for this call at the time of writing) hasn't reached this
-  signature yet, so SCR_DrawConsole here calls it with `drawinput = true`,
-  matching the WinQuake call site's behavior until console.ts folds its own
-  QW delta.
+- Every `Con_*` name and `conState` come from src/qw/client/console.ts
+  (QW/client/console.c's own console), not WinQuake's src/client/console.ts:
+  QW's `Con_DrawConsole (int lines)` drops WinQuake's `drawinput` second
+  argument and always draws the input line, and `conState` is QW's holder
+  shape (no `con_backscroll`; the two fields read here, `con_notifylines` and
+  `con_initialized`, exist under the same names).
 - `SCR_ModalMessage`'s `cls.state == ca_dedicated` early return (WinQuake
   only) is dropped: QW/client/screen.c's own `SCR_ModalMessage` never checks
   it (qwcl has no dedicated-server mode -- `sv_dedicated`'s branch is
@@ -125,10 +126,11 @@ import { MSG_WriteByte, SZ_Print } from "../../common/sizebuf";
 import { QpicT, W_GetLumpName, W_GetQpic } from "../../common/wad";
 import { Sys_Error, Sys_FileTime, Sys_SendKeyEvents } from "../../platform/sys";
 import { CactiveT, cl, cls } from "../../client/client";
-import { Con_CheckResize, Con_ClearNotify, Con_DrawConsole, Con_DrawNotify, Con_Printf, conState } from "../../client/console";
+import { Con_CheckResize, Con_ClearNotify, Con_DrawConsole, Con_DrawNotify, Con_Printf, conState } from "./console";
 import { K_ESCAPE, KeydestT, keyState, key_lastpress } from "../../client/keys";
 import { M_Draw } from "../../client/menu";
 import { getRenderer, r_netgraph } from "../../client/render";
+import { scr_fov, scr_viewsize } from "../../client/screen"; // one object per cvar name -- see the block below
 import { scrState, scr_vrect } from "../../client/screen_types";
 import { S_ClearBuffer, S_StopAllSounds } from "../../client/snd_dma";
 import { V_RenderView, V_UpdatePalette } from "../../client/view";
@@ -143,8 +145,17 @@ let oldscreensize = 0;
 let oldfov = 0;
 let oldsbar = 0; // QW-only: SCR_UpdateScreen's `oldsbar != cl_sbar.value` recalc trigger
 
-export const scr_viewsize = new CvarT("viewsize", "100", true);
-export const scr_fov = new CvarT("fov", "90"); // 10 - 170
+// cvar_t scr_viewsize = {"viewsize","100", true}; / cvar_t scr_fov =
+// {"fov","90"}; -- declared with those exact values by BOTH screen.c files
+// (WinQuake/screen.c:84-85 and QW/client/screen.c), and the C links only one
+// of the two per binary. This port links both modules into every binary, and
+// the renderers read WinQuake's objects directly (src/ref_soft/r_main.ts:120,
+// src/ref_soft/ref_soft.ts:119, src/ref_gl/ref_gl.ts:147), so a second pair
+// here would leave the pair the renderers read unregistered -- `value` stays
+// 0 until Cvar_RegisterVariable runs -- and SCR_CalcRefdef would Sys_Error
+// with "Bad fov: 0.000000" on the first qwcl frame. One object per name,
+// registered by whichever binary's SCR_Init runs.
+export { scr_fov, scr_viewsize };
 export const scr_conspeed = new CvarT("scr_conspeed", "300");
 export const scr_centertime = new CvarT("scr_centertime", "2");
 export const scr_showram = new CvarT("showram", "1");
@@ -420,8 +431,7 @@ export function SCR_SetUpToDrawConsole(): void {
 export function SCR_DrawConsole(): void {
   if (scrState.scr_con_current) {
     scrState.scr_copyeverything = 1;
-    // console.ts hasn't folded QW's 1-arg Con_DrawConsole yet -- see file header
-    Con_DrawConsole(scrState.scr_con_current, true);
+    Con_DrawConsole(scrState.scr_con_current);
     clearconsole = 0;
   } else {
     if (keyState.key_dest === KeydestT.key_game || keyState.key_dest === KeydestT.key_message) {

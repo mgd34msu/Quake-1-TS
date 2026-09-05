@@ -42,10 +42,6 @@ Deviations from PORTING.md / the C source:
   QW common.c's own "days since Oct 24 1996" arithmetic over the *current*
   date instead of a compile-time one -- the closest faithful thing available,
   reported rather than stubbed to a constant.
-- `con_ormask = 128` (QW console.c's high-bit chat coloring) has no
-  counterpart in src/client/console.ts, which is WinQuake's console with no
-  such global; the two assignments in cl_parse.ts's svc_print are dropped and
-  reported. Nothing here reads it.
 - `memset (cl_efrags, 0, sizeof(cl_efrags))` and the free-efrag chain use
   src/client/client.ts's shared `cl_efrags` (MAX_EFRAGS = 640) rather than a
   QW-sized copy (QW/client/client.h reduces MAX_EFRAGS to 512). The array is
@@ -63,9 +59,8 @@ Deviations from PORTING.md / the C source:
   portable path). That branch does NOT call `S_Init()` -- QW's linux video
   drivers (vid_x.c:371, vid_svgalib.c:562, gl_vidlinuxglx.c:606) call it from
   inside VID_Init, which is what the "S_Init is now done as part of VID.
-  Sigh." comment means. src/platform/vid.ts does not, so the qwcl entry point
-  (src/qw/main_cl.ts, a later unit) has to call S_Init itself. Reported, not
-  papered over here.
+  Sigh." comment means. src/platform/vid.ts's VID_Init makes the same call
+  under `qw.active` (see its own comment there), so nothing is missing here.
 - `Host_SimulationTime` is inside `#if 0` in the C and is dropped per
   PORTING.md's `#if 0` rule; Host_Frame carries the same fps arithmetic
   inline, which is the code that actually runs.
@@ -137,10 +132,10 @@ import { vec3_origin } from "../../common/mathlib";
 import { cdAudio } from "../../client/cdaudio";
 import { CactiveT, cl, cl_dlights, cl_efrags, cl_lightstyle, cls, MAX_DEMOS } from "../../client/client";
 import { DownloadTypeT } from "./client";
-import { Con_DPrintf, Con_Init, Con_Print, Con_Printf } from "../../client/console";
+import { Con_DPrintf, Con_Init, Con_Print, Con_Printf } from "./console";
 import { inputBackend } from "../../client/input";
 import { Key_Init, Key_WriteBindings } from "../../client/keys";
-import { getRenderer, r_origin, vpn, vright, vup } from "../../client/render";
+import { getRenderer, r_origin, re, vpn, vright, vup } from "../../client/render";
 import { S_StopAllSounds, S_Shutdown, S_Update } from "../../client/snd_dma";
 import { vidBackend } from "../../client/vid";
 import { V_Init } from "../../client/view";
@@ -1406,7 +1401,13 @@ export function Host_Init(parms: QuakeParmsT): void {
   //	Con_Printf ("Exe: "__TIME__" "__DATE__"\n");
   Con_Printf("%4.1f megs RAM used.\n", parms.memsize / (1024 * 1024.0));
 
-  getRenderer().R_InitTextures();
+  // R_InitTextures() -- src/ref_soft/model.ts and src/ref_gl/gl_model.ts each
+  // run their own R_InitTextures at module load (`export const notexture =
+  // R_InitTextures()`), and no renderer object exists yet at this point in
+  // Host_Init (VID_Init below is what installs `re.current`), so this goes
+  // through `re.current?.` exactly as src/common/host.ts:1112 does for
+  // WinQuake's identically-placed call.
+  re.current?.R_InitTextures();
 
   host_basepal.data = COM_LoadHunkFile("gfx/palette.lmp");
   if (!host_basepal.data) Sys_Error("Couldn't load gfx/palette.lmp");

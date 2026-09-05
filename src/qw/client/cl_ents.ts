@@ -67,7 +67,7 @@ import { EntityT, re } from "../../client/render";
 import { vid } from "../../client/vid";
 import { V_CalcRoll } from "../../client/view";
 import { R_RocketTrail } from "../../client/r_part";
-import { Con_DPrintf, Con_Printf } from "../../client/console";
+import { Con_DPrintf, Con_Printf } from "./console";
 import { Cvar_FindVar } from "../../common/cvar";
 import { Sys_Error } from "../../platform/sys";
 import { EF_GIB, EF_GRENADE, EF_ROCKET, EF_ROTATE, EF_TRACER, EF_TRACER2, EF_TRACER3, EF_ZOMGIB } from "../../common/model";

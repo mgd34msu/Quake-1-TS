@@ -92,7 +92,7 @@ Deviations from PORTING.md / the C source:
   WinQuake's r_part.ts already uses -- JS has no block-scoped statics either.
 */
 
-import { Con_Printf } from "../../client/console";
+import { Con_Printf } from "./console";
 import { COM_CheckParm, COM_FClose, COM_FOpenFile, COM_FRead, Q_atoi, com_argv } from "../../common/common";
 import { host } from "../../common/host";
 import { VectorAdd, VectorCopy, VectorNormalize, VectorScale, VectorSubtract, vec3, vec3_origin, type Vec3 } from "../../common/mathlib";

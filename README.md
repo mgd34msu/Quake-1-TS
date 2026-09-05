@@ -57,6 +57,37 @@ loaded from `qw/maps/<name>.bsp` and then `id1/`, as in the original.
 - `server.cfg` in the game directory is executed at startup, and console
   commands (`status`, `map`, `kick`, `quit`, ...) are read from stdin.
 
+### QuakeWorld client (qwcl)
+
+`src/qw/main_cl.ts` is the QuakeWorld client, the third entry point. It is a
+pure client: it has no server half at all, so it always plays on a remote
+server (`qwsv` above, or any other QuakeWorld server).
+
+```sh
+bun run start:qwcl -- -basedir /path/to/quake        # software renderer
+bun run build:qwcl       # standalone binary: ./qwcl
+bun run build:all        # all three binaries: q1ts, qwsv, qwcl
+```
+
+At the console (or as `+connect ...` on the command line, which `stuffcmds`
+in `quake.rc` runs):
+
+```
+connect somehost:27500
+```
+
+The base directory needs the registered game data in `id1/` (`pak0.pak`, for
+`gfx/pop.lmp`, `gfx.wad`, `gfx/palette.lmp`, `gfx/colormap.lmp` and the rest)
+plus a `qw/` directory, which the client creates itself and then fills with
+whatever the server sends it (maps, models, sounds and player skins are
+downloaded into `qw/` on connect). `-game` is forced to `qw`, exactly as the
+original client does.
+
+`vid_ref` (`soft` by default, or `gl`) selects the renderer here too. It is
+read once while the client starts up, before `quake.rc` runs, so a renderer
+change takes effect from the video menu's Apply or a `vid_restart` at the
+console rather than from `+vid_ref` on the command line.
+
 ## License
 
 GPL v2, same as the original source release this is derived from -- see
