@@ -228,3 +228,60 @@ only where the input type is closed.
 `bun run check` passes with the unit's files included, the module exports what its C
 header exported, tests are self-sufficient, and TODOs are absent — a function you
 cannot port faithfully is a reported deviation, not a `// TODO`.
+
+## QuakeWorld track (QW 2.33: `QW/client`, `QW/server`, `QW/progs`)
+
+QuakeWorld is two more binaries built from a modified copy of the WinQuake tree:
+`qwcl` (client, protocol 28, client-side prediction) and `qwsv` (standalone server).
+Measured against WinQuake: 15 client files are byte-identical, ~40 differ by fewer than
+200 lines (renderers, sound, memory, math: `#include`/ifdef churn plus small QW hooks),
+and the rest differ wholesale or are new (`cl_ents`, `pmove`, `pmovetst`, `cl_cam`,
+`net_chan`, `cl_pred`, `skin`, `md4`, `gl_ngraph`; the whole server).
+
+Rulings:
+
+- **One engine, two extra entry points.** `src/qw/main_cl.ts` (qwcl: `sys_linux.c` main +
+  `Host_Init/Host_Frame` from QW `client/cl_main.c`) and `src/qw/main_sv.ts` (qwsv:
+  `server/sys_unix.c` main + `SV_Init/SV_Frame`). `package.json` gains `start:qwcl`,
+  `start:qwsv`, `build:qwcl`, `build:qwsv`.
+- **Identical files are not re-ported**: the QW binary imports the landed WinQuake module.
+- **Small deltas fold into the landed module** under a runtime flag `qw.active` (holder in
+  `src/common/quakedef.ts`, set true by the QW entry points before Host_Init). Each branch
+  carries a comment naming the QW file and line it comes from. This is the port's
+  equivalent of the `#ifdef QUAKEWORLD` id never wrote; the C keeps two trees instead. A
+  delta qualifies as "small" when it is additive and under ~200 changed lines; the unit
+  brief lists them.
+- **Wholesale-different and new files** get their own modules under `src/qw/client/` and
+  `src/qw/server/`, one `.ts` per `.c`, same basename, ported fresh from the QW source
+  (starting from the landed WinQuake port where the C started from WinQuake).
+- **Client state is a superset.** `ClientStateT`/`ClientStaticT` in `src/client/client.ts`
+  keep the WinQuake fields and gain a `qw` member (`QwClientStateExtT` / `QwClientStaticExtT`,
+  defined in `src/qw/client/client.ts`) holding QW-only fields (`players[]`, `frames[]`,
+  `validsequence`, `spectator`, `simorg/simvel/simangles`, `netchan`, `qport`, `userinfo`,
+  `download*`, ...). Shared code (renderers, sound, sbar seam) reads the common fields on
+  `cl`/`cls`; QW modules read `cl.qw`. `CactiveT` gains QW's `ca_demostart`, `ca_onserver`,
+  `ca_active` values after the WinQuake ones.
+- **Cvars gain flags.** `CvarT` keeps `archive`/`server` and gains `flags` (`CVAR_ARCHIVE`,
+  `CVAR_USERINFO`, `CVAR_SERVERINFO`, `CVAR_NOSET`? -- exactly QW `cvar.h`'s set) kept in
+  sync by the constructor; `src/qw/cvar.ts` ports QW `cvar.c` (Cvar_Info, the
+  userinfo/serverinfo propagation) over the same `CvarT`.
+- **Protocol, netchan, common** are separate QW modules: `src/qw/protocol.ts` (protocol 28,
+  `svc_*`/`clc_*` renumbered, `PF_*`/`U_*`/`SU_*`? per QW `protocol.h`), `src/qw/net_chan.ts`
+  + `src/qw/net_udp.ts` (QW's packet API over `Bun.udpSocket`, the `netadr_t` shape as in
+  Quake 2's port) + `src/qw/md4.ts`, `src/qw/common.ts` (QW `common.c`: `Info_*`,
+  `MSG_ReadDeltaUsercmd`/`MSG_WriteDeltaUsercmd`, the `COM_*` changes), `src/qw/pmove.ts` +
+  `pmovetst.ts` (shared by qwcl and qwsv), `src/qw/bothdefs.ts`.
+- **The QW server is its own progs host**: `src/qw/server/` gets `qwsvdef.ts`, `server.ts`,
+  `progdefs.ts` (QW `progdefs.h`, CRC 54730), `pr_edict.ts`/`pr_exec.ts`/`pr_cmds.ts`
+  (ported from the landed `src/progs` modules with the QW diff applied), `world.ts`,
+  `sv_main.ts`, `sv_init.ts`, `sv_ccmds.ts`, `sv_ents.ts`, `sv_nchan.ts`, `sv_send.ts`,
+  `sv_phys.ts`, `sv_move.ts`, `sv_user.ts`. Its model loader is `src/common/model.ts`'s
+  hook-less (dedicated) path, which is what QW `server/model.c` is. Test fixture:
+  `../qsrc/quake/QW/progs/qwprogs.dat` (retail QW progs, in the tree).
+- Not ported: `QW/qwfwd`, `gas2masm`, the per-OS files (`net_wins`, `sys_win`, `vid_*`,
+  `in_*`, `cd_*`, `snd_win`: the platform layer already exists), `gl_vidlinux_svga/x11`.
+
+Delivery order: QW common (protocol, bothdefs, common, cvar, netchan/udp/md4, pmove) →
+qwsv (headers, progs, world, sv_*) with a headless qwsv boot on `qwprogs.dat` as the
+milestone → qwcl (client ext, cl_ents/pred/cam, cl_main/parse/demo, input/tent/skin,
+sbar/menu/screen/view deltas, the folded renderer deltas) → both binaries build.
