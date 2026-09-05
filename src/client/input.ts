@@ -13,6 +13,13 @@ Deviations from PORTING.md / the C source:
   vid_win.c on a mode change. It is a member here because src/platform/vid.ts
   needs the same call after an SDL window resize and there is no other place a
   backend-owned entry point can live.
+- `IN_MoveQw` is not in input.h. QW's own in_*.c/vid_*.c files define one
+  `IN_Move (usercmd_t *cmd)` whose body is byte-identical to WinQuake's, but
+  QW's `usercmd_t` (QW/client/protocol.h) is a different struct from
+  WinQuake's (`angles` vs `viewangles`, plus `msec`/`buttons`/`impulse`), and
+  the two trees are two separate binaries. This port compiles both, so the
+  one backend carries both entry points; they share the mouse-delta code and
+  differ only in which cmd struct they write.
 - Callers may need the null case (a dedicated server installs no backend), so
   the holder is `{ current: InputBackend | null }` rather than a getter that
   errors; host.c calls IN_Init/IN_Shutdown/IN_Commands/IN_Move unconditionally
@@ -20,6 +27,7 @@ Deviations from PORTING.md / the C source:
 */
 
 import type { UsercmdT } from "../server/server";
+import type { QwUsercmdT } from "../qw/protocol";
 
 export interface InputBackend {
   IN_Init(): void;
@@ -31,6 +39,10 @@ export interface InputBackend {
 
   // add additional movement on top of the keyboard move cmd
   IN_Move(cmd: UsercmdT): void;
+
+  // QW/client/cl_input.c's CL_SendCmd calls IN_Move on QW's own usercmd_t;
+  // see this file's header
+  IN_MoveQw(cmd: QwUsercmdT): void;
 
   // in_win.c; vid_win.c calls it after a video mode change
   IN_ModeChanged(): void;

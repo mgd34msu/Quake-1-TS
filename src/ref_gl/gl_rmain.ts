@@ -79,14 +79,14 @@ Deviations from PORTING.md / the C source:
 
 QuakeWorld deltas (QW/client/gl_rmain.c vs WinQuake/gl_rmain.c), folded under
 qw.active:
-- `r_netgraph` cvar: declared here (below, next to the other renderer
-  cvars this file already shares with gl_rmisc.ts's R_Init), registered by
-  gl_rmisc.ts's R_Init. gl_rmain.c itself never calls R_NetGraph -- QW's own
-  call site is gl_screen.c:1145's SCR_UpdateScreen (`if (r_netgraph.value)
-  R_NetGraph();`), a file outside this unit's SCOPE (owned by the screen.ts
-  unit). Not wired here; reported as a required follow-up: that unit needs
-  `if (qw.active && r_netgraph.value) R_NetGraph();` importing R_NetGraph
-  from "../ref_gl/gl_ngraph".
+- `r_netgraph` cvar: NOT declared here. r_main.c and gl_rmain.c each declare
+  it with the same initializer, and src/qw/client/screen.ts (gl_screen.c's
+  SCR_UpdateScreen) has to read it from outside both renderers, so it lives
+  in src/client/render.ts's shared-cvar block with r_fullbright and friends
+  and is re-exported here under its C name. gl_rmisc.ts's R_Init registers
+  it under qw.active. gl_rmain.c itself never calls R_NetGraph -- the GL
+  call site is gl_screen.c:1145, reached through the optional
+  `Renderer.R_NetGraph` member ref_gl.ts implements from gl_ngraph.ts.
 - `gl_keeptjunctions`'s default is "1" in QW vs "0" in WinQuake (gl_rmain.c
   cvar_t initializer). The override is applied in gl_rmisc.ts's R_Init (this
   file only declares the cvar), see that file's header.
@@ -106,15 +106,13 @@ qw.active:
   exclusive in QW where WinQuake's two ifs are not. Folded below.
 - The player-skin recolor block right after (`currententity->colormap !=
   vid.colormap` -> `GL_Bind(playertextures-1+i)`) becomes, in QW,
-  `currententity->scoreboard` (a `player_info_t *` field QW's entity_t
-  gains) driving `Skin_Find`/`R_TranslatePlayerSkin`/
-  `GL_Bind(playertextures+i)`. BLOCKED: `EntityT` (src/client/render.ts) has
-  no `scoreboard` field, and this unit's SCOPE only allows touching
-  render.ts to add a Renderer-interface member, not a data field on EntityT
-  -- that edit belongs to whichever unit owns render.ts's EntityT/client.ts.
-  `Skin_Find` (src/qw/client/skin.ts) is also unlanded (polled during this
-  run, see report). Left unchanged under both branches; reported as a
-  deviation.
+  `currententity->scoreboard` (the `player_info_t *` field QW's entity_t
+  gains, now `EntityT.scoreboard`) driving `Skin_Find`/
+  `R_TranslatePlayerSkin`/`GL_Bind(playertextures+i)`. Both branches are
+  ported below. `i = currententity->scoreboard - cl.players` is pointer
+  arithmetic over the `cl.players[]` array, so it is
+  `cl.qw.players.indexOf(ent.scoreboard)` here; the C's own `i >= 0 && i <
+  MAX_CLIENTS` guard already covers the not-found case.
 - R_SetupFrame: WinQuake's `if (cl.maxclients>1) Cvar_Set("r_fullbright","0")`
   becomes QW's unconditional `r_fullbright.value=0; r_lightmap.value=0; if
   (!atoi(Info_ValueForKey(cl.serverinfo,"watervis"))) r_wateralpha.value=1;`.
@@ -174,6 +172,21 @@ import { Q_atoi } from "../common/common";
 import { Info_ValueForKey } from "../qw/common";
 import { STAT_ITEMS } from "../qw/bothdefs";
 import { Cam_DrawViewModel } from "../qw/client/cl_cam";
+import { MAX_CLIENTS } from "../qw/protocol";
+import type * as SkinModule from "../qw/client/skin";
+import type * as GlRmiscModule from "./gl_rmisc";
+
+// Both resolved lazily with Bun's synchronous require(), the same mechanism
+// src/common/host.ts uses. gl_rmisc.ts imports this module's cvars, so a
+// static import would close a cycle; QW skin.c reaches the whole QuakeWorld
+// client (skin.c -> cl_parse.c -> cl_main.c -> ...), which has no business
+// in the renderer's load graph. Both are only reached with qw.active.
+function skinMod(): typeof SkinModule {
+  return require("../qw/client/skin");
+}
+function glRmiscMod(): typeof GlRmiscModule {
+  return require("./gl_rmisc");
+}
 import { MAX_DLIGHTS, MAX_VISEDICTS, NUM_CSHIFTS, cl, cl_dlights, cl_entities, cl_visedicts, clState } from "../client/client";
 import type { EntityT, ParticleT } from "../client/render";
 // r_drawentities/r_drawviewmodel/r_fullbright/r_speeds: r_main.c also
@@ -181,7 +194,8 @@ import type { EntityT, ParticleT } from "../client/render";
 // not redefined, so a Cvar_Set reaches both renderers' objects because there
 // is only one object. Re-exported below so existing `from "./gl_rmain"`
 // imports (gl_rmisc.ts, test/ref_gl_rsurf.test.ts) keep working.
-import { r_drawentities, r_drawviewmodel, r_fullbright, r_origin, r_refdef, r_speeds, vpn, vright, vup } from "../client/render";
+import { r_drawentities, r_drawviewmodel, r_fullbright, r_netgraph, r_origin, r_refdef, r_speeds, vpn, vright, vup } from "../client/render";
+export { r_netgraph };
 export { r_drawentities, r_drawviewmodel, r_fullbright, r_speeds };
 import { d_8to24table, vid } from "../client/vid";
 import { chase_active } from "../client/chase";
@@ -248,7 +262,6 @@ export const r_dynamic = new CvarT("r_dynamic", "1");
 export const r_novis = new CvarT("r_novis", "0");
 // QW/client/gl_rmain.c / QW/client/r_main.c -- registered by gl_rmisc.ts's
 // R_Init under qw.active (see this file's header note).
-export const r_netgraph = new CvarT("r_netgraph", "0");
 
 export const gl_finish = new CvarT("gl_finish", "0");
 export const gl_clear = new CvarT("gl_clear", "0");
@@ -676,11 +689,19 @@ export function R_DrawAliasModel(e: EntityT): void {
 
   // we can't dynamically colormap textures, so they are cached
   // seperately for the players.  Heads are just uncolored.
-  // QW/client/gl_rmain.c replaces this whole block's condition/body with
-  // `currententity->scoreboard` driving Skin_Find/R_TranslatePlayerSkin --
-  // BLOCKED on EntityT.scoreboard and skin.ts, see file header. WinQuake's
-  // index-based texture rebinding runs unconditionally until those land.
-  if (currententity.colormap !== vid.colormap && !gl_nocolors.value) {
+  if (qw.active) {
+    // QW/client/gl_rmain.c replaces this whole block's condition and body
+    // (see file header)
+    if (currententity.scoreboard !== null && !gl_nocolors.value) {
+      const sc = currententity.scoreboard;
+      i = cl.qw.players.indexOf(sc);
+      if (!sc.skin) {
+        skinMod().Skin_Find(sc);
+        glRmiscMod().R_TranslatePlayerSkin(i);
+      }
+      if (i >= 0 && i < MAX_CLIENTS) GL_Bind(glState.playertextures + i);
+    }
+  } else if (currententity.colormap !== vid.colormap && !gl_nocolors.value) {
     i = cl_entities.indexOf(currententity);
     if (i >= 1 && i <= cl.maxclients /* && !strcmp (currententity->model->name, "progs/player.mdl") */)
       GL_Bind(glState.playertextures - 1 + i);

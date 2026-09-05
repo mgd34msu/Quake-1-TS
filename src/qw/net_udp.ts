@@ -88,6 +88,19 @@ export class NetadrT {
   pad = 0;
 }
 
+// `netadr_t` is a plain struct in the C, so every `a = b` on one is a copy.
+// It is a class here, so the copies the C gets for free are explicit; this is
+// the one helper both net_chan.ts's Netchan_Setup and server/sv_main.ts's
+// stored-address assignments use, so no stored address ever aliases the
+// `net_from` singleton. Not a QW/client/net_udp.c function.
+export function copyNetadr(src: NetadrT): NetadrT {
+  const a = new NetadrT();
+  a.ip.set(src.ip);
+  a.port = src.port;
+  a.pad = src.pad;
+  return a;
+}
+
 export const net_local_adr: NetadrT = new NetadrT();
 export const net_from: NetadrT = new NetadrT(); // address of who sent the packet
 export { net_message }; // sizebuf_t net_message -- see file header

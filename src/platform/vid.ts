@@ -122,6 +122,8 @@ Deviations from PORTING.md / the C source:
 
 import { d_8to24table, vid, vidBackend, type VidBackend, vidMenuHooks, VrectT } from "../client/vid";
 import { Sys_Error } from "./sys";
+import { qw } from "../common/quakedef";
+import { S_Init } from "../client/snd_dma";
 import { hostClientHooks, host_colormap } from "../common/host";
 import { COM_CheckParm, Q_atoi, com_argc, com_argv } from "../common/common";
 import { CvarT, Cvar_RegisterVariable } from "../common/cvar";
@@ -436,6 +438,18 @@ export function VID_Init(palette: Uint8Array): void {
   SDLVID_SetWindowTitle("Quake");
 
   VID_CheckChanges(false); // see VID_CheckChanges's own header comment on `runRInit`
+
+  // QW's linux video drivers (vid_x.c:371, gl_vidlinuxglx.c:606,
+  // gl_vidlinux_svga.c:600) call S_Init() from inside VID_Init, which is why
+  // QW's own Host_Init has `// S_Init (); // S_Init is now done as part of
+  // VID. Sigh.` where WinQuake's Host_Init calls it. This one VID_Init serves
+  // both binaries, so the call is made here only when qw.active; WinQuake's
+  // Host_Init keeps making it itself. The C makes it the first statement of
+  // VID_Init; here it is the last, because the audio device this port opens
+  // lives behind the same SDL backend `SDL_SetBackendEnabled(true)` above
+  // arms. Ordering against Draw_Init/SCR_Init/R_Init -- the only ordering
+  // either Host_Init depends on -- is unchanged: all three still follow.
+  if (qw.active) S_Init();
 }
 
 export function VID_Shutdown(): void {

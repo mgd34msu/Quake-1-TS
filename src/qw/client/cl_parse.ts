@@ -12,12 +12,9 @@ Deviations from PORTING.md / the C source:
   written with `Sys_FileWrite(handle.fd, ...)` and closed with
   `Sys_FileClose`. Same split src/client/cl_demo.ts uses for its write
   handle.
-- `rename (oldn, newn)` has no Sys_* primitive in this port and adding one to
-  src/platform/sys.ts is outside this unit's SCOPE, so CL_ParseDownload calls
-  node:fs's `renameSync` directly. PORTING.md confines node:fs to
-  src/platform and src/common/common.ts; this is the one call that breaks
-  that confinement, reported rather than worked around. A follow-up should
-  add `Sys_FileRename` to src/platform/sys.ts and switch this call to it.
+- `rename (oldn, newn)` is `Sys_FileRename` (src/platform/sys.ts), added for
+  this call site; node:fs stays confined to src/platform and
+  src/common/common.ts.
 - `fopen(fn, "r")` (CL_ParseServerData's gamedir config.cfg probe) is an
   absolute-path open, not a search-path lookup, so it uses
   `Sys_FileOpenRead`/`Sys_FileClose` rather than COM_FOpenFile.
@@ -34,18 +31,20 @@ Deviations from PORTING.md / the C source:
   The GL branch's `Sys_Error("CL_NewTranslation: slot > MAX_CLIENTS")` guard
   is identical in both branches and is kept.
 - The `#ifdef GLQUAKE` early-out in CL_MuzzleFlash (`gl_flashblend.value`
-  suppressing the local player's own flash) reads a GL-only cvar with no seam
-  method; it is dropped, and reported. The software renderer takes the same
-  path the dropped branch's `#else` does.
+  suppressing the local player's own flash) is ported: which branch runs is
+  decided by `re.current.isGL` through cl_ents.ts's `glFlashblend()` helper,
+  which returns 0 (and so takes the `#else` path) whenever the GL renderer is
+  not the installed one. See cl_ents.ts's header for why `gl_flashblend`
+  itself is read from the cvar registry by name rather than through a
+  Renderer member.
 - `con_ormask = 128` around svc_print's PRINT_CHAT case: QW's console.c adds
   that global, src/client/console.ts (WinQuake's console) has none, and that
   file is outside this unit's SCOPE. Both assignments are dropped; the chat
   line prints uncolored. Reported.
-- `dlight_t.color[4]` (QW/client/client.h) has no field on
-  src/client/client.ts's `DlightT`, whose members stop at `key`. cl_ents.ts
-  (this wave's sibling, which owns CL_AllocDlight) keeps the four floats in
-  the parallel `cl_dlight_color` table indexed by `cl_dlights` position;
-  CL_MuzzleFlash writes them there, exactly where the C writes `dl->color`.
+- `dlight_t.color[4]` (QW/client/client.h) is a field on
+  src/client/client.ts's `DlightT`, inert on the WinQuake path;
+  CL_MuzzleFlash writes `dl.color[0..3]` exactly where the C writes
+  `dl->color`.
 - `cl.punchangle` is QW's `float punchangle`, which collides by name with
   WinQuake's `vec3_t punchangle` on the shared `ClientStateT`; it lives on
   `cl.qw.punchangle` (src/qw/client/client.ts).
@@ -55,8 +54,6 @@ Deviations from PORTING.md / the C source:
   MSG_ReadByte, exactly as the C's, and `cmd == -1` is the badread sentinel
   src/common/sizebuf.ts's MSG_ReadByte returns.
 */
-
-import { renameSync } from "node:fs";
 
 import {
   COM_CreatePath,
@@ -101,12 +98,12 @@ import { Con_DPrintf, Con_Printf } from "../../client/console";
 import { BOTTOM_RANGE, TOP_RANGE, getRenderer } from "../../client/render";
 import { S_LocalSound, S_PrecacheSound, S_StartSound, S_StaticSound, S_StopSound } from "../../client/snd_dma";
 import { VID_GRADES, vid } from "../../client/vid";
-import { Sys_Error, Sys_FileClose, Sys_FileOpenRead, Sys_FileOpenWrite, Sys_FileWrite } from "../../platform/sys";
+import { Sys_Error, Sys_FileClose, Sys_FileOpenRead, Sys_FileOpenWrite, Sys_FileRename, Sys_FileWrite } from "../../platform/sys";
 import { FileHandle } from "../../common/common";
 import { NET_TIMINGS, NET_TIMINGSMASK, DownloadTypeT, cl_baselines, type PlayerInfoT } from "./client";
 import { UPDATE_BACKUP, UPDATE_MASK } from "../protocol";
 import { CL_ClearState, CL_Disconnect, Host_EndGame, Host_WriteConfiguration, clMainState, cl_shownet, modelNames } from "./cl_main";
-import { CL_AllocDlight, CL_ClearProjectiles, cl_dlight_color, CL_ParsePacketEntities, CL_ParsePlayerinfo, CL_ParseProjectiles, CL_SetSolidEntities } from "./cl_ents";
+import { CL_AllocDlight, CL_ClearProjectiles, CL_ParsePacketEntities, CL_ParsePlayerinfo, CL_ParseProjectiles, CL_SetSolidEntities, glFlashblend } from "./cl_ents";
 import { Skin_Find, Skin_NextDownload } from "./skin";
 import { CL_ParseTEnt } from "./cl_tent";
 import { Sbar_Changed } from "./sbar";
@@ -455,12 +452,7 @@ export function CL_ParseDownload(): void {
         oldn = `qw/${cls.qw.downloadtempname}`;
         newn = `qw/${cls.qw.downloadname}`;
       }
-      let r = 0;
-      try {
-        renameSync(oldn, newn);
-      } catch {
-        r = -1;
-      }
+      const r = Sys_FileRename(oldn, newn);
       if (r) Con_Printf("failed to rename.\n");
     }
 
@@ -976,6 +968,10 @@ export function CL_MuzzleFlash(): void {
 
   if ((i - 1) >>> 0 >= MAX_CLIENTS) return;
 
+  // #ifdef GLQUAKE: don't draw our own muzzle flash in gl if flashblending.
+  // See the file header for how the GL branch is selected.
+  if (i - 1 === cl.qw.playernum && glFlashblend()) return;
+
   const pl = cl.qw.frames[parseState.parsecountmod].playerstate[i - 1];
 
   const dl = CL_AllocDlight(i);
@@ -986,7 +982,7 @@ export function CL_MuzzleFlash(): void {
   dl.radius = 200 + (Math.trunc(Math.random() * 0x8000) & 31);
   dl.minlight = 32;
   dl.die = cl.time + 0.1;
-  const color = cl_dlight_color[Math.max(0, cl_dlights.indexOf(dl))];
+  const color = dl.color;
   color[0] = 0.2;
   color[1] = 0.1;
   color[2] = 0.05;

@@ -104,10 +104,16 @@ Deviations from PORTING.md / the C source:
   reports this); `Minimized` is a WinQuake-only Win32 concern PORTING.md
   already rules out (`#ifdef _WIN32/__linux__` -> "take the portable,
   non-asm path").
-- `r_netgraph`/`R_NetGraph()` (gl_screen.c's own GL-only addition, calling
-  into `gl_ngraph.c`, PORTING.md's Q024/ref_gl scope) is not ported here:
-  a genuinely new renderer-seam call this unit cannot add to render.ts.
-  Reported as a render.ts gap, same shape as the others above.
+- `r_netgraph`/`R_NetGraph()` (gl_screen.c:1145) is ported at the C's own
+  call site, through `Renderer.R_NetGraph` -- an optional seam member,
+  because QW's two renderers call R_NetGraph from different places: only
+  gl_screen.c calls it from a client file, while r_main.c calls the software
+  R_NetGraph (r_misc.c) at the end of R_RenderView, inside the renderer.
+  The software renderer therefore leaves the member undefined and this call
+  is a no-op there, so the graph is drawn exactly once under either
+  renderer. `r_netgraph` itself lives in src/client/render.ts's shared-cvar
+  block (both renderers declare it with the same initializer, and no client
+  module may import a renderer).
 */
 
 import { Cmd_AddCommand } from "../../common/cmd";
@@ -122,7 +128,7 @@ import { CactiveT, cl, cls } from "../../client/client";
 import { Con_CheckResize, Con_ClearNotify, Con_DrawConsole, Con_DrawNotify, Con_Printf, conState } from "../../client/console";
 import { K_ESCAPE, KeydestT, keyState, key_lastpress } from "../../client/keys";
 import { M_Draw } from "../../client/menu";
-import { getRenderer } from "../../client/render";
+import { getRenderer, r_netgraph } from "../../client/render";
 import { scrState, scr_vrect } from "../../client/screen_types";
 import { S_ClearBuffer, S_StopAllSounds } from "../../client/snd_dma";
 import { V_RenderView, V_UpdatePalette } from "../../client/view";
@@ -827,6 +833,8 @@ export function SCR_UpdateScreen(): void {
 
   re.GL_Set2D();
   re.SCR_TileClear();
+
+  if (r_netgraph.value) re.R_NetGraph?.();
 
   if (scr_drawdialog) {
     Sbar_Draw();

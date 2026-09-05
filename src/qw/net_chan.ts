@@ -68,7 +68,7 @@ Deviations from the brief / from Quake 2's net_chan.ts:
   same 0-65535 output range, no seeded-determinism requirement.
 */
 
-import { NetadrT, net_from, NET_SendPacket, NET_AdrToString, NET_CompareAdr } from "./net_udp";
+import { NetadrT, copyNetadr, net_from, NET_SendPacket, NET_AdrToString, NET_CompareAdr } from "./net_udp";
 import { SizeBuf, SZ_Write, MSG_WriteLong, MSG_WriteShort, MSG_BeginReading, MSG_ReadLong, MSG_ReadShort, net_message } from "../common/sizebuf";
 import { CvarT, Cvar_RegisterVariable, Cvar_SetValue } from "../common/cvar";
 import { Con_Printf } from "../client/console";
@@ -294,7 +294,9 @@ export function Netchan_Setup(chan: NetchanT, adr: NetadrT, qportNum: number): v
   chan.outgoing_size = new Array(MAX_LATENT).fill(0);
   chan.outgoing_time = new Array(MAX_LATENT).fill(0);
 
-  chan.remote_address = adr;
+  // `chan->remote_address = adr;` is a struct copy in the C -- see
+  // net_udp.ts's copyNetadr
+  chan.remote_address = copyNetadr(adr);
   chan.last_received = netchanState.realtime;
 
   chan.message = new SizeBuf();

@@ -79,16 +79,9 @@ Deviations from PORTING.md / the C source:
   duplicated here rather than shared (nothing exports it, per that file's
   own ruling for its copy).
 - `dl->color[0..3]`: QW's `dlight_t` gains a `float color[4]` member (QW/
-  client/client.h) that WinQuake's `DlightT` (src/client/client.ts, out of
-  this unit's SCOPE) does not have. src/qw/client/cl_ents.ts (already
-  landed) solves exactly this problem for its own `CL_NewDlight` with a
-  parallel side table, `cl_dlight_color: Float32Array[]` indexed by the
-  `cl_dlights` array position -- confirmed by reading that file before
-  writing this one. This file reuses that same exported side table (and
-  `CL_AllocDlight`, also exported from cl_ents.ts) rather than inventing a
-  second one; the index lookup (`cl_dlights.indexOf(dl)`) is duplicated
-  locally as a small helper since cl_ents.ts's own `dlightColor` helper is
-  not exported (same non-exported-local-helper precedent as `rand()` above).
+  client/client.h) that WinQuake's dlight_t does not have. It is a field on
+  `DlightT` (src/client/client.ts), inert on the WinQuake path, so this file
+  writes `dl.color[0..3]` exactly where the C writes `dl->color[0..3]`.
 - `BeamT` (entity/model/endtime/start/end) is reused from src/client/
   client.ts's export of that exact shape (WinQuake's `beam_t` and QW's are
   textually identical structs, confirmed by reading both), for the
@@ -124,10 +117,10 @@ import {
   TE_WIZSPIKE,
 } from "../protocol";
 import { Sys_Error } from "../../platform/sys";
-import { BeamT, cl, cl_dlights, cl_visedicts, clState, DlightT, MAX_VISEDICTS } from "../../client/client";
+import { BeamT, cl, cl_visedicts, clState, MAX_VISEDICTS } from "../../client/client";
 import { EntityT } from "../../client/render";
 import { vid } from "../../client/vid";
-import { CL_AllocDlight, cl_dlight_color } from "./cl_ents";
+import { CL_AllocDlight } from "./cl_ents";
 import { R_BlobExplosion, R_LavaSplash, R_ParticleExplosion, R_RunParticleEffect, R_TeleportSplash } from "../../client/r_part";
 import { S_PrecacheSound, S_StartSound } from "../../client/snd_dma";
 import type { SfxT } from "../../client/sound";
@@ -135,12 +128,6 @@ import type { SfxT } from "../../client/sound";
 // this unit's ruling for cl_tent.c's bare `rand()` calls -- see file header
 function rand(): number {
   return Math.floor(Math.random() * 0x8000);
-}
-
-// dlight_t.color[4] side table lookup -- see file header
-function dlightColor(dl: DlightT): Float32Array {
-  const i = cl_dlights.indexOf(dl);
-  return cl_dlight_color[i < 0 ? 0 : i];
 }
 
 export const MAX_BEAMS = 8; // QW: 8, not WinQuake's 24 -- see file header
@@ -332,7 +319,7 @@ export function CL_ParseTEnt(): void {
       dl.radius = 350;
       dl.die = cl.time + 0.5;
       dl.decay = 300;
-      const color = dlightColor(dl);
+      const color = dl.color;
       color[0] = 0.2;
       color[1] = 0.1;
       color[2] = 0.05;

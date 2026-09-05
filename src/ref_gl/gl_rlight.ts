@@ -40,13 +40,9 @@ under qw.active:
   `bubbleSintable`/`bubbleCostable` + `R_InitBubble` below; gl_rmisc.ts calls
   it from R_Init under qw.active (gl_rmisc.c:207).
 - QW also changes R_RenderDlight's fan color from the fixed
-  `glColor3f(0.2,0.1,0.0)` to `glColor4f(light->color[0..3])`, reading a new
-  per-dlight `color[4]` field QW's dlight_t gains. BLOCKED: the landed
-  `DlightT` (src/client/client.ts, out of this unit's SCOPE) has no `color`
-  field -- client.ts is owned by another unit and this unit may not add data
-  fields to it (SCOPE only allows touching render.ts for a Renderer-interface
-  member, and DlightT is not that). Reported as a deviation; both branches
-  keep emitting `glColor3f(0.2,0.1,0.0)` until `DlightT.color` lands.
+  `glColor3f(0.2,0.1,0.0)` to `glColor4f(light->color[0..3])`, reading the
+  per-dlight `color[4]` field QW's dlight_t gains (`DlightT.color`,
+  src/client/client.ts). Both branches are ported below.
 */
 
 import { DotProduct, Length, M_PI, MplaneT, type Vec3, VectorCopy, VectorSubtract, vec3 } from "../common/mathlib";
@@ -141,10 +137,10 @@ export function R_RenderDlight(light: DlightT): void {
   }
 
   qgl().qglBegin(GL_TRIANGLE_FAN);
-  // QW/client/gl_rlight.c would read a per-dlight light.color[4] here via
-  // glColor4f; blocked on DlightT.color (see file header) -- both branches
-  // keep the WinQuake fixed color.
-  qgl().qglColor3f(0.2, 0.1, 0.0);
+  // QW/client/gl_rlight.c replaces the fixed fan color with the dlight's own
+  // color[4] (the two WinQuake values are the C's own commented-out lines).
+  if (qw.active) qgl().qglColor4f(light.color[0], light.color[1], light.color[2], light.color[3]);
+  else qgl().qglColor3f(0.2, 0.1, 0.0);
   for (let i = 0; i < 3; i++) dlightV[i] = light.origin[i] - vpn[i] * rad;
   qgl().qglVertex3fv(dlightV);
   qgl().qglColor3f(0, 0, 0);

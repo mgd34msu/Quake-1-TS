@@ -160,6 +160,24 @@ describe("Netchan_Setup", () => {
     expect(server.qport).toBe(0);
   });
 
+  test("copies the netadr_t instead of aliasing the caller's (the C's `chan->remote_address = adr` is a struct copy)", () => {
+    const chan = new NetchanT();
+    const adr = makeAdr("10.0.0.9:27500");
+
+    Netchan_Setup(chan, adr, 7);
+
+    expect(chan.remote_address).not.toBe(adr);
+    expect(Array.from(chan.remote_address.ip)).toEqual(Array.from(adr.ip));
+    expect(chan.remote_address.port).toBe(adr.port);
+
+    // mutating the caller's address (net_from is a singleton the packet loop
+    // overwrites every frame) must not reach the stored one
+    adr.ip[0] = 99;
+    adr.port = 1;
+    expect(chan.remote_address.ip[0]).toBe(10);
+    expect(chan.remote_address.port).not.toBe(1);
+  });
+
   test("the first packet a fresh channel sends is rejected by its peer as not newer than incoming_sequence(0), but still advances outgoing_sequence", () => {
     const { client, server } = setupPair();
 

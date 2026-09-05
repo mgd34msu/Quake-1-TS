@@ -52,11 +52,9 @@ Deviations from PORTING.md / the C source:
   a client-wide singleton the renderer's R_AddEfrags/R_RemoveEfrags already
   walk; a second one would split that state. Only the free-list length
   differs, and nothing in QW depends on its exact size.
-- `dlight_t.color[4]` (QW/client/client.h's dlight_t) has no field on
-  src/client/client.ts's `DlightT`; cl_ents.ts (which owns CL_AllocDlight)
-  keeps the four floats in the parallel `cl_dlight_color` table indexed by
-  `cl_dlights` position, so CL_ClearState's `memset (cl_dlights, ...)` clears
-  that table alongside the DlightT fields.
+- `dlight_t.color[4]` (QW/client/client.h's dlight_t) is a field on
+  src/client/client.ts's `DlightT`, inert on the WinQuake path, so
+  CL_ClearState's `memset (cl_dlights, ...)` zeroes it with the rest.
 - `cl_visedicts`/`cl_oldvisedicts`/`cl_visedicts_list`/`cl_numvisedicts`/
   `cl_oldnumvisedicts` are declared in cl_main.c but read and written only by
   cl_ents.c and the renderer; they are not declared here, so the concurrent
@@ -147,7 +145,7 @@ import { S_StopAllSounds, S_Shutdown, S_Update } from "../../client/snd_dma";
 import { vidBackend } from "../../client/vid";
 import { V_Init } from "../../client/view";
 import { Sys_Error, Sys_FileClose, Sys_FileOpenWrite, Sys_FloatTime, Sys_Quit, Sys_SendKeyEvents, Sys_mkdir } from "../../platform/sys";
-import { CL_DecayLights, CL_EmitEntities, CL_SetUpPlayerPrediction, cl_dlight_color } from "./cl_ents";
+import { CL_DecayLights, CL_EmitEntities, CL_SetUpPlayerPrediction } from "./cl_ents";
 import { CL_InitPrediction, CL_PredictMove } from "./cl_pred";
 import { Cam_Reset, CL_InitCam } from "./cl_cam";
 import { baseskin, noskins, Skin_AllSkins_f, Skin_Skins_f } from "./skin";
@@ -515,8 +513,8 @@ export function CL_ClearState(): void {
     d.decay = 0;
     d.minlight = 0;
     d.key = 0;
+    d.color.fill(0);
   }
-  for (const c of cl_dlight_color) c.fill(0); // dlight_t.color[4] -- see file header
   for (const ls of cl_lightstyle) {
     ls.map = "";
     ls.length = 0;

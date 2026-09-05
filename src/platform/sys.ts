@@ -39,7 +39,7 @@ Deviations from the C:
   as no-ops; id386's Sys_SetFPCW asm is dropped).
 */
 
-import { appendFileSync, openSync, closeSync, readSync, writeSync, statSync, fstatSync, mkdirSync } from "node:fs";
+import { appendFileSync, openSync, closeSync, readSync, writeSync, statSync, fstatSync, mkdirSync, renameSync } from "node:fs";
 import { Com_sprintf } from "../common/sprintf";
 
 export class SysError extends Error {
@@ -197,6 +197,25 @@ returns -1 if not present
 export function Sys_FileTime(path: string): number {
   try {
     return Math.floor(statSync(path).mtimeMs / 1000);
+  } catch {
+    return -1;
+  }
+}
+
+/*
+============
+Sys_FileRename
+
+QW/client/cl_parse.c's CL_ParseDownload calls libc `rename()` directly (there
+is no Sys_* wrapper in either C tree). One is added here because node:fs is
+confined to this file and src/common/common.ts. Returns the C's return value:
+0 on success, -1 on failure.
+============
+*/
+export function Sys_FileRename(from: string, to: string): number {
+  try {
+    renameSync(from, to);
+    return 0;
   } catch {
     return -1;
   }

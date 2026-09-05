@@ -20,12 +20,10 @@ Deviations from PORTING.md / the C source:
 - `#ifdef GLQUAKE sc->skin = NULL;` in Skin_NextDownload's final loop: the GL
   renderer drops the cached software skin because gl_rmisc.c's
   R_TranslatePlayerSkin owns the player texture instead. Both branches are
-  ported. src/client/render.ts's Renderer seam is outside this unit's SCOPE, so
-  the active renderer is read from the port's own `vid_ref` cvar through the
-  shared registry rather than through a new seam method; with no renderer
-  installed (a test process) the lookup misses and the !GLQUAKE branch runs,
-  which is PORTING.md's "keep the #ifdef default branch" rule. Follow-up:
-  expose this as a Renderer member and read it through getRenderer().
+  ported, selected by `re.current.isGL` (src/client/render.ts's runtime stand-in
+  for the compile-time macro). With no renderer installed (a test process) the
+  !GLQUAKE branch runs, which is PORTING.md's "keep the #ifdef default branch"
+  rule.
 - `pcx_t` is declared by QW/client/client.h, so it is ported there
   (src/qw/client/client.ts's `PcxT`/`readPcx`/`PCX_DATA_OFS`), not here.
 */
@@ -34,7 +32,8 @@ import { CactiveT, cl, cls } from "../../client/client";
 import { Con_Printf } from "../../client/console";
 import { Cache_Alloc, Cache_Check, Cache_Free, Cache_Report } from "../../common/zone";
 import { Cmd_Argv } from "../../common/cmd";
-import { Cvar_VariableString, CvarT } from "../../common/cvar";
+import { CvarT } from "../../common/cvar";
+import { re } from "../../client/render";
 import { Com_sprintf } from "../../common/sprintf";
 import { COM_LoadTempFile, COM_StripExtension, com_filesize, Info_ValueForKey, MSG_WriteByte, MSG_WriteString } from "../common";
 import { ClcOpsT, MAX_CLIENTS } from "../protocol";
@@ -51,7 +50,7 @@ let numskins = 0;
 
 // the `#ifdef GLQUAKE` selector; see the file header
 function glquake(): boolean {
-  return Cvar_VariableString("vid_ref") === "gl";
+  return re.current?.isGL ?? false;
 }
 
 /*

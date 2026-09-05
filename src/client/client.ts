@@ -123,6 +123,11 @@ export class DlightT {
   decay = 0; // drop this each second
   minlight = 0; // don't add when contributing less
   key = 0;
+  // QW/client/client.h's dlight_t adds `float color[4]`, which QW's
+  // CL_NewDlight/CL_MuzzleFlash/CL_ParseTEnt fill per light type and
+  // gl_rlight.c's R_RenderDlight reads. Inert on the WinQuake path (nothing
+  // outside src/qw writes it, and WinQuake's R_RenderDlight never reads it).
+  color: Float32Array = new Float32Array(4);
 }
 
 export const MAX_BEAMS = 24;

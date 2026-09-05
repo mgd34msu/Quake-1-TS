@@ -8,13 +8,8 @@ Deviations from PORTING.md / the C source:
 - `entity_t` in QW/client/render.h carries two members WinQuake's does not:
   `int keynum` (frame-to-frame entity matching, for the particle trails) and
   `struct player_info_s *scoreboard` (the per-player custom skin the QW
-  renderers read). `EntityT` lives in src/client/render.ts, outside this
-  unit's SCOPE, so both are kept in the parallel typed side tables
-  `cl_visedicts_keynum` / `cl_visedicts_scoreboard` below, indexed by the same
-  slot as the entity they belong to. Follow-up for the coordinator: fold
-  `keynum`/`scoreboard` onto `EntityT` (both are inert for WinQuake) and drop
-  the side tables; QW's renderer folds (Q024) need `scoreboard` to reach
-  r_alias.c's `Skin_Cache (currententity->scoreboard->skin)` site.
+  renderers read). Both are fields on `EntityT` (src/client/render.ts), inert
+  on the WinQuake path, so this file writes them directly.
 - `cl_visedicts_list[2][MAX_VISEDICTS]` / `cl_visedicts` / `cl_oldvisedicts` /
   `cl_numvisedicts` / `cl_oldnumvisedicts` are QW cl_main.c globals. cl_main.c
   is another unit's file (Q021) and `cl_visedicts`/`cl_oldvisedicts` are
@@ -25,27 +20,18 @@ Deviations from PORTING.md / the C source:
   renderers and cl_tent.c's CL_NewTempEntity already read, so every consumer
   outside this unit sees the QW list through the name it already uses.
 - `dlight_t` gains `float color[4]` in QW/client/client.h, which CL_NewDlight
-  fills per light type. `DlightT` lives in src/client/client.ts, outside this
-  unit's SCOPE, so the four colours are kept in the parallel side table
-  `cl_dlight_color`, indexed by the `cl_dlights` array position, and
-  CL_NewDlight writes them exactly where the C does. src/qw/client/cl_tent.ts
-  imports that table for its own CL_ParseTEnt dlights. FOLLOW-UP for the
-  coordinator (a wave-level conflict, not a choice this unit can make): the
-  landed src/qw/client/cl_main.ts writes `d.color[0..3]` on `DlightT` itself
-  in CL_ClearState, which does not compile. Add
-  `color: Float32Array = new Float32Array(4);` to `DlightT`, then delete this
-  side table and cl_tent.ts's `dlightColor` helper so there is one store.
+  fills per light type. It is a field on `DlightT` (src/client/client.ts),
+  inert on the WinQuake path, so this file writes `dl.color[0..3]` exactly
+  where the C writes `dl->color[0..3]`.
 - The `#ifdef GLQUAKE` in CL_LinkPlayers guards the player dlight spawn with
-  `!gl_flashblend.value || j != cl.playernum`. `gl_flashblend` is a GL-renderer
-  cvar (src/ref_gl/gl_rmain.ts) that no client module may import, and
-  src/client/render.ts's Renderer seam -- which is where PORTING.md puts a
-  GLQUAKE site -- is outside this unit's SCOPE, so no method could be added
-  there. Both branches are ported: the guard is read from the shared cvar
-  registry by name (`Cvar_FindVar("gl_flashblend")`), which is registered only
-  while the GL renderer is loaded, so with the software renderer (or in a test
-  process with no renderer) the lookup misses and the dlight is spawned
-  unconditionally -- exactly the !GLQUAKE branch. Follow-up: give the Renderer
-  interface a `gl_flashblend` accessor and read it through getRenderer().
+  `!gl_flashblend.value || j != cl.playernum`. Both branches are ported. Which
+  one runs is decided by `re.current.isGL` (src/client/render.ts's runtime
+  stand-in for the compile-time macro, see that file's header). `gl_flashblend`
+  itself is declared by gl_rmain.c only -- the software renderer has no such
+  cvar at all -- so there is nothing to put on the Renderer interface and no
+  module a client file may import it from; its value is read from the shared
+  cvar registry by name, which is safe precisely because `isGL` already
+  guarantees the GL renderer is loaded and has registered it.
 - `EF_FLAG1`/`EF_FLAG2`/`EF_BLUE`/`EF_RED` are QW/client/model.h's four
   additions to the EF_BRIGHTFIELD..EF_DIMLIGHT block. src/common/model.ts
   deliberately does not declare that block (src/server/server.ts owns it, and
@@ -77,7 +63,7 @@ Deviations from PORTING.md / the C source:
 import { anglemod, AngleVectors, type Vec3, vec3, vec3_origin, VectorCopy } from "../../common/mathlib";
 import { PITCH, ROLL, YAW } from "../../common/quakedef";
 import { CactiveT, cl, cl_dlights, cl_visedicts, cls, clState, DlightT, MAX_DLIGHTS, MAX_VISEDICTS } from "../../client/client";
-import { EntityT } from "../../client/render";
+import { EntityT, re } from "../../client/render";
 import { vid } from "../../client/vid";
 import { V_CalcRoll } from "../../client/view";
 import { R_RocketTrail } from "../../client/r_part";
@@ -126,7 +112,6 @@ import {
 } from "../protocol";
 import { player_maxs, player_mins, pmove } from "../pmove_types";
 import { cl_baselines, PlayerStateT } from "./client";
-import type { PlayerInfoT } from "./client";
 import { CL_PredictUsercmd } from "./cl_pred";
 import { Cam_DrawPlayer } from "./cl_cam";
 import { cl_predict_players, cl_predict_players2, cl_solid_players, clMainState, Host_EndGame } from "./cl_main";
@@ -160,6 +145,15 @@ function copyEntityState(from: QwEntityStateT, to: QwEntityStateT): void {
   to.effects = from.effects;
 }
 
+// CL_LinkPlayers's `#ifdef GLQUAKE` guard -- see file header. Returns 0
+// whenever the GL branch does not exist (software renderer, or no renderer
+// at all), which makes the guard vacuously true, exactly as the #else side.
+export function glFlashblend(): number {
+  if (!re.current?.isGL) return 0;
+  const v = Cvar_FindVar("gl_flashblend");
+  return v === null ? 0 : v.value;
+}
+
 function makeArray<T>(n: number, make: () => T): T[] {
   const a: T[] = new Array<T>(n);
   for (let i = 0; i < n; i++) a[i] = make();
@@ -176,27 +170,16 @@ const predicted_players: PredictedPlayerT[] = makeArray(MAX_CLIENTS, () => new P
 
 //
 // cl_main.c's `entity_t cl_visedicts_list[2][MAX_VISEDICTS]` and the two
-// pointers into it, plus the keynum/scoreboard side tables that stand in for
-// QW render.h's two extra entity_t members (see file header).
+// pointers into it (see file header).
 //
 export const cl_visedicts_list: [EntityT[], EntityT[]] = [
   makeArray(MAX_VISEDICTS, () => new EntityT()),
   makeArray(MAX_VISEDICTS, () => new EntityT()),
 ];
 
-export const cl_visedicts_keynum: [Int32Array, Int32Array] = [new Int32Array(MAX_VISEDICTS), new Int32Array(MAX_VISEDICTS)];
-
-export const cl_visedicts_scoreboard: [Array<PlayerInfoT | null>, Array<PlayerInfoT | null>] = [
-  new Array<PlayerInfoT | null>(MAX_VISEDICTS).fill(null),
-  new Array<PlayerInfoT | null>(MAX_VISEDICTS).fill(null),
-];
-
 // which half of cl_visedicts_list is `cl_visedicts` and which is
 // `cl_oldvisedicts`, plus `cl_oldnumvisedicts`
 export const visState = { list: 0, oldlist: 1, cl_oldnumvisedicts: 0 };
-
-// dlight_t.color[4]; see file header
-export const cl_dlight_color: Float32Array[] = makeArray(MAX_DLIGHTS, () => new Float32Array(4));
 
 //============================================================
 
@@ -237,8 +220,7 @@ export function CL_AllocDlight(key: number): DlightT {
   return dl;
 }
 
-// memset (dl, 0, sizeof(*dl)) -- the colour side table stands in for the
-// dlight_t member the C zeroes with the rest of the struct
+// memset (dl, 0, sizeof(*dl))
 function clearDlight(i: number): void {
   const dl = cl_dlights[i];
   dl.origin[0] = dl.origin[1] = dl.origin[2] = 0;
@@ -247,12 +229,7 @@ function clearDlight(i: number): void {
   dl.decay = 0;
   dl.minlight = 0;
   dl.key = 0;
-  cl_dlight_color[i].fill(0);
-}
-
-function dlightColor(dl: DlightT): Float32Array {
-  const i = cl_dlights.indexOf(dl);
-  return cl_dlight_color[i < 0 ? 0 : i];
+  dl.color.fill(0);
 }
 
 /*
@@ -268,7 +245,7 @@ export function CL_NewDlight(key: number, x: number, y: number, z: number, radiu
   dl.radius = radius;
   dl.die = cl.time + time;
 
-  const color = dlightColor(dl);
+  const color = dl.color;
   if (type === 0) {
     color[0] = 0.2;
     color[1] = 0.1;
@@ -561,16 +538,16 @@ export function CL_LinkPacketEntities(): void {
     const ent = cl_visedicts_list[visState.list][slot];
     clState.cl_numvisedicts++;
 
-    cl_visedicts_keynum[visState.list][slot] = s1.number;
+    ent.keynum = s1.number;
     ent.model = model;
 
     // set colormap
     if (s1.colormap && s1.colormap < MAX_CLIENTS && model.name === "progs/player.mdl") {
       ent.colormap = cl.qw.players[s1.colormap - 1].translations;
-      cl_visedicts_scoreboard[visState.list][slot] = cl.qw.players[s1.colormap - 1];
+      ent.scoreboard = cl.qw.players[s1.colormap - 1];
     } else {
       ent.colormap = vid.colormap;
-      cl_visedicts_scoreboard[visState.list][slot] = null;
+      ent.scoreboard = null;
     }
 
     // set skin
@@ -603,7 +580,7 @@ export function CL_LinkPacketEntities(): void {
     // scan the old entity display list for a matching
     let i = 0;
     for (; i < visState.cl_oldnumvisedicts; i++) {
-      if (cl_visedicts_keynum[visState.oldlist][i] === cl_visedicts_keynum[visState.list][slot]) {
+      if (cl_visedicts_list[visState.oldlist][i].keynum === ent.keynum) {
         VectorCopy(cl_visedicts_list[visState.oldlist][i].origin, old_origin);
         break;
       }
@@ -697,14 +674,14 @@ export function CL_LinkProjectiles(): void {
     const slot = clState.cl_numvisedicts;
     const ent = cl_visedicts_list[visState.list][slot];
     clState.cl_numvisedicts++;
-    cl_visedicts_keynum[visState.list][slot] = 0;
+    ent.keynum = 0;
 
     if (pr.modelindex < 1) continue;
     ent.model = cl.model_precache[pr.modelindex];
     ent.skinnum = 0;
     ent.frame = 0;
     ent.colormap = vid.colormap;
-    cl_visedicts_scoreboard[visState.list][slot] = null;
+    ent.scoreboard = null;
     VectorCopy(pr.origin, ent.origin);
     VectorCopy(pr.angles, ent.angles);
   }
@@ -840,8 +817,7 @@ export function CL_LinkPlayers(): void {
     // spawn light flashes, even ones coming from invisible objects
     // #ifdef GLQUAKE: `if (!gl_flashblend.value || j != cl.playernum)`; see
     // the file header for how the GL branch is selected here
-    const flashblend = Cvar_FindVar("gl_flashblend");
-    if (flashblend === null || !flashblend.value || j !== cl.qw.playernum) {
+    if (!glFlashblend() || j !== cl.qw.playernum) {
       if ((state.effects & (EF_BLUE | EF_RED)) === (EF_BLUE | EF_RED))
         CL_NewDlight(j, state.origin[0], state.origin[1], state.origin[2], 200 + (rand() & 31), 0.1, 3);
       else if (state.effects & EF_BLUE) CL_NewDlight(j, state.origin[0], state.origin[1], state.origin[2], 200 + (rand() & 31), 0.1, 1);
@@ -864,14 +840,14 @@ export function CL_LinkPlayers(): void {
     const slot = clState.cl_numvisedicts;
     const ent = cl_visedicts_list[visState.list][slot];
     clState.cl_numvisedicts++;
-    cl_visedicts_keynum[visState.list][slot] = 0;
+    ent.keynum = 0;
 
     ent.model = cl.model_precache[state.modelindex];
     ent.skinnum = state.skinnum;
     ent.frame = state.frame;
     ent.colormap = info.translations;
-    if (state.modelindex === parseState.cl_playerindex) cl_visedicts_scoreboard[visState.list][slot] = info; // use custom skin
-    else cl_visedicts_scoreboard[visState.list][slot] = null;
+    if (state.modelindex === parseState.cl_playerindex) ent.scoreboard = info; // use custom skin
+    else ent.scoreboard = null;
 
     //
     // angles

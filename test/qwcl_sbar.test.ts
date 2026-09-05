@@ -54,7 +54,9 @@ type DrawCall =
   | { fn: "Draw_Character"; x: number; y: number; num: number }
   | { fn: "Draw_String"; x: number; y: number; str: string }
   | { fn: "Draw_Fill"; x: number; y: number; w: number; h: number; c: number }
-  | { fn: "Draw_TileClear"; x: number; y: number; w: number; h: number };
+  | { fn: "Draw_TileClear"; x: number; y: number; w: number; h: number }
+  | { fn: "Draw_Alt_String"; x: number; y: number; str: string }
+  | { fn: "Draw_SubPic"; x: number; y: number; picName: string; srcx: number; srcy: number; w: number; h: number };
 
 function makeFakeRenderer(): { renderer: Renderer; calls: DrawCall[]; picByName: Map<string, QpicT> } {
   const picByName = new Map<string, QpicT>();
@@ -165,6 +167,13 @@ function makeFakeRenderer(): { renderer: Renderer; calls: DrawCall[]; picByName:
     SCR_TileClear(): void {},
     SCR_SoftwareTileClear(): void {},
     SCR_DrawCrosshair(): void {},
+    Draw_SubPic(x: number, y: number, pic: QpicT, srcx: number, srcy: number, w: number, h: number): void {
+      calls.push({ fn: "Draw_SubPic", x, y, picName: nameOf(pic), srcx, srcy, w, h });
+    },
+    Draw_Alt_String(x: number, y: number, str: string): void {
+      calls.push({ fn: "Draw_Alt_String", x, y, str });
+    },
+    isGL: false,
     SCR_ScreenShot_f(): void {},
   };
 
@@ -412,6 +421,28 @@ describe("Sbar_DeathmatchOverlay", () => {
     expect(strings).toContain("Alice");
     expect(strings).toContain("Bob");
     expect(strings).toContain("  42"); // ping, Com_sprintf("%4i", 42)
+  });
+
+  test("packet loss over 25 goes through Draw_Alt_String, at or under 25 through Draw_String", () => {
+    scr_viewsize.value = 100;
+    cl.qw.serverinfo = "\\teamplay\\0";
+    cl.qw.last_ping_request = host.realtime;
+
+    cl.qw.players[0].name = "Alice";
+    cl.qw.players[0].pl = 26; // sbar.c: `if (p > 25) Draw_Alt_String`
+    cl.qw.players[0].entertime = 0;
+
+    cl.qw.players[1].name = "Bob";
+    cl.qw.players[1].pl = 25;
+    cl.qw.players[1].entertime = 0;
+
+    Sbar_DeathmatchOverlay(0);
+
+    const alt = fake.calls.filter((c): c is Extract<DrawCall, { fn: "Draw_Alt_String" }> => c.fn === "Draw_Alt_String").map((c) => c.str);
+    const plain = fake.calls.filter((c): c is Extract<DrawCall, { fn: "Draw_String" }> => c.fn === "Draw_String").map((c) => c.str);
+
+    expect(alt).toEqual([" 26"]);
+    expect(plain).toContain(" 25");
   });
 });
 

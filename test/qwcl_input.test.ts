@@ -18,6 +18,7 @@ import * as netUdp from "../src/qw/net_udp";
 import { NetadrT, NET_StringToAdr } from "../src/qw/net_udp";
 import { net_message, MSG_BeginReading, MSG_WriteByte, MSG_WriteShort, MSG_WriteCoord, SizeBuf } from "../src/common/sizebuf";
 import { NetchanT, Netchan_Setup, netchanState } from "../src/qw/net_chan";
+import { inputBackend } from "../src/client/input";
 import { qw } from "../src/common/quakedef";
 import { cl, cls, CactiveT, cl_dlights, cl_visedicts, clState, type DlightT } from "../src/client/client";
 import { vid } from "../src/client/vid";
@@ -34,7 +35,6 @@ import * as cl_ents from "../src/qw/client/cl_ents";
 import * as modelMod from "../src/common/model";
 import { ModelT } from "../src/common/model";
 import * as snd_dma from "../src/client/snd_dma";
-import { cl_dlight_color } from "../src/qw/client/cl_ents";
 
 import { keyState, KeydestT, Key_Event } from "../src/client/keys";
 import { Con_Init, Con_Printf } from "../src/client/console";
@@ -210,6 +210,36 @@ describe("CL_SendCmd", () => {
     cl_input.CL_SendCmd();
     expect(sentPackets.length).toBe(0);
   });
+
+  test("calls the input backend's IN_MoveQw between CL_BaseMove and CL_FinishMove", () => {
+    // QW cl_input.c's CL_SendCmd: `CL_BaseMove (cmd); IN_Move (cmd);` -- our
+    // InputBackend carries a QW-shaped IN_MoveQw beside WinQuake's IN_Move
+    // because the two trees' usercmd_t structs differ.
+    const saved = inputBackend.current;
+    const seen: Array<{ forwardmove: number; sidemove: number }> = [];
+    inputBackend.current = {
+      IN_Init(): void {},
+      IN_Shutdown(): void {},
+      IN_Commands(): void {},
+      IN_Move(): void {},
+      IN_MoveQw(cmd: QwUsercmdT): void {
+        // CL_BaseMove has already run, CL_FinishMove's MakeChar has not
+        seen.push({ forwardmove: cmd.forwardmove, sidemove: cmd.sidemove });
+        cmd.forwardmove += 60;
+      },
+      IN_ModeChanged(): void {},
+      IN_ClearStates(): void {},
+    };
+
+    const i = cls.qw.netchan.outgoing_sequence & UPDATE_MASK;
+    cl_input.CL_SendCmd();
+
+    expect(seen.length).toBe(1);
+    expect(seen[0]?.forwardmove).toBe(0);
+    expect(cl.qw.frames[i].cmd.forwardmove).toBe(60); // MakeChar(60) === 60
+
+    inputBackend.current = saved;
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -343,8 +373,7 @@ describe("CL_ParseTEnt: TE_EXPLOSION", () => {
 
     const idx = cl_dlights.indexOf(dl);
     expect(idx).toBeGreaterThanOrEqual(0);
-    const color = cl_dlight_color[idx];
-    if (!color) throw new Error("unreachable");
+    const color = dl.color;
     expect(color[0]).toBeCloseTo(0.2, 5);
     expect(color[1]).toBeCloseTo(0.1, 5);
     expect(color[2]).toBeCloseTo(0.05, 5);

@@ -162,12 +162,37 @@ Deviations from PORTING.md / the C source:
     BuildGammaTable, gammatable, v_gamma, gl_cshiftpercent, crosshair,
     cl_crossx, cl_crossy): src/client/view.ts (U045).
 - Dropped `#ifdef QUAKE2` blocks: render.h's `R_DarkFieldParticles`.
+- `EntityT.keynum` / `EntityT.scoreboard` are QW/client/render.h's two extra
+  entity_t members (frame-to-frame entity matching for the particle trails,
+  and the player_info_t the QW renderers read for a custom skin). WinQuake's
+  entity_t has neither; both are inert on the WinQuake path (nothing outside
+  src/qw writes them) and carried here so src/ref_soft/r_alias.ts,
+  src/ref_gl/gl_rmain.ts and src/qw/client/cl_ents.ts all read one store
+  instead of a parallel side table. `PlayerInfoT` is a type-only import, so
+  no src/qw module is loaded by importing this one.
+- `Renderer.isGL` is this port's runtime stand-in for the C's compile-time
+  `#ifdef GLQUAKE` in a *client* file. WinQuake and QW both build two
+  binaries whose client .c files branch on that macro; this port compiles
+  both renderers in and picks one at runtime, so the client files ask the
+  installed renderer. The GLQUAKE sites already ported as seam *methods* stay
+  methods (a method has two bodies); `isGL` covers the sites whose GL branch
+  reads a GL-renderer-private cvar with no method to hang it on
+  (src/qw/client/cl_ents.ts's and cl_parse.ts's `gl_flashblend`,
+  src/qw/client/skin.ts's `sc->skin = NULL`).
+- `Renderer.R_NetGraph` is optional because QW's two renderers call it from
+  different places: r_main.c calls it at the end of R_RenderView (renderer-
+  internal, wired inside src/ref_soft/r_main.ts) while gl_screen.c calls it
+  from SCR_UpdateScreen, a client file (src/qw/client/screen.ts). Only the GL
+  renderer implements the member; the software renderer leaves it undefined,
+  so the client-side call site is a no-op there and the graph is drawn
+  exactly once under either renderer.
 */
 
 import { CvarT } from "../common/cvar";
 import { EntityStateT } from "../common/quakedef";
 import type { MleafT, ModelLoaderHooks, ModelT, MnodeT, TextureT } from "../common/model";
 import type { QpicT } from "../common/wad";
+import type { PlayerInfoT } from "../qw/client/client";
 import { type Vec3, vec3 } from "../common/mathlib";
 import { Sys_Error } from "../platform/sys";
 import { VrectT } from "./vid";
@@ -203,6 +228,11 @@ export class EntityT {
   colormap: Uint8Array | null = null;
   effects = 0; // light, particals, etc
   skinnum = 0; // for Alias models
+
+  keynum = 0; // for matching entities in different frames
+
+  scoreboard: PlayerInfoT | null = null; // identify player
+
   visframe = 0; // last frame this entity was
   //  found in an active leaf
 
@@ -233,6 +263,8 @@ export class EntityT {
     this.colormap = null;
     this.effects = 0;
     this.skinnum = 0;
+    this.keynum = 0;
+    this.scoreboard = null;
     this.visframe = 0;
     this.dlightframe = 0;
     this.dlightbits = 0;
@@ -300,6 +332,11 @@ export const r_fullbright = new CvarT("r_fullbright", "0");
 export const r_drawentities = new CvarT("r_drawentities", "1");
 export const r_drawviewmodel = new CvarT("r_drawviewmodel", "1");
 export const r_speeds = new CvarT("r_speeds", "0");
+// QW-only (r_main.c:119 / gl_rmain.c:87, same initializer in both). Shared
+// here rather than declared twice because src/qw/client/screen.ts reads it
+// at gl_screen.c:1145's call site and no client module may import a
+// renderer.
+export const r_netgraph = new CvarT("r_netgraph", "0");
 
 //=============================================================================
 // d_iface.h / glquake.h
@@ -388,6 +425,11 @@ export interface Renderer {
   Draw_PicFromWad(name: string): QpicT | null;
   Draw_CachePic(path: string): QpicT | null;
 
+  // QW/client/draw.c + gl_draw.c additions (not in WinQuake's draw.h):
+  // sbar.c's Sbar_DrawSubPic and Sbar_DeathmatchOverlay read both.
+  Draw_SubPic(x: number, y: number, pic: QpicT, srcx: number, srcy: number, width: number, height: number): void;
+  Draw_Alt_String(x: number, y: number, str: string): void;
+
   //
   // the particle drawing half of r_part.c's R_DrawParticles
   //
@@ -426,6 +468,15 @@ export interface Renderer {
   SCR_SoftwareTileClear(x: number, y: number, w: number, h: number): void;
   SCR_DrawCrosshair(): void;
   SCR_ScreenShot_f(): void;
+
+  // This port's own addition, not from render.h: the client files' own
+  // `#ifdef GLQUAKE` discriminator. See this file's header.
+  readonly isGL: boolean;
+
+  // QW gl_ngraph.c's R_NetGraph, called from gl_screen.c's SCR_UpdateScreen.
+  // Optional: the software renderer's own R_NetGraph (r_misc.c) is called
+  // from r_main.c instead, inside the renderer. See this file's header.
+  R_NetGraph?(): void;
 
   // This port's own addition, not from render.h: Quake links exactly one
   // renderer, so it never unloads one. The vid_ref switch this port adds

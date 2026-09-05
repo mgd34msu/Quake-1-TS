@@ -30,19 +30,9 @@ Deviations from PORTING.md / the C source:
   mutable globals... declared in the module that owns them" rule.
 - `Draw_SubPic` (used by `Sbar_DrawSubPic`, the headsup-mode background-icon
   blitter) and `Draw_Alt_String` (used by `Sbar_DeathmatchOverlay`'s
-  high-packet-loss red-text distinction) do not exist on `Renderer`
-  (src/client/render.ts, out of this unit's SCOPE -- checked both
-  src/client/render.ts and every src/ref_soft/src/ref_gl file: neither name
-  appears anywhere in the tree). `Sbar_DrawSubPic` is ported as a documented
-  no-op (not a TODO: a function this unit cannot port faithfully without a
-  renderer-seam addition outside its SCOPE) -- headsup-mode background icons
-  (weapon-flash frames, the ammo-count background strip) do not render;
-  the `Sbar_DrawCharacter` digit draws alongside those calls are NOT
-  affected (Draw_Character exists) and keep their correct cl_hudswap-branch
-  positions. `Sbar_DeathmatchOverlay`'s packet-loss line falls back to
-  `Draw_String` unconditionally (the text still renders; only the "alt"/red
-  coloring for pl>25 is unavailable). Follow-up: once render.ts's Renderer
-  gains `Draw_SubPic`/`Draw_Alt_String`, wire both in here.
+  high-packet-loss red-text distinction) are QW draw.c/gl_draw.c additions;
+  both are `Renderer` members (src/client/render.ts) and are called through
+  `getRenderer()` like every other draw.h entry point.
 - `cls.qw.netchan` is a concrete `NetchanT` (src/qw/net_chan.ts has landed,
   and src/qw/client/client.ts's `QwClientStaticExtT.netchan` field already
   holds one), so `Sbar_DeathmatchOverlay`'s periodic "pings" stringcmd
@@ -339,20 +329,11 @@ export function Sbar_DrawPic(x: number, y: number, pic: QpicT | null): void {
 Sbar_DrawSubPic
 
 JACK: Draws a portion of the picture in the status bar.
-
-See file header: Renderer has no Draw_SubPic. Documented no-op.
 =============
 */
-export function Sbar_DrawSubPic(
-  _x: number,
-  _y: number,
-  _pic: QpicT | null,
-  _srcx: number,
-  _srcy: number,
-  _width: number,
-  _height: number,
-): void {
-  // no-op -- see file header's Draw_SubPic deviation note
+export function Sbar_DrawSubPic(x: number, y: number, pic: QpicT | null, srcx: number, srcy: number, width: number, height: number): void {
+  if (!pic) return;
+  getRenderer().Draw_SubPic(x, y + (vid.height - SBAR_HEIGHT), pic, srcx, srcy, width, height);
 }
 
 /*
@@ -1009,11 +990,11 @@ export function Sbar_DeathmatchOverlay(start: number): void {
     let num = Com_sprintf("%4i", p);
     r.Draw_String(x, y, num);
 
-    // draw pl -- Draw_Alt_String not available (see file header), falls back
-    // to Draw_String regardless of p > 25.
+    // draw pl
     p = s.pl;
     num = Com_sprintf("%3i", p);
-    r.Draw_String(x + 32, y, num);
+    if (p > 25) r.Draw_Alt_String(x + 32, y, num);
+    else r.Draw_String(x + 32, y, num);
 
     if (s.spectator) {
       r.Draw_String(x + 40, y, "(spectator)");

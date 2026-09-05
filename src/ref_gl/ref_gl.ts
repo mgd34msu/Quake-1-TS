@@ -40,6 +40,8 @@ Renderer member -> implementation, in interface order:
   R_SetVrect               empty                       (no gl_*.c defines it)
   draw_disc                draw_disc                   gl_draw.c
   Draw_*                   Draw_*                      gl_draw.c
+  Draw_SubPic              Draw_SubPic                 QW gl_draw.c (new)
+  Draw_Alt_String          Draw_Alt_String             QW gl_draw.c (new)
   D_StartParticles         D_StartParticles            gl_rmain.ts (r_part.c's
   D_DrawParticle           D_DrawParticle              three GLQUAKE halves,
   D_EndParticles           D_EndParticles              per U072)
@@ -63,6 +65,12 @@ Renderer member -> implementation, in interface order:
                                                        gl_screen.c drops)
   SCR_DrawCrosshair        HERE                        gl_screen.c:906
   SCR_ScreenShot_f         HERE                        gl_screen.c:592
+  isGL                     true                        (this port's own
+                                                       #ifdef GLQUAKE flag)
+  R_NetGraph               R_NetGraph                  QW gl_ngraph.c (new);
+                                                       gl_screen.c:1145 calls
+                                                       it from a client file,
+                                                       so it crosses the seam
 
 Deviations from PORTING.md / the C source:
 - `registerRenderer("gl", ...)`'s factory registers `gl_ztrick` and calls
@@ -139,6 +147,7 @@ import { scr_vrect, scrState } from "../client/screen_types";
 import { CalcFov, scr_fov, scr_viewsize } from "../client/screen";
 import { Sbar_Changed } from "../client/sbar";
 import { crosshair, gammatable, V_CalcPowerupCshift, V_CheckGamma } from "../client/view";
+import { qw } from "../common/quakedef";
 import { registerRenderer } from "../platform/vid";
 import { glState } from "./glquake";
 import { GL_RGB, GL_UNSIGNED_BYTE, qgl, qglHolder, QGL_Shutdown } from "./qgl";
@@ -152,10 +161,12 @@ import { R_PushDlights } from "./gl_rlight";
 import { R_InitSky } from "./gl_warp";
 import {
   draw_disc,
+  Draw_Alt_String,
   Draw_BeginDisc,
   Draw_CachePic,
   Draw_Character,
   Draw_ConsoleBackground,
+  Draw_Crosshair,
   Draw_DebugChar,
   Draw_EndDisc,
   Draw_FadeScreen,
@@ -164,11 +175,13 @@ import {
   Draw_Pic,
   Draw_PicFromWad,
   Draw_String,
+  Draw_SubPic,
   Draw_TileClear,
   Draw_TransPic,
   Draw_TransPicTranslate,
   GL_Set2D,
 } from "./gl_draw";
+import { R_NetGraph } from "./gl_ngraph";
 
 export const gl_triplebuffer = new CvarT("gl_triplebuffer", "1", true);
 
@@ -389,7 +402,16 @@ gl_screen.c's SCR_UpdateScreen else-branch
 ==================
 */
 function SCR_DrawCrosshair(): void {
-  if (crosshair.value) Draw_Character(scr_vrect.x + ((scr_vrect.width / 2) | 0), scr_vrect.y + ((scr_vrect.height / 2) | 0), "+".charCodeAt(0));
+  if (crosshair.value) {
+    // QW/client/gl_screen.c:1172 factors the same site out into gl_draw.c's
+    // Draw_Crosshair, which adds the crosshair.value==2 textured crosshair
+    // and the -4 centering offset.
+    if (qw.active) {
+      Draw_Crosshair();
+      return;
+    }
+    Draw_Character(scr_vrect.x + ((scr_vrect.width / 2) | 0), scr_vrect.y + ((scr_vrect.height / 2) | 0), "+".charCodeAt(0));
+  }
 }
 
 /*
@@ -511,6 +533,9 @@ export const glRenderer: Renderer = {
   Draw_PicFromWad,
   Draw_CachePic,
 
+  Draw_SubPic,
+  Draw_Alt_String,
+
   D_StartParticles,
   D_DrawParticle,
   D_EndParticles,
@@ -532,6 +557,10 @@ export const glRenderer: Renderer = {
   SCR_SoftwareTileClear(): void {},
   SCR_DrawCrosshair,
   SCR_ScreenShot_f,
+
+  isGL: true,
+
+  R_NetGraph,
 
   // render.ts's Renderer.Shutdown -- this port's own addition (Quake never
   // unloads a renderer). Releases what GL_VidInit/loadQGLFromSystem set up:

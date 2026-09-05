@@ -152,6 +152,9 @@ const fake: Renderer = {
     tileClears.push({ x, y, w, h });
   },
   SCR_DrawCrosshair(): void {},
+  Draw_SubPic(): void {},
+  Draw_Alt_String(): void {},
+  isGL: false,
   SCR_ScreenShot_f(): void {},
 };
 

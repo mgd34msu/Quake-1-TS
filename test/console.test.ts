@@ -118,6 +118,9 @@ function makeFakeRenderer(): { renderer: Renderer; draws: DrawCharacterCall[] } 
     SCR_TileClear: () => {},
     SCR_SoftwareTileClear: () => {},
     SCR_DrawCrosshair: () => {},
+    Draw_SubPic: () => {},
+    Draw_Alt_String: () => {},
+    isGL: false,
     SCR_ScreenShot_f: () => {},
   };
   return { renderer, draws };

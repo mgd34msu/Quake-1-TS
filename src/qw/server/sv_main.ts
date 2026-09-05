@@ -67,8 +67,9 @@ Deviations from PORTING.md / the C source:
 - `netadr_t adr = net_from;` (SVC_DirectConnect) and `svs.challenges[i].adr =
   net_from;` (SVC_GetChallenge) are struct copies in the C, and
   src/qw/net_chan.ts's Netchan_Setup stores the `netadr_t` it is handed by
-  reference; `copyNetadr` below makes both copies explicit so a stored address
-  never aliases the `net_from` singleton.
+  reference; `copyNetadr` (src/qw/net_udp.ts, the module that owns `NetadrT`)
+  makes both copies explicit so a stored address never aliases the `net_from`
+  singleton. Netchan_Setup uses the same helper.
 - QW's `cvar_t` (QW/client/cvar.h) is `{name, string, archive, info}` -- it has
   no `server` field at all, so sv_main.c's `{"fraglimit","0",false,true}` style
   initializers mean archive=false, **info**=true. src/common/cvar.ts's `CvarT`
@@ -182,7 +183,7 @@ import {
   net_message,
   va,
 } from "../common";
-import { NET_AdrToString, NET_CompareBaseAdr, NET_GetPacket, NET_Init, NET_SendPacket, NET_Shutdown, NetadrT, net_from } from "../net_udp";
+import { NET_AdrToString, NET_CompareBaseAdr, NET_GetPacket, NET_Init, NET_SendPacket, NET_Shutdown, NetadrT, copyNetadr, net_from } from "../net_udp";
 import { Netchan_Init, Netchan_OutOfBandPrint, Netchan_Process, Netchan_Setup, Netchan_Transmit, netchanState, setNetchanServerHooks } from "../net_chan";
 import { Cmd_ExecuteString, Cmd_Init } from "../cmd";
 import { Pmove_Init } from "../pmove";
@@ -227,17 +228,6 @@ function Sys_DoubleTime(): number {
 // rand() with the RAND_MAX id's compilers used -- see file header
 function rand(): number {
   return Math.floor(Math.random() * 0x8000) & 0x7fff;
-}
-
-// `netadr_t adr = net_from;` / `svs.challenges[i].adr = net_from;` are struct
-// copies in the C; NetadrT is a class here, so an explicit copy keeps every
-// stored address independent of the net_from singleton -- see file header.
-function copyNetadr(src: NetadrT): NetadrT {
-  const a = new NetadrT();
-  a.ip.set(src.ip);
-  a.port = src.port;
-  a.pad = src.pad;
-  return a;
 }
 
 function stringToLatin1Bytes(s: string): Uint8Array {

@@ -37,6 +37,8 @@ Renderer member -> implementation, in interface order:
   R_SetVrect               R_SetVrect                  r_main.c
   draw_disc                draw_disc                   draw.c
   Draw_*                   Draw_*                      draw.c
+  Draw_SubPic              Draw_SubPic                 QW draw.c (new)
+  Draw_Alt_String          Draw_Alt_String             QW draw.c (new)
   D_StartParticles         D_StartParticles            d_part.c
   D_DrawParticle           D_DrawParticle              d_part.c
   D_EndParticles           D_EndParticles              d_part.c
@@ -54,6 +56,13 @@ Renderer member -> implementation, in interface order:
   SCR_TileClear            empty                       (gl_screen.c only)
   SCR_SoftwareTileClear    Draw_TileClear              draw.c
   SCR_DrawCrosshair        empty                       (gl_screen.c only)
+  isGL                     false                       (this port's own
+                                                       #ifdef GLQUAKE flag)
+  R_NetGraph               not implemented             (r_misc.c's R_NetGraph
+                                                       is called from
+                                                       r_main.c, inside the
+                                                       renderer -- see
+                                                       render.ts's header)
   SCR_ScreenShot_f         HERE                        screen.c:613 + WritePCXfile
 
 Deviations from PORTING.md / the C source:
@@ -110,6 +119,7 @@ import { scr_vrect, scrState } from "../client/screen_types";
 import { CalcFov, scr_fov, scr_viewsize } from "../client/screen";
 import { Sbar_Changed } from "../client/sbar";
 import { cl_crossx, cl_crossy, crosshair, gammatable, V_CalcPowerupCshift, V_CheckGamma } from "../client/view";
+import { qw } from "../common/quakedef";
 import { registerRenderer } from "../platform/vid";
 import { dState } from "./d_local";
 import { R_Init, R_NewMap, R_RenderView, R_SetVrect, R_ViewChanged } from "./r_main";
@@ -123,10 +133,12 @@ import { R_InitSky } from "./r_sky";
 import { R_PushDlights } from "./r_light";
 import {
   draw_disc,
+  Draw_Alt_String,
   Draw_BeginDisc,
   Draw_CachePic,
   Draw_Character,
   Draw_ConsoleBackground,
+  Draw_Crosshair,
   Draw_DebugChar,
   Draw_EndDisc,
   Draw_FadeScreen,
@@ -135,6 +147,7 @@ import {
   Draw_Pic,
   Draw_PicFromWad,
   Draw_String,
+  Draw_SubPic,
   Draw_TileClear,
   Draw_TransPic,
   Draw_TransPicTranslate,
@@ -219,12 +232,20 @@ view.c's V_RenderView tail, `#ifndef GLQUAKE`
 =============
 */
 function V_DrawCrosshair(): void {
-  if (crosshair.value)
+  if (crosshair.value) {
+    // QW/client/view.c:1019 factors the same site out into draw.c's
+    // Draw_Crosshair, which adds the crosshair.value==2 dot and the -4
+    // centering offset.
+    if (qw.active) {
+      Draw_Crosshair();
+      return;
+    }
     Draw_Character(
       (scr_vrect.x + ((scr_vrect.width / 2) | 0) + cl_crossx.value) | 0,
       (scr_vrect.y + ((scr_vrect.height / 2) | 0) + cl_crossy.value) | 0,
       "+".charCodeAt(0),
     );
+  }
 }
 
 /*
@@ -476,6 +497,9 @@ export const softRenderer: Renderer = {
   Draw_PicFromWad,
   Draw_CachePic,
 
+  Draw_SubPic,
+  Draw_Alt_String,
+
   D_StartParticles,
   D_DrawParticle,
   D_EndParticles,
@@ -499,6 +523,8 @@ export const softRenderer: Renderer = {
   },
   SCR_DrawCrosshair(): void {},
   SCR_ScreenShot_f,
+
+  isGL: false,
 };
 
 registerRenderer("soft", () => softRenderer);

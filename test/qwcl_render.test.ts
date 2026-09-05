@@ -18,16 +18,9 @@ Per standing order 13, everything this file reads is initialized here:
 - `Con_Printf`/`Draw_Character` are wrapped with bare call-through `spyOn`s
   (test hygiene rule 15: call-through only, restored in afterAll).
 
-Gap, stated plainly (rule 14): this suite cannot exercise
-`ref_soft.ts`'s `V_DrawCrosshair` / `ref_gl.ts`'s `SCR_DrawCrosshair` calling
-into the new `Draw_Crosshair` under `qw.active`, because those two files are
-outside this unit's SCOPE and (as of this fold) do not yet contain the
-one-line `if (qw.active) { Draw_Crosshair(); return; }` wiring documented in
-this unit's report. The "qw.active=false path unchanged" assertion below for
-the draw fold instead calls the CURRENT (unwired) `V_DrawCrosshair` directly
-and shows it is still pure WinQuake regardless of `qw.active`'s value today
--- which is the correct, honest characterization of the present state, and
-will need re-checking once that wiring lands.
+`ref_soft.ts`'s `V_DrawCrosshair` now routes into `draw.ts`'s
+`Draw_Crosshair` under `qw.active` (and `ref_gl.ts`'s `SCR_DrawCrosshair`
+into `gl_draw.ts`'s); both branches of the software one are asserted below.
 */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -59,7 +52,15 @@ import { CL_CalcNet } from "../src/qw/client/cl_parse";
 import * as drawModule from "../src/ref_soft/draw";
 import { Draw_Crosshair as Draw_Crosshair_Soft } from "../src/ref_soft/draw";
 import { R_BuildLightMap, r_drawsurf, blocklights } from "../src/ref_soft/r_surf";
-import { r_fullbright, r_refdef } from "../src/client/render";
+import { R_AliasSetupSkin } from "../src/ref_soft/r_alias";
+import { r_affinetridesc } from "../src/ref_soft/d_iface";
+import { rState } from "../src/ref_soft/r_shared";
+import { AliashdrT, MaliasskindescT } from "../src/ref_soft/model_types";
+import { AliasskintypeT, MdlT } from "../src/common/modelgen";
+import { EntityT } from "../src/client/render";
+import { PlayerInfoT } from "../src/qw/client/client";
+import { r_fullbright, r_origin, r_refdef } from "../src/client/render";
+import { DlightT } from "../src/client/client";
 import { VID_CBITS } from "../src/client/vid";
 import { Mod_LoadAliasModel as Mod_LoadAliasModel_Soft } from "../src/ref_soft/model";
 
@@ -67,6 +68,7 @@ import { Draw_Crosshair as Draw_Crosshair_GL } from "../src/ref_gl/gl_draw";
 import { QGLRecording, SetQGL, qglHolder } from "../src/ref_gl/qgl";
 import { R_NetGraph, ngraphState } from "../src/ref_gl/gl_ngraph";
 import { R_TranslatePlayerSkin } from "../src/ref_gl/gl_rmisc";
+import { R_InitBubble, R_RenderDlight } from "../src/ref_gl/gl_rlight";
 import { glState } from "../src/ref_gl/glquake";
 import { Mod_LoadAliasModel as Mod_LoadAliasModel_GL } from "../src/ref_gl/gl_model";
 
@@ -285,10 +287,7 @@ describe("Draw_Crosshair (QW draw.c / gl_draw.c, new function)", () => {
     SetQGL(prior);
   });
 
-  test("qw.active=false: the existing (unwired) soft V_DrawCrosshair is unaffected by this fold", async () => {
-    // ref_soft.ts is out of this unit's SCOPE and does not yet branch on
-    // qw.active (see file header "Gap" note) -- this proves today's WinQuake
-    // crosshair path is unchanged by anything this unit wrote.
+  test("qw.active=false: soft V_DrawCrosshair keeps view.c's inline WinQuake crosshair", async () => {
     const spy = spyOn(drawModule, "Draw_Character");
     const wasActive = qw.active;
     qw.active = false;
@@ -308,6 +307,27 @@ describe("Draw_Crosshair (QW draw.c / gl_draw.c, new function)", () => {
     qw.active = wasActive;
     spy.mockRestore();
   });
+
+  test("qw.active=true: soft V_DrawCrosshair routes into draw.c's Draw_Crosshair (-4 centering)", async () => {
+    const spy = spyOn(drawModule, "Draw_Character");
+    const wasActive = qw.active;
+    qw.active = true;
+    crosshair.value = 1;
+    cl_crossx.value = 2;
+    cl_crossy.value = 1;
+
+    const { softRenderer } = await import("../src/ref_soft/ref_soft");
+    softRenderer.V_DrawCrosshair();
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [x, y, num] = spy.mock.calls[0] as [number, number, number];
+    expect(x).toBe(0 + 160 - 4 + 2);
+    expect(y).toBe(0 + 100 - 4 + 1);
+    expect(num).toBe("+".charCodeAt(0));
+
+    qw.active = wasActive;
+    spy.mockRestore();
+  });
 });
 
 //=============================================================================
@@ -318,6 +338,88 @@ describe("Draw_Crosshair (QW draw.c / gl_draw.c, new function)", () => {
 // the call is expected to throw afterward on the version check, which this
 // test tolerates -- only the userinfo side effect is under test.
 //=============================================================================
+
+//=============================================================================
+// gl_rlight.ts's R_RenderDlight fan color: QW/client/gl_rlight.c replaces
+// WinQuake's fixed glColor3f(0.2,0.1,0.0) with glColor4f(light->color[0..3]),
+// reading DlightT.color (src/client/client.ts).
+
+describe("R_RenderDlight fan color (QW gl_rlight.c)", () => {
+  const savedQw = qw.active;
+
+  function renderOne(): QGLRecording {
+    const rec = new QGLRecording();
+    const prior = qglHolder.current;
+    SetQGL(rec);
+    R_InitBubble();
+
+    const dl = new DlightT();
+    dl.origin[0] = 1000; // well outside rad, so the AddLightBlend early-out
+    dl.origin[1] = 0; //   is not taken
+    dl.origin[2] = 0;
+    dl.radius = 100;
+    dl.color[0] = 0.5;
+    dl.color[1] = 0.25;
+    dl.color[2] = 0.125;
+    dl.color[3] = 0.7;
+
+    r_origin[0] = r_origin[1] = r_origin[2] = 0;
+
+    R_RenderDlight(dl);
+    SetQGL(prior);
+    return rec;
+  }
+
+  afterAll(() => {
+    qw.active = savedQw;
+  });
+
+  test("qw.active=true: glColor4f carries the dlight's own color[4]", () => {
+    qw.active = true;
+    const rec = renderOne();
+    const color4 = rec.calls.filter((c) => c.name === "qglColor4f");
+    expect(color4.length).toBe(1);
+    const args = color4[0]?.args ?? [];
+    expect(args.length).toBe(4);
+    // dl.color is a Float32Array, so 0.7 comes back as the float32 nearest it
+    expect(args[0]).toBeCloseTo(0.5, 6);
+    expect(args[1]).toBeCloseTo(0.25, 6);
+    expect(args[2]).toBeCloseTo(0.125, 6);
+    expect(args[3]).toBeCloseTo(0.7, 6);
+    expect(rec.calls.filter((c) => c.name === "qglColor3f").map((c) => c.args)).toEqual([[0, 0, 0]]);
+  });
+
+  test("qw.active=false: WinQuake's fixed glColor3f(0.2,0.1,0.0) is unchanged", () => {
+    qw.active = false;
+    const rec = renderOne();
+    expect(rec.calls.filter((c) => c.name === "qglColor4f").length).toBe(0);
+    expect(rec.calls.filter((c) => c.name === "qglColor3f").map((c) => c.args)).toEqual([
+      [0.2, 0.1, 0.0],
+      [0, 0, 0],
+    ]);
+  });
+});
+
+//=============================================================================
+// The two Renderer members render.ts added for this wave's client-side
+// GLQUAKE sites: `isGL` (the compile-time macro's runtime stand-in) and the
+// optional `R_NetGraph` (gl_screen.c calls it from a client file; r_main.c
+// calls the software one from inside the renderer, so only ref_gl implements
+// the member).
+
+describe("Renderer.isGL / Renderer.R_NetGraph", () => {
+  test("softRenderer: isGL false, no R_NetGraph member", async () => {
+    const { softRenderer } = await import("../src/ref_soft/ref_soft");
+    expect(softRenderer.isGL).toBe(false);
+    expect(softRenderer.R_NetGraph).toBeUndefined();
+  });
+
+  test("glRenderer: isGL true, R_NetGraph is gl_ngraph.c's", async () => {
+    const { glRenderer } = await import("../src/ref_gl/ref_gl");
+    expect(glRenderer.isGL).toBe(true);
+    expect(glRenderer.R_NetGraph).toBe(R_NetGraph);
+  });
+});
 
 describe("player.mdl/eyes.mdl CRC -> cls.qw.userinfo pmodel/emodel (QW model.c/gl_model.c)", () => {
   const savedUserinfo = cls.qw.userinfo;
@@ -461,6 +563,86 @@ describe("R_TranslatePlayerSkin selects cl.qw.players[n] colors (QW gl_rmisc.c)"
 
     expect(rec.calls.length).toBe(0);
     SetQGL(prior);
+  });
+});
+
+//=============================================================================
+// r_alias.ts's R_AliasSetupSkin tail: QW/client/r_alias.c overrides the
+// model's own skin with the connected player's downloaded one, reached
+// through EntityT.scoreboard and skin.c's Skin_Find/Skin_Cache.
+
+describe("R_AliasSetupSkin scoreboard skin override (QW r_alias.c)", () => {
+  const savedEnt = rState.currententity;
+  const savedMdl = rState.pmdl;
+  const savedHdr = rState.paliashdr;
+
+  function setUpSingleSkinModel(): Uint8Array {
+    const mdl = new MdlT();
+    mdl.numskins = 1;
+    mdl.skinwidth = 64;
+    mdl.skinheight = 32;
+
+    const skinBytes = new Uint8Array(64 * 32);
+    const desc = new MaliasskindescT();
+    desc.type = AliasskintypeT.ALIAS_SKIN_SINGLE;
+    desc.skin = skinBytes;
+
+    const hdr = new AliashdrT();
+    hdr.model = mdl;
+    hdr.skindesc = [desc];
+
+    rState.pmdl = mdl;
+    rState.paliashdr = hdr;
+    return skinBytes;
+  }
+
+  afterAll(() => {
+    rState.currententity = savedEnt;
+    rState.pmdl = savedMdl;
+    rState.paliashdr = savedHdr;
+    qw.active = savedQwActive;
+  });
+
+  test("qw.active=true with a scoreboard: Skin_Find runs; a cache miss leaves the model's own skin in place", () => {
+    qw.active = true;
+    const skinBytes = setUpSingleSkinModel();
+
+    const ent = new EntityT();
+    ent.skinnum = 0;
+    const sc = new PlayerInfoT();
+    sc.name = "qwcl-render-alias-player";
+    sc.userinfo = "\\skin\\qwcl_render_alias_missing";
+    sc.skin = null;
+    ent.scoreboard = sc;
+    rState.currententity = ent;
+
+    R_AliasSetupSkin();
+
+    // Skin_Find always assigns a skin_t slot, whether or not the .pcx loads
+    expect(sc.skin).not.toBeNull();
+    // no skins/*.pcx in this suite's scratch basedir, so Skin_Cache misses
+    // and r_affinetridesc keeps the model's own skin and dimensions
+    expect(r_affinetridesc.pskin).toBe(skinBytes);
+    expect(r_affinetridesc.skinwidth).toBe(64);
+    expect(r_affinetridesc.skinheight).toBe(32);
+  });
+
+  test("qw.active=false: the scoreboard is ignored entirely", () => {
+    qw.active = false;
+    const skinBytes = setUpSingleSkinModel();
+
+    const ent = new EntityT();
+    ent.skinnum = 0;
+    const sc = new PlayerInfoT();
+    sc.name = "qwcl-render-alias-player2";
+    sc.skin = null;
+    ent.scoreboard = sc;
+    rState.currententity = ent;
+
+    R_AliasSetupSkin();
+
+    expect(sc.skin).toBeNull();
+    expect(r_affinetridesc.pskin).toBe(skinBytes);
   });
 });
 
@@ -659,6 +841,9 @@ function makeMinimalRenderer(): Renderer {
     SCR_TileClear(): void {},
     SCR_SoftwareTileClear(): void {},
     SCR_DrawCrosshair(): void {},
+    Draw_SubPic(): void {},
+    Draw_Alt_String(): void {},
+    isGL: false,
     SCR_ScreenShot_f(): void {},
   };
 }

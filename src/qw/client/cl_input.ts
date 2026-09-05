@@ -60,33 +60,23 @@ Deviations from PORTING.md / the C source:
   by reading that file's own import list before writing this one.
 - `lookspring`, `V_StartPitchDrift`/`V_StopPitchDrift`: QW's `IN_MLookUp`/
   `CL_AdjustAngles` read these exactly as WinQuake's do. `lookspring` is
-  cl_main.c's own cvar (src/qw/client/cl_main.ts, landed, exports
-  `lookspring`); `V_StartPitchDrift`/`V_StopPitchDrift` are view.c's, and
-  QW's own view.ts (src/qw/client/view.ts) has not landed. Per the
-  absent-sibling rule this would import from "./view", but since this
-  module must stay compilable now (its own tests, and cl_main.ts's already-
-  landed import of this file's exports, both depend on it), these two calls
-  are reached through a small registrable hook (`qwClInputHooks`, below),
-  matching src/qw/cmd.ts's `qwCmdHooks` precedent for exactly this
-  situation. Once view.ts lands it (or the qwcl entry point) should install
-  the real functions; until then the hook is a no-op, which is observably
-  correct (view.ts not landing yet means nothing else calls pitch-drift
-  either).
+  cl_main.c's own cvar, imported from ./cl_main -- the same import
+  src/client/cl_input.ts makes from its own cl_main, and the same
+  cl_input<->cl_main cycle the C's two translation units have (neither side
+  touches the other at module-init time). QW has no cl_input-side view.c;
+  view.c's QW delta is folded into src/client/view.ts under qw.active, so
+  `V_StartPitchDrift`/`V_StopPitchDrift` come from there.
 - `CL_CalcNet` (cl_parse.c, src/qw/client/cl_parse.ts) and `CL_WriteDemoCmd`
   (cl_demo.c, src/qw/client/cl_demo.ts) landed as concurrent siblings during
   this unit's own work (re-checked immediately before finishing this file)
   and import cleanly with exactly these names; no hook needed for either.
-- `IN_Move`: WinQuake's shared `InputBackend.IN_Move` (src/client/input.ts)
-  takes `UsercmdT` from src/server/server.ts (fields `viewangles`/
-  `forwardmove`/`sidemove`/`upmove`), not this module's `QwUsercmdT` (fields
-  `msec`/`angles`/`forwardmove`/`sidemove`/`upmove`/`buttons`/`impulse`) --
-  a genuine structural incompatibility, not a naming difference (`angles`
-  vs `viewangles`, plus three QW-only fields), so it cannot be called
-  through that seam without an `as` cast (forbidden). input.ts is out of
-  this unit's SCOPE to generalize. The call is dropped, documented here
-  rather than silently omitted; follow-up: input.ts needs a QW-shaped
-  entry point (or a generic one) before mouse/joystick input can reach
-  qwcl's movement code at all.
+- `IN_Move`: WinQuake's `InputBackend.IN_Move` (src/client/input.ts) takes
+  `UsercmdT` from src/server/server.ts, not this module's `QwUsercmdT` --
+  two different structs, because the C's two trees are two binaries each
+  with their own `usercmd_t` and their own `IN_Move` over it. The backend
+  interface carries both entry points; CL_SendCmd calls `IN_MoveQw` where
+  the C calls `IN_Move`. Both bodies are the same code in the C and share
+  one body in src/platform/sdl.ts.
 - `Cam_Track`/`Cam_FinishMove` (src/qw/client/cl_cam.ts) import cleanly --
   that module has landed with exactly these two exported names.
 - `COM_BlockSequenceCRCByte`, `MSG_WriteDeltaUsercmd`, `nullcmd`, QW's own
@@ -118,6 +108,9 @@ import { MSG_WriteByte, MSG_WriteDeltaUsercmd, COM_BlockSequenceCRCByte, nullcmd
 import { Netchan_Transmit } from "../net_chan";
 import { CL_CalcNet } from "./cl_parse";
 import { CL_WriteDemoCmd } from "./cl_demo";
+import { lookspring } from "./cl_main";
+import { V_StartPitchDrift, V_StopPitchDrift } from "../../client/view";
+import { inputBackend } from "../../client/input";
 
 /*
 ===============================================================================
@@ -159,19 +152,6 @@ export const in_up = new KbuttonT();
 export const in_down = new KbuttonT();
 
 export let in_impulse = 0;
-
-// lookspring/V_Start|StopPitchDrift -- see file header
-export interface QwClInputHooks {
-  lookspring(): boolean;
-  V_StartPitchDrift(): void;
-  V_StopPitchDrift(): void;
-}
-
-export const qwClInputHooks: QwClInputHooks = {
-  lookspring: () => false,
-  V_StartPitchDrift: () => {},
-  V_StopPitchDrift: () => {},
-};
 
 export function KeyDown(b: KbuttonT): void {
   const c = Cmd_Argv(1);
@@ -225,7 +205,7 @@ export function IN_MLookDown(): void {
 }
 export function IN_MLookUp(): void {
   KeyUp(in_mlook);
-  if (!(in_mlook.state & 1) && qwClInputHooks.lookspring()) qwClInputHooks.V_StartPitchDrift();
+  if (!(in_mlook.state & 1) && lookspring.value) V_StartPitchDrift();
 }
 export function IN_UpDown(): void {
   KeyDown(in_up);
@@ -398,7 +378,7 @@ export function CL_AdjustAngles(): void {
     cl.viewangles[YAW] = anglemod(cl.viewangles[YAW]);
   }
   if (in_klook.state & 1) {
-    qwClInputHooks.V_StopPitchDrift();
+    V_StopPitchDrift();
     cl.viewangles[PITCH] -= speed * cl_pitchspeed.value * CL_KeyState(in_forward);
     cl.viewangles[PITCH] += speed * cl_pitchspeed.value * CL_KeyState(in_back);
   }
@@ -409,7 +389,7 @@ export function CL_AdjustAngles(): void {
   cl.viewangles[PITCH] -= speed * cl_pitchspeed.value * up;
   cl.viewangles[PITCH] += speed * cl_pitchspeed.value * down;
 
-  if (up || down) qwClInputHooks.V_StopPitchDrift();
+  if (up || down) V_StopPitchDrift();
 
   if (cl.viewangles[PITCH] > 80) cl.viewangles[PITCH] = 80;
   if (cl.viewangles[PITCH] < -70) cl.viewangles[PITCH] = -70;
@@ -534,8 +514,8 @@ export function CL_SendCmd(): void {
   // get basic movement from keyboard
   CL_BaseMove(cmd);
 
-  // allow mice or other external controllers to add to the move -- dropped,
-  // see file header (IN_Move's shared seam takes an incompatible UsercmdT)
+  // allow mice or other external controllers to add to the move
+  inputBackend.current?.IN_MoveQw(cmd);
 
   // if we are spectator, try autocam
   if (cl.qw.spectator) Cam_Track(cmd);

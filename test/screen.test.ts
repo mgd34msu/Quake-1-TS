@@ -320,6 +320,9 @@ const fake: Renderer = {
   SCR_DrawCrosshair(): void {
     calls.push("SCR_DrawCrosshair");
   },
+  Draw_SubPic(): void {},
+  Draw_Alt_String(): void {},
+  isGL: false,
   SCR_ScreenShot_f(): void {
     calls.push("SCR_ScreenShot_f");
   },

@@ -45,6 +45,7 @@ import { setKeyEventPump, Sys_Quit } from "./sys";
 import { CvarT, Cvar_RegisterVariable } from "../common/cvar";
 import { Con_Printf, Con_DPrintf } from "../client/console";
 import type { UsercmdT } from "../server/server";
+import type { QwUsercmdT } from "../qw/protocol";
 import { PITCH, YAW } from "../common/quakedef";
 import { noclip_anglehack } from "../common/host_cmd";
 import { cl } from "../client/client";
@@ -719,8 +720,27 @@ export function IN_Commands(): void {
 IN_Move -- vid_x.c:1163, ported verbatim including the pitch clamp inside
 this function (not just CL_AdjustAngles's own -70/80 clamp) and the
 noclip_anglehack upmove branch.
+
+QW/client/vid_x.c:1071 has the same function with a byte-identical body over
+QW's own usercmd_t. The three fields either body writes are the three both
+structs have, so one body serves both entry points (IN_Move / IN_MoveQw)
+rather than being duplicated the way the two C trees duplicate it.
 */
+interface InMoveCmd {
+  forwardmove: number;
+  sidemove: number;
+  upmove: number;
+}
+
 export function IN_Move(cmd: UsercmdT): void {
+  IN_Move_(cmd);
+}
+
+export function IN_MoveQw(cmd: QwUsercmdT): void {
+  IN_Move_(cmd);
+}
+
+function IN_Move_(cmd: InMoveCmd): void {
   const l = lib();
   if (!l || !mouse_active) return;
 
@@ -775,7 +795,7 @@ export function IN_ClearStates(): void {
   }
 }
 
-const inputBackendImpl: InputBackend = { IN_Init, IN_Shutdown, IN_Commands, IN_Move, IN_ModeChanged, IN_ClearStates };
+const inputBackendImpl: InputBackend = { IN_Init, IN_Shutdown, IN_Commands, IN_Move, IN_MoveQw, IN_ModeChanged, IN_ClearStates };
 inputBackend.current = inputBackendImpl;
 hostClientHooks.inInit = IN_Init;
 hostClientHooks.inShutdown = IN_Shutdown;

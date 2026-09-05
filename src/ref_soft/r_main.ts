@@ -103,7 +103,7 @@ import { Con_Printf } from "../client/console";
 // block); imported, not redefined, so a Cvar_Set reaches both renderers'
 // objects because there is only one object. Re-exported below so existing
 // `from "./r_main"` imports (r_surf.ts) keep working.
-import { r_drawentities, r_drawviewmodel, r_fullbright, r_speeds, EntityT } from "../client/render";
+import { r_drawentities, r_drawviewmodel, r_fullbright, r_netgraph, r_speeds, EntityT } from "../client/render";
 export { r_drawentities, r_drawviewmodel, r_fullbright, r_speeds };
 import { Sys_Error, Sys_FloatTime, Sys_HighFPPrecision, Sys_LowFPPrecision } from "../platform/sys";
 import { DotProduct, Length, M_PI, PLANE_ANYZ, type Vec3, VectorCopy, VectorInverse, VectorNormalize, VectorSubtract, vec3 } from "../common/mathlib";
@@ -209,8 +209,11 @@ export const r_aliastransbase = new CvarT("r_aliastransbase", "200");
 export const r_aliastransadj = new CvarT("r_aliastransadj", "100");
 
 // QW r_main.c (new): registered/used only under qw.active; see R_Init/R_NewMap/
-// R_RenderView_ below.
-export const r_netgraph = new CvarT("r_netgraph", "0");
+// R_RenderView_ below. `r_netgraph` is declared identically by gl_rmain.c and
+// is read from outside both renderers (src/qw/client/screen.ts, gl_screen.c's
+// call site), so it lives in src/client/render.ts's shared-cvar block and is
+// re-exported here under its C name; `r_zgraph` is r_main.c's alone.
+export { r_netgraph };
 export const r_zgraph = new CvarT("r_zgraph", "0");
 
 // QW r_main.c (new): `entity_t r_worldentity;`, distinct from gl_rmain.c's own

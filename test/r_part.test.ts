@@ -121,6 +121,9 @@ function makeFakeRenderer(log: ParticleCallLog): Renderer {
     SCR_TileClear(): void {},
     SCR_SoftwareTileClear(): void {},
     SCR_DrawCrosshair(): void {},
+    Draw_SubPic(): void {},
+    Draw_Alt_String(): void {},
+    isGL: false,
     SCR_ScreenShot_f(): void {},
   };
 }
