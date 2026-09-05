@@ -1,39 +1,23 @@
 // Self-sufficient test for src/client/cl_input.ts (WinQuake cl_input.c).
 //
-// cl_input.ts imports two symbols from concurrent siblings that are not
-// runnable right now:
-//   - "./cl_main" (CL_Disconnect, lookspring) -- cl_main.ts is on disk, but
-//     it itself imports "./screen", "./cl_demo", "./cl_parse" and
-//     "./snd_dma", none of which exist on disk yet, so `import(...)` of the
-//     real cl_main.ts throws "Cannot find module" before any of its code
-//     runs.
-//   - "./view" (V_StartPitchDrift, V_StopPitchDrift) -- view.ts does not
-//     exist on disk at all yet.
-//
-// Per this unit's brief, these are the exact "absent sibling" gaps expected
-// at this point in the port. Rather than reporting "cannot run" for the
-// whole file, this suite uses bun:test's `mock.module` to replace those two
-// module specifiers with minimal fakes -- registered before a *dynamic*
-// `import()` of cl_input.ts itself, since a static top-level import of the
-// module under test would resolve (and fail on) the real, broken sibling
-// graph before the mock ever takes effect (static imports in a module are
-// all resolved before any of that module's own statements run). This lets
-// the suite exercise cl_input.ts's real, unmodified logic even though two of
-// its three sibling imports are mid-flight elsewhere. `mock.module` replaces
-// only this test process's module registry entry for the exact specifier
-// given (resolved the same way a real import would resolve it); it never
-// touches the filesystem, so it cannot clobber another worker's concurrent
-// file the way a stub file at the sibling's real path would (forbidden by
-// this project's standing orders). Confirmed empirically (bun 1.3.14) that
-// module mocks registered by one test file do not leak into another test
-// file run in the same `bun test` invocation.
+// cl_input.ts's two sibling imports ("./cl_main" for CL_Disconnect/
+// lookspring, "./view" for V_StartPitchDrift/V_StopPitchDrift) are both real,
+// landed modules now, so this file drives them directly rather than
+// stubbing either specifier: `lookspring` is the real registered CvarT (set
+// its `.value` directly), and V_StartPitchDrift/V_StopPitchDrift are spied
+// with bun:test's `spyOn` -- a wrapper around the real export that still
+// calls through to it (confirmed empirically: a `spyOn` on a module's
+// namespace object is visible from every other module's call sites too,
+// static import or lazy `require()` alike, since bun's ESM transpile reads
+// each import through the shared module object) rather than a `mock.module`
+// replacement of the whole sibling.
 //
 // The `in_impulse` export is a live ES binding (`export let`), so this file
-// reads it through the dynamically-imported module namespace object
-// (`cl_input.in_impulse`) rather than a destructured copy, which would only
-// capture the value at import time.
+// reads it through the imported module namespace object (`cl_input.in_impulse`)
+// rather than a destructured copy, which would only capture the value at
+// import time.
 
-import { describe, test, expect, beforeEach, beforeAll, mock } from "bun:test";
+import { describe, test, expect, beforeEach, afterAll, spyOn } from "bun:test";
 import { Cmd_Exists, Cmd_TokenizeString } from "../src/common/cmd";
 import { Cvar_RegisterVariable } from "../src/common/cvar";
 import { host } from "../src/common/host";
@@ -43,54 +27,21 @@ import { MSG_BeginReading, MSG_ReadAngle, MSG_ReadByte, MSG_ReadFloat, MSG_ReadS
 import { ClcOpsT } from "../src/common/protocol";
 import { NET_Init, NET_Connect, NET_CheckNewConnections, NET_GetMessage, setNetHostHooks, type NetHostHooks } from "../src/common/net_main";
 import { cl, cls, KbuttonT, UsercmdT, SIGNONS } from "../src/client/client";
+import * as cl_main from "../src/client/cl_main";
+import * as view from "../src/client/view";
+import * as cl_input from "../src/client/cl_input";
 
-// -- fakes for the two absent/broken sibling specifiers --------------------
+// -- spies wrapping the real cl_main/view exports (see file header) --------
 
-let disconnectCallCount = 0;
-const fakeLookspring = { value: 0 };
-// test/cl_tent.test.ts mocks this same specifier with a different (also
-// partial) export shape (CL_AllocDlight only, no CL_Disconnect/lookspring).
-// bun's mock.module replaces one shared registry entry rather than creating
-// a fresh module identity per call, and every test file's own top-level
-// code (including every `mock.module`/dynamic-`import()` pair) runs during
-// bun test's file-loading pass, before any test() body from any file
-// actually executes -- so whichever file's mock.module call for
-// "./cl_main" happens to run last during that pass "wins" for every file's
-// test bodies, not just its own. Re-asserting this file's own complete
-// shape in beforeAll (which runs at test-execution time, strictly after
-// every file has finished loading) guarantees the live CL_Disconnect/
-// lookspring bindings cl_input.ts's already-compiled code reads are this
-// file's own by the time any test in this file actually runs, regardless of
-// load order relative to cl_tent.test.ts. Confirmed empirically (bun
-// 1.3.14) that two files mocking one specifier with different partial
-// shapes otherwise clobber each other this way.
-async function installClMainMock(): Promise<void> {
-  await mock.module("../src/client/cl_main", () => ({
-    CL_Disconnect: () => {
-      disconnectCallCount++;
-    },
-    lookspring: fakeLookspring,
-    // cl_tent.test.ts's own share of this specifier's export surface;
-    // present here purely so a load-order race with that file can never
-    // produce a "no export named CL_AllocDlight" crash while this file's
-    // own module graph (cl_input.ts does not use it) is loading. This
-    // file's own beforeAll below re-asserts the shape above regardless.
-    CL_AllocDlight: () => null,
-  }));
-}
-await installClMainMock();
+const disconnectSpy = spyOn(cl_main, "CL_Disconnect");
+const startPitchDriftSpy = spyOn(view, "V_StartPitchDrift");
+const stopPitchDriftSpy = spyOn(view, "V_StopPitchDrift");
 
-const pitchDriftCalls: string[] = [];
-await mock.module("../src/client/view", () => ({
-  V_StartPitchDrift: () => {
-    pitchDriftCalls.push("start");
-  },
-  V_StopPitchDrift: () => {
-    pitchDriftCalls.push("stop");
-  },
-}));
-
-const cl_input = await import("../src/client/cl_input");
+afterAll(() => {
+  disconnectSpy.mockRestore();
+  startPitchDriftSpy.mockRestore();
+  stopPitchDriftSpy.mockRestore();
+});
 
 // register the module's own eight cvars for real (Cvar_RegisterVariable is
 // a guarded no-op if another file already registered the same instance) so
@@ -161,19 +112,16 @@ function resetButtons(): void {
   }
 }
 
-beforeAll(async () => {
-  await installClMainMock(); // see the file header above installClMainMock
-});
-
 beforeEach(() => {
   resetButtons();
   cl.viewangles[0] = 0;
   cl.viewangles[1] = 0;
   cl.viewangles[2] = 0;
   host.frametime = 0.1;
-  disconnectCallCount = 0;
-  pitchDriftCalls.length = 0;
-  fakeLookspring.value = 0;
+  disconnectSpy.mockClear();
+  startPitchDriftSpy.mockClear();
+  stopPitchDriftSpy.mockClear();
+  cl_main.lookspring.value = 0;
 });
 
 describe("KeyDown / KeyUp (kbutton_t state machine)", () => {
@@ -263,21 +211,22 @@ describe("KeyDown / KeyUp (kbutton_t state machine)", () => {
   });
 
   test("IN_MLookUp starts pitch drift when lookspring is set and mlook is fully released", () => {
-    fakeLookspring.value = 1;
+    cl_main.lookspring.value = 1;
     Cmd_TokenizeString("+mlook 5");
     cl_input.IN_MLookDown();
     Cmd_TokenizeString("-mlook 5");
     cl_input.IN_MLookUp();
-    expect(pitchDriftCalls).toEqual(["start"]);
+    expect(startPitchDriftSpy).toHaveBeenCalledTimes(1);
+    expect(stopPitchDriftSpy).not.toHaveBeenCalled();
   });
 
   test("IN_MLookUp does not start pitch drift when lookspring is 0", () => {
-    fakeLookspring.value = 0;
+    cl_main.lookspring.value = 0;
     Cmd_TokenizeString("+mlook 5");
     cl_input.IN_MLookDown();
     Cmd_TokenizeString("-mlook 5");
     cl_input.IN_MLookUp();
-    expect(pitchDriftCalls).toEqual([]);
+    expect(startPitchDriftSpy).not.toHaveBeenCalled();
   });
 
   test("IN_Impulse sets in_impulse from Cmd_Argv(1)", () => {
@@ -375,14 +324,14 @@ describe("CL_AdjustAngles", () => {
     cl_input.CL_AdjustAngles();
     const expected = -(0.1 * cl_input.cl_pitchspeed.value * 1.0);
     expect(cl.viewangles[PITCH]).toBeCloseTo(expected, 5);
-    expect(pitchDriftCalls).toContain("stop");
+    expect(stopPitchDriftSpy).toHaveBeenCalled();
   });
 
   test("in_lookup/in_lookdown also call V_StopPitchDrift when either fires, independent of in_klook", () => {
     host.frametime = 0.1;
     cl_input.in_lookup.state = 1;
     cl_input.CL_AdjustAngles();
-    expect(pitchDriftCalls).toContain("stop");
+    expect(stopPitchDriftSpy).toHaveBeenCalled();
     expect(cl.viewangles[PITCH]).toBeCloseTo(-(0.1 * cl_input.cl_pitchspeed.value * 1.0), 5);
   });
 
@@ -486,6 +435,15 @@ describe("CL_SendMove", () => {
     cls.netcon = client;
     cls.demoplayback = false;
     cl.movemessages = 0;
+    // net_loop.ts's `loop_client`/`loop_server` are module-level singletons
+    // that `client`/`server` above alias -- another test file that marks a
+    // loopback socket `disconnected = true` directly (instead of routing it
+    // through NET_Close, which would null out the singleton for a fresh
+    // future allocation) leaves that flag stuck on these same objects. Reset
+    // every test, not just once at describe-registration time, since which
+    // other file's tests have run by then is not guaranteed.
+    client.disconnected = false;
+    server.disconnected = false;
     // drain any stray pending message from a previous test
     while (NET_GetMessage(server) > 0) {
       /* drain */
@@ -560,9 +518,8 @@ describe("CL_SendMove", () => {
   test("a send failure (no connection) logs and calls CL_Disconnect", () => {
     cls.netcon = null; // NET_SendUnreliableMessage(null, ...) returns -1
     cl.movemessages = 3; // already past the dump-first-two threshold
-    const before = disconnectCallCount;
     cl_input.CL_SendMove(new UsercmdT());
-    expect(disconnectCallCount).toBe(before + 1);
+    expect(disconnectSpy).toHaveBeenCalledTimes(1);
   });
 });
 

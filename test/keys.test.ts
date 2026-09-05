@@ -1,20 +1,8 @@
 // Self-sufficient tests for src/client/keys.ts (keys.c/keys.h, unit U048).
 //
-// Blocking note (checked, not assumed -- see the session's own probes):
-// keys.ts statically imports `conState` from ./console (U047's placeholder
-// does not export it yet) and `M_Keydown`/`M_ToggleMenu_f` from ./menu
-// (menu.ts, U049, does not exist on disk at all). ES module imports resolve
-// eagerly: every import of anything from keys.ts fails the whole module graph
-// with "Cannot find module './menu'" before a single line of this file's
-// code can run -- confirmed directly against this repo's bun (1.3.14) both
-// with a plain relative import and with bun:test's `mock.module`, which
-// cannot rescue a specifier that has no file behind it at all (it only
-// overrides an already-resolvable module's exports). Per this unit's brief
-// this is the accepted, anticipated absent-sibling failure, not something in
-// keys.ts/keys.test.ts's scope to fix. Every test below is written against
-// keys.ts's ruled contract and is ready to run the moment U047 exports
-// `conState` and U049's menu.ts lands; until then `bun test test/keys.test.ts`
-// fails at import time with exactly that "Cannot find module './menu'" error.
+// keys.ts statically imports `conState` from ./console and `M_Keydown`/
+// `M_ToggleMenu_f` from ./menu -- both real, landed modules now, imported
+// and driven for real throughout this file (no mock.module stand-in).
 //
 // No bun:test spies/mocks are used for observation (cmd.test.ts's own header
 // notes their typings need `any` under this project's strict, any-banning
@@ -123,6 +111,7 @@ import {
 import { Cbuf_Init, Cbuf_Execute, Cmd_TokenizeString, Cmd_Argc, Cmd_Argv, Cmd_AddCommand, cmdHost } from "../src/common/cmd";
 import { cls, CactiveT } from "../src/client/client";
 import { hostClientHooks } from "../src/common/host";
+import { conState } from "../src/client/console";
 
 Cbuf_Init();
 
@@ -181,6 +170,14 @@ function resetForTest(): void {
   keyState.team_message = false;
   keybindings.fill(null);
   Key_ClearStates(); // zeroes key_repeats (and the private keydown[])
+  // Key_Event's key_game dispatch only forwards a "+cmd"-bound printable key
+  // to Cbuf (rather than routing it to Key_Console as typed console text)
+  // when `!conState.con_forcedup || !consolekeys[key]` -- and every
+  // printable ASCII key is a consolekey (keys.ts's own Key_Init table), so
+  // a `true` left behind by another file (e.g. test/screen.test.ts's own
+  // con_forcedup toggling) would silently swallow every "+cmd binding in
+  // key_game" test below. console.ts's own default is `false`.
+  conState.con_forcedup = false;
   captured.fwdDown = null;
   captured.fwdUp = null;
   captured.completeCalls = 0;
@@ -496,6 +493,19 @@ describe("Key_Console: typing then K_ENTER", () => {
   test("K_ENTER calls hostClientHooks.scrUpdateScreen only while disconnected", () => {
     const savedState = cls.state;
     const savedHook = hostClientHooks.scrUpdateScreen;
+    // Key_Console's ENTER handler (keys.ts) also calls the real
+    // console.ts's Con_Printf to echo the typed line, and Con_Printf has
+    // its own independent hostClientHooks.scrUpdateScreen call (gated on
+    // `conState.con_initialized` and `cls.signon !== SIGNONS`) -- so once
+    // any other file in this shared `bun test` process has ever called the
+    // real Con_Init() (which sets con_initialized = true and is never
+    // un-set), this same keypress fires scrUpdateScreen twice: once from
+    // Con_Printf, once from keys.ts's own direct call this test means to
+    // isolate. Forcing con_initialized false here keeps this test's count
+    // scoped to keys.ts's own call, regardless of whether some other file
+    // already initialized the console.
+    const savedConInitialized = conState.con_initialized;
+    conState.con_initialized = false;
     let calls = 0;
     hostClientHooks.scrUpdateScreen = () => {
       calls++;
@@ -513,6 +523,7 @@ describe("Key_Console: typing then K_ENTER", () => {
     } finally {
       hostClientHooks.scrUpdateScreen = savedHook;
       cls.state = savedState;
+      conState.con_initialized = savedConInitialized;
     }
   });
 });

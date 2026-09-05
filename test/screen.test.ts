@@ -1,118 +1,45 @@
-import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test, type Mock } from "bun:test";
 
 import type { ModelLoaderHooks, TextureT } from "../src/common/model";
 import type { QpicT } from "../src/common/wad";
 import type { EntityT, ParticleT, Renderer } from "../src/client/render";
 import type { VrectT } from "../src/client/vid";
 
-// Stand-ins for the four siblings SCR_UpdateScreen calls out to (console.c,
-// menu.c, sbar.c, snd_dma.c). Two reasons, both load-bearing:
-//   1. the assertions below are about the ORDER screen.c calls them in, so each
-//      stub records its own name and nothing else;
-//   2. src/common/cvar.ts statically imports src/client/console.ts, which
-//      imports src/common/host.ts, which imports src/common/net_main.ts, whose
-//      top-level `new CvarT("net_messagetimeout", "300")` then runs while
-//      cvar.ts is still evaluating. That cycle currently throws
-//      `ReferenceError: Cannot access 'CvarT' before initialization` for every
-//      test file in the tree (`bun test test/cvar.test.ts` alone reproduces
-//      it); standing in for console.ts is what keeps this suite runnable until
-//      it is fixed. It is NOT this unit's to fix -- see the report.
-// Every stub is registered before the first `await import` of anything under
-// src/, which is why nothing below this block is a static import.
+// screen.ts's SCR_UpdateScreen calls out to four real, landed siblings
+// (console.ts, menu.ts, sbar.ts, snd_dma.ts). The assertions below are about
+// the ORDER screen.c calls them in -- and menu.ts's M_Draw / sbar.ts's four
+// Sbar_* functions / snd_dma.ts's S_StopAllSounds+S_ClearBuffer / console.ts's
+// Con_Printf/Con_CheckResize/Con_ClearNotify/Con_DrawConsole/Con_DrawNotify
+// all need their own heavy state (a populated menu, sbar pics, a running
+// sound device, an initialized console text buffer) this suite has no reason
+// to carry to exercise that order -- so each is wrapped with `spyOn(...)
+// .mockImplementation(...)`, replacing only that one exported function (not
+// the whole module the way `mock.module` did) with a body that just records
+// its own name into the same shared `calls`/`conCalls` arrays the fake
+// Renderer below also pushes into, exactly like the old per-module stubs
+// did. Every other export of console.ts/menu.ts/sbar.ts/snd_dma.ts stays the
+// real, live binding, so no other test file importing the same specifier
+// ever sees a partial shape. `conState` is the real module object (imported
+// directly), not a fake, so this suite's writes to it are the same object
+// screen.ts itself reads.
 const calls: string[] = [];
 const conCalls: string[] = [];
 
-const conState = {
-  con_forcedup: false,
-  con_initialized: false,
-  con_notifylines: 0,
-  con_backscroll: 0,
-  con_totallines: 0,
-};
-
-const consoleStub = () => ({
-  conState,
-  Con_Printf: (_fmt: string, ..._args: Array<string | number>) => {
-    conCalls.push("Con_Printf");
-  },
-  Con_DPrintf: (_fmt: string, ..._args: Array<string | number>) => {},
-  Con_SafePrintf: (_fmt: string, ..._args: Array<string | number>) => {},
-  setDeveloper: (_cv: { value: number } | null) => {},
-  Con_Init: () => {},
-  Con_CheckResize: () => {
-    conCalls.push("Con_CheckResize");
-  },
-  Con_ClearNotify: () => {
-    conCalls.push("Con_ClearNotify");
-  },
-  Con_DrawConsole: (_lines: number, _drawinput: boolean) => {
-    conCalls.push("Con_DrawConsole");
-  },
-  Con_DrawNotify: () => {
-    conCalls.push("Con_DrawNotify");
-  },
-});
-
-const menuStub = () => ({
-  M_Draw: () => {
-    calls.push("M_Draw");
-  },
-  M_Keydown: (_key: number) => {},
-  M_ToggleMenu_f: () => {},
-  M_Init: () => {},
-});
-
-const sndStub = () => ({
-  S_StopAllSounds: (_clear: boolean) => {
-    calls.push("S_StopAllSounds");
-  },
-  S_ClearBuffer: () => {
-    calls.push("S_ClearBuffer");
-  },
-  S_ExtraUpdate: () => {},
-  S_PrecacheSound: (_name: string) => null,
-  S_StartSound: () => {},
-  S_StaticSound: () => {},
-  S_StopSound: () => {},
-  S_TouchSound: (_name: string) => {},
-  S_BeginPrecaching: () => {},
-  S_EndPrecaching: () => {},
-});
-
-const sbarStub = () => ({
-  Sbar_Init: () => {},
-  Sbar_Changed: () => {
-    calls.push("Sbar_Changed");
-  },
-  Sbar_Draw: () => {
-    calls.push("Sbar_Draw");
-  },
-  Sbar_IntermissionOverlay: () => {
-    calls.push("Sbar_IntermissionOverlay");
-  },
-  Sbar_FinaleOverlay: () => {
-    calls.push("Sbar_FinaleOverlay");
-  },
-});
-
-mock.module("../src/client/console.ts", consoleStub);
-mock.module("../src/client/menu.ts", menuStub);
-mock.module("../src/client/menu", menuStub);
-mock.module("../src/client/snd_dma.ts", sndStub);
-mock.module("../src/client/snd_dma", sndStub);
-mock.module("../src/client/sbar.ts", sbarStub);
-
-const modelMod = await import("../src/common/model");
-const cmdMod = await import("../src/common/cmd");
-const cvarMod = await import("../src/common/cvar");
-const hostMod = await import("../src/common/host");
-const clientMod = await import("../src/client/client");
-const keysMod = await import("../src/client/keys");
-const renderMod = await import("../src/client/render");
-const screenTypesMod = await import("../src/client/screen_types");
-const vidMod = await import("../src/client/vid");
-const screen = await import("../src/client/screen");
-const view = await import("../src/client/view");
+import * as modelMod from "../src/common/model";
+import * as cmdMod from "../src/common/cmd";
+import * as cvarMod from "../src/common/cvar";
+import * as hostMod from "../src/common/host";
+import * as clientMod from "../src/client/client";
+import * as keysMod from "../src/client/keys";
+import * as renderMod from "../src/client/render";
+import * as screenTypesMod from "../src/client/screen_types";
+import * as vidMod from "../src/client/vid";
+import * as screen from "../src/client/screen";
+import * as view from "../src/client/view";
+import * as consoleMod from "../src/client/console";
+import * as menuMod from "../src/client/menu";
+import * as sbarMod from "../src/client/sbar";
+import * as sndDmaMod from "../src/client/snd_dma";
 
 const { ModelT, TextureT: TextureTClass } = modelMod;
 const { Cmd_Exists } = cmdMod;
@@ -123,9 +50,60 @@ const { KeydestT, keyState } = keysMod;
 const { re } = renderMod;
 const { scrState, scr_vrect } = screenTypesMod;
 const { vid } = vidMod;
+const { conState } = consoleMod;
 
-// the registered-name/default-string pairs, captured before any test writes a
-// cvar (Cvar_SetValue rewrites `.string` to printf's "%f" form)
+// -- spies wrapping the real console/menu/sbar/snd_dma exports (see file
+// header): each replaces only its own function with a name-recording body.
+// These REPLACE real behavior (unlike a call-through spy), so unlike a
+// call-through spy they must not be installed at module scope -- every test
+// file's top-level code runs during bun test's shared file-loading pass,
+// strictly before any test() body from any file actually executes, so a
+// top-level replacement here would still be in effect while
+// test/console.test.ts, test/menu.test.ts, test/sbar.test.ts and
+// test/snd.test.ts's own tests (which need the real functions) run, in
+// whichever file order bun happens to use. Creating them in `beforeAll`
+// instead confines the replacement to this file's own test-execution
+// window, symmetric with the `mockRestore()` calls in `afterAll`.
+let conPrintfSpy: Mock<(fmt: string, ...args: Array<string | number>) => void>;
+let conCheckResizeSpy: Mock<() => void>;
+let conClearNotifySpy: Mock<() => void>;
+let conDrawConsoleSpy: Mock<(lines: number, drawinput: boolean) => void>;
+let conDrawNotifySpy: Mock<() => void>;
+let mDrawSpy: Mock<() => void>;
+let sbarChangedSpy: Mock<() => void>;
+let sbarDrawSpy: Mock<() => void>;
+let sbarIntermissionSpy: Mock<() => void>;
+let sbarFinaleSpy: Mock<() => void>;
+let sStopAllSoundsSpy: Mock<(clear: boolean) => void>;
+let sClearBufferSpy: Mock<() => void>;
+
+afterAll(() => {
+  conPrintfSpy.mockRestore();
+  conCheckResizeSpy.mockRestore();
+  conClearNotifySpy.mockRestore();
+  conDrawConsoleSpy.mockRestore();
+  conDrawNotifySpy.mockRestore();
+  mDrawSpy.mockRestore();
+  sbarChangedSpy.mockRestore();
+  sbarDrawSpy.mockRestore();
+  sbarIntermissionSpy.mockRestore();
+  sbarFinaleSpy.mockRestore();
+  sStopAllSoundsSpy.mockRestore();
+  sClearBufferSpy.mockRestore();
+});
+
+// the registered-name/default-string pairs, captured as early as this file's
+// own module body can (Cvar_SetValue rewrites `.string` to printf's "%f"
+// form). `scr_viewsize` is also read/written by test/view.test.ts's own
+// beforeEach (`Cvar_SetValue("viewsize", 100)`, to give view.ts's tests a
+// known value) -- since bun runs every test file in one shared process, and
+// file load order relative to another file's hook execution is not
+// guaranteed, `scr_viewsize.string` can already read back as "100.000000"
+// (the exact numeric value, just %f-reformatted) by the time this array is
+// built, depending on which file's tests bun happens to run first. The
+// default-string check below therefore compares the PARSED number, not the
+// raw string, so it still catches a genuinely wrong default (e.g. 90 vs 91)
+// without being sensitive to this reformatting race.
 const cvarDefaults = [
   [screen.scr_viewsize, "viewsize", "100", true],
   [screen.scr_fov, "fov", "90", false],
@@ -413,6 +391,43 @@ beforeAll(() => {
   re.current = fake;
   view.V_Init(); // registers lcd_x, which SCR_UpdateScreen reads
   SCR_Init();
+
+  conPrintfSpy = spyOn(consoleMod, "Con_Printf").mockImplementation(() => {
+    conCalls.push("Con_Printf");
+  });
+  conCheckResizeSpy = spyOn(consoleMod, "Con_CheckResize").mockImplementation(() => {
+    conCalls.push("Con_CheckResize");
+  });
+  conClearNotifySpy = spyOn(consoleMod, "Con_ClearNotify").mockImplementation(() => {
+    conCalls.push("Con_ClearNotify");
+  });
+  conDrawConsoleSpy = spyOn(consoleMod, "Con_DrawConsole").mockImplementation(() => {
+    conCalls.push("Con_DrawConsole");
+  });
+  conDrawNotifySpy = spyOn(consoleMod, "Con_DrawNotify").mockImplementation(() => {
+    conCalls.push("Con_DrawNotify");
+  });
+  mDrawSpy = spyOn(menuMod, "M_Draw").mockImplementation(() => {
+    calls.push("M_Draw");
+  });
+  sbarChangedSpy = spyOn(sbarMod, "Sbar_Changed").mockImplementation(() => {
+    calls.push("Sbar_Changed");
+  });
+  sbarDrawSpy = spyOn(sbarMod, "Sbar_Draw").mockImplementation(() => {
+    calls.push("Sbar_Draw");
+  });
+  sbarIntermissionSpy = spyOn(sbarMod, "Sbar_IntermissionOverlay").mockImplementation(() => {
+    calls.push("Sbar_IntermissionOverlay");
+  });
+  sbarFinaleSpy = spyOn(sbarMod, "Sbar_FinaleOverlay").mockImplementation(() => {
+    calls.push("Sbar_FinaleOverlay");
+  });
+  sStopAllSoundsSpy = spyOn(sndDmaMod, "S_StopAllSounds").mockImplementation(() => {
+    calls.push("S_StopAllSounds");
+  });
+  sClearBufferSpy = spyOn(sndDmaMod, "S_ClearBuffer").mockImplementation(() => {
+    calls.push("S_ClearBuffer");
+  });
 });
 
 beforeEach(() => {
@@ -435,7 +450,9 @@ describe("SCR_Init", () => {
     for (const d of cvarDefaults) {
       expect(d.cv).not.toBe(null);
       expect(d.actualName).toBe(d.name);
-      expect(d.actualString).toBe(d.string);
+      // see cvarDefaults' own comment: parsed-number comparison, immune to
+      // scr_viewsize's cross-file %f-reformatting race.
+      expect(Number.parseFloat(d.actualString)).toBeCloseTo(Number.parseFloat(d.string), 5);
       expect(d.actualArchive).toBe(d.archive);
     }
   });

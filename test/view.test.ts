@@ -1,90 +1,35 @@
-import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
 import type { ModelLoaderHooks, TextureT } from "../src/common/model";
 import type { QpicT } from "../src/common/wad";
 import type { EntityT, ParticleT, Renderer } from "../src/client/render";
 import type { VrectT } from "../src/client/vid";
 
-// Stand-ins for console.c, menu.c and snd_dma.c, which view.ts reaches through
-// screen.ts (it imports scr_viewsize). The console stand-in is also what keeps
-// this suite runnable: src/common/cvar.ts statically imports
-// src/client/console.ts -> src/common/host.ts -> src/common/net_main.ts, whose
-// top-level `new CvarT("net_messagetimeout", "300")` runs while cvar.ts is
-// still evaluating, and every test file in the tree currently dies on
-// `ReferenceError: Cannot access 'CvarT' before initialization` because of it
-// (`bun test test/cvar.test.ts` alone reproduces it). Not this unit's to fix --
-// see the report. Registered before the first `await import` of anything under
-// src/, which is why nothing below this block is a static import; the stubs
-// match test/screen.test.ts's so it does not matter which file's copy is live
-// when the whole suite runs in one process.
+// view.ts reaches console.c, menu.c and snd_dma.c through screen.ts (it
+// imports scr_viewsize, and screen.ts itself statically imports
+// Con_CheckResize/conState, M_Draw, and S_ClearBuffer/S_StopAllSounds). All
+// three are landed, real modules now, so this suite drives them for real
+// rather than stubbing any of the three: none of view.ts's own exports call
+// into menu.ts or snd_dma.ts directly (screen.ts's own top-level module code
+// never calls them either -- only functions this suite never invokes, like
+// SCR_UpdateScreen, do), and `calls` below only ever records the fake
+// Renderer's own methods.
 const calls: string[] = [];
 
-const conState = {
-  con_forcedup: false,
-  con_initialized: true,
-  con_notifylines: 0,
-  con_backscroll: 0,
-  con_totallines: 0,
-};
-
-mock.module("../src/client/console.ts", () => ({
-  conState,
-  Con_Printf: (_fmt: string, ..._args: Array<string | number>) => {},
-  Con_DPrintf: (_fmt: string, ..._args: Array<string | number>) => {},
-  Con_SafePrintf: (_fmt: string, ..._args: Array<string | number>) => {},
-  setDeveloper: (_cv: { value: number } | null) => {},
-  Con_Init: () => {},
-  Con_CheckResize: () => {},
-  Con_ClearNotify: () => {},
-  Con_DrawConsole: (_lines: number, _drawinput: boolean) => {},
-  Con_DrawNotify: () => {},
-}));
-
-const menuStub = () => ({
-  M_Draw: () => {
-    calls.push("M_Draw");
-  },
-  M_Keydown: (_key: number) => {},
-  M_ToggleMenu_f: () => {},
-  M_Init: () => {},
-});
-
-const sndStub = () => ({
-  S_StopAllSounds: (_clear: boolean) => {
-    calls.push("S_StopAllSounds");
-  },
-  S_ClearBuffer: () => {
-    calls.push("S_ClearBuffer");
-  },
-  S_ExtraUpdate: () => {},
-  S_PrecacheSound: (_name: string) => null,
-  S_StartSound: () => {},
-  S_StaticSound: () => {},
-  S_StopSound: () => {},
-  S_TouchSound: (_name: string) => {},
-  S_BeginPrecaching: () => {},
-  S_EndPrecaching: () => {},
-});
-
-mock.module("../src/client/menu.ts", menuStub);
-mock.module("../src/client/menu", menuStub);
-mock.module("../src/client/snd_dma.ts", sndStub);
-mock.module("../src/client/snd_dma", sndStub);
-
-const modelMod = await import("../src/common/model");
-const cmdMod = await import("../src/common/cmd");
-const cvarMod = await import("../src/common/cvar");
-const hostMod = await import("../src/common/host");
-const mathMod = await import("../src/common/mathlib");
-const quakedefMod = await import("../src/common/quakedef");
-const bspMod = await import("../src/common/bspfile");
-const sizebufMod = await import("../src/common/sizebuf");
-const clientMod = await import("../src/client/client");
-const renderMod = await import("../src/client/render");
-const vidMod = await import("../src/client/vid");
-const consoleMod = await import("../src/client/console");
-const screenMod = await import("../src/client/screen");
-const view = await import("../src/client/view");
+import * as modelMod from "../src/common/model";
+import * as cmdMod from "../src/common/cmd";
+import * as cvarMod from "../src/common/cvar";
+import * as hostMod from "../src/common/host";
+import * as mathMod from "../src/common/mathlib";
+import * as quakedefMod from "../src/common/quakedef";
+import * as bspMod from "../src/common/bspfile";
+import * as sizebufMod from "../src/common/sizebuf";
+import * as clientMod from "../src/client/client";
+import * as renderMod from "../src/client/render";
+import * as vidMod from "../src/client/vid";
+import * as consoleMod from "../src/client/console";
+import * as screenMod from "../src/client/screen";
+import * as view from "../src/client/view";
 
 const { TextureT: TextureTClass } = modelMod;
 const { Cmd_Exists } = cmdMod;
@@ -97,6 +42,7 @@ const { MSG_BeginReading, net_message } = sizebufMod;
 const { CSHIFT_CONTENTS, CSHIFT_DAMAGE, cl, cl_entities, cls } = clientMod;
 const { r_refdef, re } = renderMod;
 const { vid } = vidMod;
+const { conState } = consoleMod;
 
 const {
   BuildGammaTable,
@@ -206,13 +152,8 @@ const fake: Renderer = {
   SCR_ScreenShot_f(): void {},
 };
 
-// whichever console module instance view.ts actually bound to
 function forcedup(v: boolean): void {
   conState.con_forcedup = v;
-  if ("conState" in consoleMod) {
-    const live = consoleMod.conState;
-    if (live && typeof live === "object" && "con_forcedup" in live) live.con_forcedup = v;
-  }
 }
 
 beforeAll(() => {

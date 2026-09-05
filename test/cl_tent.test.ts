@@ -1,52 +1,47 @@
 // Self-sufficient test for src/client/cl_tent.ts (WinQuake cl_tent.c).
 //
-// cl_tent.ts imports from sibling specifiers this suite cannot use for real:
-//   - "./cl_main" (CL_AllocDlight) -- landed, but a real import still needs
-//     a full client bootstrap this suite has no reason to carry.
-//   - "./r_part" (R_RunParticleEffect and friends) and "./snd_dma"
-//     (S_PrecacheSound, S_StartSound) -- landed, but their real bodies need
-//     an initialized particle pool / sound device this suite has no reason
-//     to carry either; testing that machinery is r_part.test.ts's and
-//     snd_dma.test.ts's job, not this unit's.
-//   - "../common/model" (Mod_ForName) -- landed and fully runnable, but its
-//     real behavior needs an actual .mdl file reachable through
-//     COM_FindFile -- fidelity this suite leaves to model.test.ts. Testing
-//     CL_ParseTEnt's TE_LIGHTNING*/TE_BEAM dispatch only needs to observe
-//     *that* Mod_ForName was called with the right path and crash flag, and
-//     that whatever it returns flows into the right cl_beams slot, so
-//     Mod_ForName is faked here too.
-// bun:test's `mock.module` replaces all four specifiers with minimal fakes,
-// registered before a *dynamic* `import()` of cl_tent.ts itself (a static
-// top-level import of the module under test would resolve the real import
-// graph before the mock ever takes effect -- static imports are all
-// resolved before any of that module's own statements run). `mock.module`
-// only replaces this test process's module registry entry for the exact
-// specifier given; it never touches the filesystem, so it cannot clobber a
-// concurrent worker's real file the way a stub at the sibling's real path
-// would (forbidden by this project's standing orders).
-//
-// test/cl_input.test.ts mocks this same "./cl_main" specifier too (with a
-// different, non-overlapping export shape: CL_Disconnect/lookspring there,
-// CL_AllocDlight here). Confirmed empirically (bun 1.3.14): `mock.module`
-// replaces one shared registry entry rather than creating a fresh module
-// identity per call, and every test file's own top-level code (every
-// `mock.module`/dynamic-`import()` pair included) runs during bun test's
-// file-loading pass, strictly before any test() body from *any* file
-// actually runs -- so whichever file's `mock.module("./cl_main", ...)` call
-// happens to execute last during that pass wins for every file's test
-// bodies, not just its own, and the loser's own needed export can vanish
-// from under it. `installClMainMock` (below) is re-invoked in `beforeAll`,
-// which runs at test-*execution* time -- strictly after every file has
-// finished loading -- so this file's own CL_AllocDlight binding is
-// guaranteed current by the time any test in this file actually runs,
-// whichever file happened to load last.
+// cl_tent.ts's four sibling imports are all landed, real modules now:
+//   - "./cl_main" (CL_AllocDlight) -- its real body only touches the
+//     cl_dlights singleton, so it runs unmodified; wrapped with `spyOn`
+//     (calls through) purely to observe the key/returned-dlight per call.
+//   - "./r_part" (R_RunParticleEffect and friends) -- each real function is
+//     a safe no-op when the particle pool is empty (this suite never calls
+//     R_InitParticles/R_ClearParticles, so `free_particles` stays null and
+//     every allocation loop's `if (!free_particles) return` fires
+//     immediately); wrapped with `spyOn` (calls through) to observe the
+//     org/dir/color/count arguments cl_tent.ts passes, the same thing the
+//     old fakes recorded.
+//   - "./snd_dma" (S_PrecacheSound, S_StartSound) -- these need
+//     `sound_started` true to do anything at all (S_PrecacheSound returns
+//     null outright otherwise), so this file installs the same fake
+//     `SndDma` driver test/snd.test.ts uses and calls the real `S_Init()`
+//     once; the missing "sound/*.wav" files this suite never fixtures are
+//     handled by S_LoadSound's own graceful "Couldn't load" `Con_Printf` +
+//     null return (confirmed: no COM_InitFilesystem call is needed either --
+//     COM_FindFile degrades to "not found" with `com_searchpaths` still
+//     null). S_PrecacheSound/S_StartSound are wrapped with `spyOn` (calls
+//     through) to observe their arguments and, for S_PrecacheSound, its
+//     returned SfxT (identified by `.name`, replacing the old fake's
+//     identity-string return).
+//   - "../common/model" (Mod_ForName) -- real behavior needs an actual
+//     .mdl file reachable through COM_FindFile (fidelity this suite leaves
+//     to model.test.ts: with `crash=true` and no such file, the real
+//     function throws). Mod_ForName is the one export here that keeps a
+//     full `spyOn(...).mockImplementation(...)` override rather than a
+//     call-through wrap, returning a fresh `ModelT` per call so
+//     CL_ParseTEnt's TE_LIGHTNING*/TE_BEAM dispatch can still be observed
+//     by identity.
+// Every spy wraps the real module's own exported property (mutated in
+// place, restored via `mockRestore()` in `afterAll`) rather than replacing
+// the whole module the way `mock.module` does, so no other file's import of
+// the same specifier ever sees a partial export shape.
 //
 // `num_temp_entities` and the seven `cl_sfx_*` holders are live ES bindings
 // (`export let`) on cl_tent.ts, so this file reads them off the imported
 // module namespace object (`cl_tent.num_temp_entities`) rather than through
 // a destructured copy, which would only capture the value at import time.
 
-import { describe, test, expect, beforeEach, beforeAll, mock } from "bun:test";
+import { describe, test, expect, beforeEach, beforeAll, afterAll, spyOn, type Mock } from "bun:test";
 import { SZ_Alloc, SZ_Clear, MSG_BeginReading, MSG_WriteByte, MSG_WriteShort, MSG_WriteCoord, net_message } from "../src/common/sizebuf";
 import {
   TE_BEAM,
@@ -64,55 +59,114 @@ import {
   TE_TELEPORT,
   TE_WIZSPIKE,
 } from "../src/common/protocol";
+import * as modelMod from "../src/common/model";
 import { ModelT } from "../src/common/model";
 import { SysError } from "../src/platform/sys";
 import { cl, cl_beams, cl_entities, cl_visedicts, clState, DlightT, MAX_BEAMS, MAX_TEMP_ENTITIES, MAX_VISEDICTS } from "../src/client/client";
 import { vid } from "../src/client/vid";
+import * as cl_main from "../src/client/cl_main";
+import * as r_part from "../src/client/r_part";
+import * as snd_dma from "../src/client/snd_dma";
+import { DmaT, setShm, sndDma, SfxT, type SndDma } from "../src/client/sound";
+import * as cl_tent from "../src/client/cl_tent";
 
-// -- fakes for the absent/broken sibling specifiers -------------------------
+// -- spies wrapping the real cl_main/r_part/snd_dma/model exports (see the
+// file header) ---------------------------------------------------------
 
-interface DlightCall {
-  key: number;
-  dlight: DlightT;
+const allocDlightSpy = spyOn(cl_main, "CL_AllocDlight");
+const runParticleEffectSpy = spyOn(r_part, "R_RunParticleEffect");
+const particleExplosionSpy = spyOn(r_part, "R_ParticleExplosion");
+const particleExplosion2Spy = spyOn(r_part, "R_ParticleExplosion2");
+const blobExplosionSpy = spyOn(r_part, "R_BlobExplosion");
+const lavaSplashSpy = spyOn(r_part, "R_LavaSplash");
+const teleportSplashSpy = spyOn(r_part, "R_TeleportSplash");
+const precacheSoundSpy = spyOn(snd_dma, "S_PrecacheSound");
+const startSoundSpy = spyOn(snd_dma, "S_StartSound");
+
+// Mod_ForName's override REPLACES real behavior (unlike the call-through
+// spies above), so unlike them it must not be installed at module scope --
+// every test file's top-level code runs during bun test's shared
+// file-loading pass, strictly before any test() body from any file
+// actually executes, so a top-level replacement here would still be "in
+// effect" while test/model.test.ts's own tests (which need the real
+// Mod_ForName) run, in whichever file order bun happens to use. Creating it
+// in `beforeAll` instead confines the replacement to this file's own
+// test-execution window, symmetric with the `mockRestore()` in `afterAll`.
+let lastFakeModel: ModelT | null = null;
+let modForNameSpy: Mock<(name: string, crash: boolean) => ModelT | null>;
+
+afterAll(() => {
+  allocDlightSpy.mockRestore();
+  runParticleEffectSpy.mockRestore();
+  particleExplosionSpy.mockRestore();
+  particleExplosion2Spy.mockRestore();
+  blobExplosionSpy.mockRestore();
+  lavaSplashSpy.mockRestore();
+  teleportSplashSpy.mockRestore();
+  precacheSoundSpy.mockRestore();
+  startSoundSpy.mockRestore();
+  modForNameSpy.mockRestore();
+  sndDma.current = null;
+});
+
+// -- fake SndDma driver (src/platform/snd.ts), same pattern as
+// test/snd.test.ts -- S_PrecacheSound/S_StartSound both bail out
+// immediately unless `sound_started` is true.
+const FAKE_SAMPLES = 8192;
+const fakeSndDma: SndDma = {
+  SNDDMA_Init(): boolean {
+    return true;
+  },
+  SNDDMA_GetDMAPos(): number {
+    return 0;
+  },
+  SNDDMA_Shutdown(): void {},
+  SNDDMA_Submit(): void {},
+};
+function installFakeSoundDriver(): void {
+  const dma = new DmaT();
+  dma.samplebits = 16;
+  dma.channels = 2;
+  dma.speed = 11025;
+  dma.samples = FAKE_SAMPLES;
+  dma.submission_chunk = 1;
+  dma.samplepos = 0;
+  dma.soundalive = true;
+  dma.gamealive = true;
+  dma.buffer = new Uint8Array((dma.samples * dma.samplebits) / 8);
+  setShm(dma);
+  sndDma.current = fakeSndDma;
 }
-const dlightCalls: DlightCall[] = [];
-// see this file's header for why this is re-invoked from beforeAll too
-async function installClMainMock(): Promise<void> {
-  await mock.module("../src/client/cl_main", () => ({
-    CL_AllocDlight: (key: number) => {
-      const dl = new DlightT();
-      dlightCalls.push({ key, dlight: dl });
-      return dl;
-    },
-    // test/cl_input.test.ts's own share of this specifier's export surface;
-    // present here purely so a load-order race with that file can never
-    // produce a "no export named CL_Disconnect/lookspring" crash while that
-    // file's own module graph is loading. This file's own beforeAll below
-    // re-asserts the shape above regardless.
-    CL_Disconnect: () => {},
-    lookspring: { value: 0 },
-  }));
-}
-await installClMainMock();
+
+// -- snapshot helpers replaying the old fakes' recorded-call shape, sourced
+// from the real spies instead ------------------------------------------
 
 interface ParticleCall {
   fn: string;
   args: unknown[];
 }
-const particleCalls: ParticleCall[] = [];
-function recordParticle(fn: string, ...args: unknown[]): void {
-  particleCalls.push({ fn, args });
+function particleCallsSnapshot(): ParticleCall[] {
+  const out: ParticleCall[] = [];
+  for (const [org, dir, color, count] of runParticleEffectSpy.mock.calls) {
+    out.push({ fn: "R_RunParticleEffect", args: [Array.from(org), Array.from(dir), color, count] });
+  }
+  for (const [org] of particleExplosionSpy.mock.calls) {
+    out.push({ fn: "R_ParticleExplosion", args: [Array.from(org)] });
+  }
+  for (const [org, colorStart, colorLength] of particleExplosion2Spy.mock.calls) {
+    out.push({ fn: "R_ParticleExplosion2", args: [Array.from(org), colorStart, colorLength] });
+  }
+  for (const [org] of blobExplosionSpy.mock.calls) {
+    out.push({ fn: "R_BlobExplosion", args: [Array.from(org)] });
+  }
+  for (const [org] of lavaSplashSpy.mock.calls) {
+    out.push({ fn: "R_LavaSplash", args: [Array.from(org)] });
+  }
+  for (const [org] of teleportSplashSpy.mock.calls) {
+    out.push({ fn: "R_TeleportSplash", args: [Array.from(org)] });
+  }
+  return out;
 }
-await mock.module("../src/client/r_part", () => ({
-  R_RunParticleEffect: (org: Float32Array, dir: Float32Array, color: number, count: number) =>
-    recordParticle("R_RunParticleEffect", Array.from(org), Array.from(dir), color, count),
-  R_ParticleExplosion: (org: Float32Array) => recordParticle("R_ParticleExplosion", Array.from(org)),
-  R_ParticleExplosion2: (org: Float32Array, colorStart: number, colorLength: number) =>
-    recordParticle("R_ParticleExplosion2", Array.from(org), colorStart, colorLength),
-  R_BlobExplosion: (org: Float32Array) => recordParticle("R_BlobExplosion", Array.from(org)),
-  R_LavaSplash: (org: Float32Array) => recordParticle("R_LavaSplash", Array.from(org)),
-  R_TeleportSplash: (org: Float32Array) => recordParticle("R_TeleportSplash", Array.from(org)),
-}));
 
 interface SoundCall {
   entnum: number;
@@ -122,33 +176,60 @@ interface SoundCall {
   fvol: number;
   attenuation: number;
 }
-const precacheCalls: string[] = [];
-const soundCalls: SoundCall[] = [];
-await mock.module("../src/client/snd_dma", () => ({
-  S_PrecacheSound: (path: string) => {
-    precacheCalls.push(path);
-    return path; // identity, so cl_sfx_* holders are recognizable by name below
-  },
-  S_StartSound: (entnum: number, entchannel: number, sfx: unknown, origin: Float32Array, fvol: number, attenuation: number) => {
-    soundCalls.push({ entnum, entchannel, sfx, origin: Array.from(origin), fvol, attenuation });
-  },
-}));
-
-interface ModForNameCall {
-  name: string;
-  crash: boolean;
+function soundCallsSnapshot(): SoundCall[] {
+  return startSoundSpy.mock.calls.map(([entnum, entchannel, sfx, origin, fvol, attenuation]) => ({
+    entnum,
+    entchannel,
+    sfx: sfx instanceof SfxT ? sfx.name : sfx,
+    origin: Array.from(origin),
+    fvol,
+    attenuation,
+  }));
 }
-const modForNameCalls: ModForNameCall[] = [];
-let lastFakeModel: unknown = null;
-await mock.module("../src/common/model", () => ({
-  Mod_ForName: (name: string, crash: boolean) => {
-    modForNameCalls.push({ name, crash });
-    lastFakeModel = { tag: name };
-    return lastFakeModel;
-  },
-}));
 
-const cl_tent = await import("../src/client/cl_tent");
+interface DlightCall {
+  key: number;
+  dlight: DlightT;
+}
+function dlightCallsSnapshot(): DlightCall[] {
+  const out: DlightCall[] = [];
+  allocDlightSpy.mock.calls.forEach(([key], i) => {
+    const result = allocDlightSpy.mock.results[i];
+    if (result && result.type === "return") out.push({ key, dlight: result.value });
+  });
+  return out;
+}
+
+function modForNameCallsSnapshot(): Array<{ name: string; crash: boolean }> {
+  return modForNameSpy.mock.calls.map(([name, crash]) => ({ name, crash }));
+}
+
+function precacheCallsSnapshot(): string[] {
+  return precacheSoundSpy.mock.calls.map(([path]) => path);
+}
+
+function resetSpies(): void {
+  allocDlightSpy.mockClear();
+  runParticleEffectSpy.mockClear();
+  particleExplosionSpy.mockClear();
+  particleExplosion2Spy.mockClear();
+  blobExplosionSpy.mockClear();
+  lavaSplashSpy.mockClear();
+  teleportSplashSpy.mockClear();
+  precacheSoundSpy.mockClear();
+  startSoundSpy.mockClear();
+  modForNameSpy.mockClear();
+}
+
+// cl_tent.ts's cl_sfx_* holders are typed sound.ts's real `SfxT | null`;
+// checking `.name` is the real-module equivalent of the old fake's identity
+// return.
+function expectSfxPath(value: unknown, expected: string): void {
+  expect(value instanceof SfxT).toBe(true);
+  if (value instanceof SfxT) {
+    expect(value.name).toBe(expected);
+  }
+}
 
 // -- shared fixtures ---------------------------------------------------------
 
@@ -172,27 +253,17 @@ function parseTEnt(): void {
   cl_tent.CL_ParseTEnt();
 }
 
-// cl_tent.ts's cl_sfx_* holders are typed sound.ts's real `SfxT | null`; the
-// mocked S_PrecacheSound above returns the path string itself (identity) so
-// this suite can recognize which wav a holder came from without needing a
-// real SfxT instance. `value` is accepted as `unknown` so comparing it to a
-// path string needs no cast, just a run-of-the-mill typeof narrowing.
-function expectSfxPath(value: unknown, expected: string): void {
-  expect(typeof value).toBe("string");
-  if (typeof value === "string") {
-    expect(value).toBe(expected);
-  }
-}
-
-beforeAll(async () => {
-  await installClMainMock(); // see the file header above installClMainMock
+beforeAll(() => {
+  installFakeSoundDriver();
+  snd_dma.S_Init(); // real S_Init: precache/S_StartSound need sound_started true (see file header)
+  modForNameSpy = spyOn(modelMod, "Mod_ForName").mockImplementation((_name: string, _crash: boolean): ModelT => {
+    lastFakeModel = new ModelT();
+    return lastFakeModel;
+  });
 });
 
 beforeEach(() => {
-  particleCalls.length = 0;
-  soundCalls.length = 0;
-  dlightCalls.length = 0;
-  modForNameCalls.length = 0;
+  resetSpies();
   resetBeams();
   clState.cl_numvisedicts = 0;
   cl.time = 0;
@@ -201,9 +272,9 @@ beforeEach(() => {
 
 describe("CL_InitTEnts", () => {
   test("precaches the exact wav paths from cl_tent.c, in order", () => {
-    precacheCalls.length = 0;
+    precacheSoundSpy.mockClear();
     cl_tent.CL_InitTEnts();
-    expect(precacheCalls).toEqual([
+    expect(precacheCallsSnapshot()).toEqual([
       "wizard/hit.wav",
       "hknight/hit.wav",
       "weapons/tink1.wav",
@@ -327,8 +398,7 @@ describe("CL_ParseBeam", () => {
 describe("CL_ParseTEnt: particle-only cases", () => {
   test("TE_WIZSPIKE: color 20, count 30, wizhit sound", () => {
     cl_tent.CL_InitTEnts();
-    particleCalls.length = 0;
-    soundCalls.length = 0;
+    resetSpies();
     beginTEntMessage();
     MSG_WriteByte(net_message, TE_WIZSPIKE);
     MSG_WriteCoord(net_message, 1);
@@ -336,14 +406,13 @@ describe("CL_ParseTEnt: particle-only cases", () => {
     MSG_WriteCoord(net_message, 3);
     parseTEnt();
 
-    expect(particleCalls).toEqual([{ fn: "R_RunParticleEffect", args: [[1, 2, 3], [0, 0, 0], 20, 30] }]);
-    expect(soundCalls).toEqual([{ entnum: -1, entchannel: 0, sfx: "wizard/hit.wav", origin: [1, 2, 3], fvol: 1, attenuation: 1 }]);
+    expect(particleCallsSnapshot()).toEqual([{ fn: "R_RunParticleEffect", args: [[1, 2, 3], [0, 0, 0], 20, 30] }]);
+    expect(soundCallsSnapshot()).toEqual([{ entnum: -1, entchannel: 0, sfx: "wizard/hit.wav", origin: [1, 2, 3], fvol: 1, attenuation: 1 }]);
   });
 
   test("TE_KNIGHTSPIKE: color 226, count 20, knighthit sound", () => {
     cl_tent.CL_InitTEnts();
-    particleCalls.length = 0;
-    soundCalls.length = 0;
+    resetSpies();
     beginTEntMessage();
     MSG_WriteByte(net_message, TE_KNIGHTSPIKE);
     MSG_WriteCoord(net_message, 4);
@@ -351,13 +420,12 @@ describe("CL_ParseTEnt: particle-only cases", () => {
     MSG_WriteCoord(net_message, 6);
     parseTEnt();
 
-    expect(particleCalls).toEqual([{ fn: "R_RunParticleEffect", args: [[4, 5, 6], [0, 0, 0], 226, 20] }]);
-    expect(soundCalls).toEqual([{ entnum: -1, entchannel: 0, sfx: "hknight/hit.wav", origin: [4, 5, 6], fvol: 1, attenuation: 1 }]);
+    expect(particleCallsSnapshot()).toEqual([{ fn: "R_RunParticleEffect", args: [[4, 5, 6], [0, 0, 0], 226, 20] }]);
+    expect(soundCallsSnapshot()).toEqual([{ entnum: -1, entchannel: 0, sfx: "hknight/hit.wav", origin: [4, 5, 6], fvol: 1, attenuation: 1 }]);
   });
 
   test("TE_GUNSHOT: color 0, count 20, no sound", () => {
-    particleCalls.length = 0;
-    soundCalls.length = 0;
+    resetSpies();
     beginTEntMessage();
     MSG_WriteByte(net_message, TE_GUNSHOT);
     MSG_WriteCoord(net_message, 7);
@@ -365,12 +433,12 @@ describe("CL_ParseTEnt: particle-only cases", () => {
     MSG_WriteCoord(net_message, 9);
     parseTEnt();
 
-    expect(particleCalls).toEqual([{ fn: "R_RunParticleEffect", args: [[7, 8, 9], [0, 0, 0], 0, 20] }]);
-    expect(soundCalls).toEqual([]);
+    expect(particleCallsSnapshot()).toEqual([{ fn: "R_RunParticleEffect", args: [[7, 8, 9], [0, 0, 0], 0, 20] }]);
+    expect(soundCallsSnapshot()).toEqual([]);
   });
 
   test("TE_LAVASPLASH: R_LavaSplash only", () => {
-    particleCalls.length = 0;
+    resetSpies();
     beginTEntMessage();
     MSG_WriteByte(net_message, TE_LAVASPLASH);
     MSG_WriteCoord(net_message, 10);
@@ -378,11 +446,11 @@ describe("CL_ParseTEnt: particle-only cases", () => {
     MSG_WriteCoord(net_message, 12);
     parseTEnt();
 
-    expect(particleCalls).toEqual([{ fn: "R_LavaSplash", args: [[10, 11, 12]] }]);
+    expect(particleCallsSnapshot()).toEqual([{ fn: "R_LavaSplash", args: [[10, 11, 12]] }]);
   });
 
   test("TE_TELEPORT: R_TeleportSplash only", () => {
-    particleCalls.length = 0;
+    resetSpies();
     beginTEntMessage();
     MSG_WriteByte(net_message, TE_TELEPORT);
     MSG_WriteCoord(net_message, 13);
@@ -390,14 +458,12 @@ describe("CL_ParseTEnt: particle-only cases", () => {
     MSG_WriteCoord(net_message, 15);
     parseTEnt();
 
-    expect(particleCalls).toEqual([{ fn: "R_TeleportSplash", args: [[13, 14, 15]] }]);
+    expect(particleCallsSnapshot()).toEqual([{ fn: "R_TeleportSplash", args: [[13, 14, 15]] }]);
   });
 
   test("TE_TAREXPLOSION: R_BlobExplosion + r_exp3 sound, no dlight", () => {
     cl_tent.CL_InitTEnts();
-    particleCalls.length = 0;
-    soundCalls.length = 0;
-    dlightCalls.length = 0;
+    resetSpies();
     beginTEntMessage();
     MSG_WriteByte(net_message, TE_TAREXPLOSION);
     MSG_WriteCoord(net_message, 16);
@@ -405,9 +471,9 @@ describe("CL_ParseTEnt: particle-only cases", () => {
     MSG_WriteCoord(net_message, 18);
     parseTEnt();
 
-    expect(particleCalls).toEqual([{ fn: "R_BlobExplosion", args: [[16, 17, 18]] }]);
-    expect(soundCalls).toEqual([{ entnum: -1, entchannel: 0, sfx: "weapons/r_exp3.wav", origin: [16, 17, 18], fvol: 1, attenuation: 1 }]);
-    expect(dlightCalls).toEqual([]);
+    expect(particleCallsSnapshot()).toEqual([{ fn: "R_BlobExplosion", args: [[16, 17, 18]] }]);
+    expect(soundCallsSnapshot()).toEqual([{ entnum: -1, entchannel: 0, sfx: "weapons/r_exp3.wav", origin: [16, 17, 18], fvol: 1, attenuation: 1 }]);
+    expect(dlightCallsSnapshot()).toEqual([]);
   });
 });
 
@@ -415,8 +481,7 @@ describe("CL_ParseTEnt: TE_SPIKE / TE_SUPERSPIKE (rand()%5 tink/ric sound select
   test("TE_SPIKE runs a color-0/count-10 particle effect and always picks one of the four spike sounds", () => {
     cl_tent.CL_InitTEnts();
     for (let i = 0; i < 25; i++) {
-      particleCalls.length = 0;
-      soundCalls.length = 0;
+      resetSpies();
       beginTEntMessage();
       MSG_WriteByte(net_message, TE_SPIKE);
       MSG_WriteCoord(net_message, 1);
@@ -424,9 +489,9 @@ describe("CL_ParseTEnt: TE_SPIKE / TE_SUPERSPIKE (rand()%5 tink/ric sound select
       MSG_WriteCoord(net_message, 1);
       parseTEnt();
 
-      expect(particleCalls).toEqual([{ fn: "R_RunParticleEffect", args: [[1, 1, 1], [0, 0, 0], 0, 10] }]);
-      expect(soundCalls.length).toBe(1);
-      const sfx = soundCalls[0]?.sfx;
+      expect(particleCallsSnapshot()).toEqual([{ fn: "R_RunParticleEffect", args: [[1, 1, 1], [0, 0, 0], 0, 10] }]);
+      expect(soundCallsSnapshot().length).toBe(1);
+      const sfx = soundCallsSnapshot()[0]?.sfx;
       expect(typeof sfx).toBe("string");
       if (typeof sfx === "string") {
         expect(["weapons/tink1.wav", "weapons/ric1.wav", "weapons/ric2.wav", "weapons/ric3.wav"]).toContain(sfx);
@@ -437,8 +502,7 @@ describe("CL_ParseTEnt: TE_SPIKE / TE_SUPERSPIKE (rand()%5 tink/ric sound select
   test("TE_SUPERSPIKE runs a color-0/count-20 particle effect and always picks one of the four spike sounds", () => {
     cl_tent.CL_InitTEnts();
     for (let i = 0; i < 25; i++) {
-      particleCalls.length = 0;
-      soundCalls.length = 0;
+      resetSpies();
       beginTEntMessage();
       MSG_WriteByte(net_message, TE_SUPERSPIKE);
       MSG_WriteCoord(net_message, 2);
@@ -446,9 +510,9 @@ describe("CL_ParseTEnt: TE_SPIKE / TE_SUPERSPIKE (rand()%5 tink/ric sound select
       MSG_WriteCoord(net_message, 2);
       parseTEnt();
 
-      expect(particleCalls).toEqual([{ fn: "R_RunParticleEffect", args: [[2, 2, 2], [0, 0, 0], 0, 20] }]);
-      expect(soundCalls.length).toBe(1);
-      const sfx = soundCalls[0]?.sfx;
+      expect(particleCallsSnapshot()).toEqual([{ fn: "R_RunParticleEffect", args: [[2, 2, 2], [0, 0, 0], 0, 20] }]);
+      expect(soundCallsSnapshot().length).toBe(1);
+      const sfx = soundCallsSnapshot()[0]?.sfx;
       expect(typeof sfx).toBe("string");
       if (typeof sfx === "string") {
         expect(["weapons/tink1.wav", "weapons/ric1.wav", "weapons/ric2.wav", "weapons/ric3.wav"]).toContain(sfx);
@@ -460,9 +524,7 @@ describe("CL_ParseTEnt: TE_SPIKE / TE_SUPERSPIKE (rand()%5 tink/ric sound select
 describe("CL_ParseTEnt: TE_EXPLOSION / TE_EXPLOSION2 (350/0.5/300 dlight)", () => {
   test("TE_EXPLOSION: particle explosion, r_exp3 sound, dlight radius 350 / die cl.time+0.5 / decay 300", () => {
     cl_tent.CL_InitTEnts();
-    particleCalls.length = 0;
-    soundCalls.length = 0;
-    dlightCalls.length = 0;
+    resetSpies();
     cl.time = 12;
 
     beginTEntMessage();
@@ -472,12 +534,12 @@ describe("CL_ParseTEnt: TE_EXPLOSION / TE_EXPLOSION2 (350/0.5/300 dlight)", () =
     MSG_WriteCoord(net_message, 3);
     parseTEnt();
 
-    expect(particleCalls).toEqual([{ fn: "R_ParticleExplosion", args: [[1, 2, 3]] }]);
-    expect(soundCalls).toEqual([{ entnum: -1, entchannel: 0, sfx: "weapons/r_exp3.wav", origin: [1, 2, 3], fvol: 1, attenuation: 1 }]);
+    expect(particleCallsSnapshot()).toEqual([{ fn: "R_ParticleExplosion", args: [[1, 2, 3]] }]);
+    expect(soundCallsSnapshot()).toEqual([{ entnum: -1, entchannel: 0, sfx: "weapons/r_exp3.wav", origin: [1, 2, 3], fvol: 1, attenuation: 1 }]);
 
-    expect(dlightCalls.length).toBe(1);
-    expect(dlightCalls[0]?.key).toBe(0);
-    const dl = dlightCalls[0]?.dlight;
+    expect(dlightCallsSnapshot().length).toBe(1);
+    expect(dlightCallsSnapshot()[0]?.key).toBe(0);
+    const dl = dlightCallsSnapshot()[0]?.dlight;
     if (!dl) throw new Error("unreachable");
     expect(Array.from(dl.origin)).toEqual([1, 2, 3]);
     expect(dl.radius).toBe(350);
@@ -487,9 +549,7 @@ describe("CL_ParseTEnt: TE_EXPLOSION / TE_EXPLOSION2 (350/0.5/300 dlight)", () =
 
   test("TE_EXPLOSION2: color-mapped particle explosion with colorStart/colorLength bytes, same dlight shape", () => {
     cl_tent.CL_InitTEnts();
-    particleCalls.length = 0;
-    soundCalls.length = 0;
-    dlightCalls.length = 0;
+    resetSpies();
     cl.time = 20;
 
     beginTEntMessage();
@@ -501,11 +561,11 @@ describe("CL_ParseTEnt: TE_EXPLOSION / TE_EXPLOSION2 (350/0.5/300 dlight)", () =
     MSG_WriteByte(net_message, 8); // colorLength
     parseTEnt();
 
-    expect(particleCalls).toEqual([{ fn: "R_ParticleExplosion2", args: [[4, 5, 6], 200, 8] }]);
-    expect(soundCalls).toEqual([{ entnum: -1, entchannel: 0, sfx: "weapons/r_exp3.wav", origin: [4, 5, 6], fvol: 1, attenuation: 1 }]);
+    expect(particleCallsSnapshot()).toEqual([{ fn: "R_ParticleExplosion2", args: [[4, 5, 6], 200, 8] }]);
+    expect(soundCallsSnapshot()).toEqual([{ entnum: -1, entchannel: 0, sfx: "weapons/r_exp3.wav", origin: [4, 5, 6], fvol: 1, attenuation: 1 }]);
 
-    expect(dlightCalls.length).toBe(1);
-    const dl = dlightCalls[0]?.dlight;
+    expect(dlightCallsSnapshot().length).toBe(1);
+    const dl = dlightCallsSnapshot()[0]?.dlight;
     if (!dl) throw new Error("unreachable");
     expect(dl.radius).toBe(350);
     expect(dl.die).toBeCloseTo(20.5, 5);
@@ -520,7 +580,7 @@ describe("CL_ParseTEnt: lightning bolt / beam dispatch (Mod_ForName + CL_ParseBe
     [TE_LIGHTNING3, "progs/bolt3.mdl"],
     [TE_BEAM, "progs/beam.mdl"],
   ])("type %i loads %s with crash=true and stores a beam ending at cl.time+0.2", (type, path) => {
-    modForNameCalls.length = 0;
+    modForNameSpy.mockClear();
     cl.time = 8;
 
     beginTEntMessage();
@@ -534,7 +594,7 @@ describe("CL_ParseTEnt: lightning bolt / beam dispatch (Mod_ForName + CL_ParseBe
     MSG_WriteCoord(net_message, 0);
     parseTEnt();
 
-    expect(modForNameCalls).toEqual([{ name: path, crash: true }]);
+    expect(modForNameCallsSnapshot()).toEqual([{ name: path, crash: true }]);
     const b = cl_beams.find((x) => x.entity === 3 && x.model === lastFakeModel);
     expect(b).toBeDefined();
     if (!b) throw new Error("unreachable");

@@ -3,24 +3,26 @@
 // cl_demo.ts reaches CL_Disconnect (cl_main.ts) through a lazy `require()`
 // (see cl_demo.ts's own file header for why: cl_main.ts already has a static
 // import of this module's exports, so PORTING.md's import-cycle rule makes
-// this module resolve its side lazily). cl_main.ts's *real* module is
-// currently unloadable anyway -- it has its own static import of
-// "./snd_dma", which does not exist on disk yet, so `require("./cl_main")`
-// would throw "Cannot find module" before ever reaching CL_Disconnect. Per
-// this unit's brief this is the expected, still-settling "concurrent
-// sibling" gap (snd_dma.ts), not a bug in cl_demo.ts. This file follows the
-// same `bun:test` `mock.module` pattern already established in
-// test/cl_tent.test.ts: the fake is registered before anything imports the
-// module under test, so cl_demo.ts's later runtime `require("./cl_main")`
-// picks up the fake instead of the broken real file.
+// this module resolve its side lazily). cl_main.ts is a real, landed module
+// now, so `clMainMod().CL_Disconnect()` reaches the real CL_Disconnect.
 //
 // Filesystem setup follows PORTING.md's test-isolation recipe
 // (COM_InitArgv + COM_InitFilesystem against a scratch `-basedir`, no pak
 // needed since every demo filename here is a bare, slash-free basename that
 // COM_FindFile's loose-file branch finds even in shareware/unregistered
 // mode).
+//
+// cl_main.ts is a real, landed module now, so CL_PlayDemo_f's
+// `clMainMod().CL_Disconnect()` call (cl_demo.ts's file header explains the
+// lazy `require()`) reaches the real CL_Disconnect. Its own body
+// (S_StopAllSounds(true), then a demoplayback/ca_connected-gated disconnect
+// sequence) is safe to run for real in every scenario this file drives
+// (S_StopAllSounds is a no-op with no sound device started, and
+// NET_SendUnreliableMessage/NET_Close both tolerate a null cls.netcon). A
+// call-through `spyOn` (real behavior preserved, just observed) replaces
+// the old fake's call counter.
 
-import { describe, test, expect, beforeEach, afterAll, mock } from "bun:test";
+import { describe, test, expect, beforeEach, afterAll, spyOn } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COM_InitArgv, COM_InitFilesystem, com_gamedir } from "../src/common/common";
@@ -30,18 +32,14 @@ import { net_message } from "../src/common/sizebuf";
 import { SvcOpsT } from "../src/common/protocol";
 import { cls, cl, CactiveT, SIGNONS } from "../src/client/client";
 import { host } from "../src/common/host";
+import * as cl_main from "../src/client/cl_main";
+import { CL_GetMessage, CL_PlayDemo_f, CL_Record_f, CL_Stop_f, CL_StopPlayback, CL_TimeDemo_f, CL_FinishTimeDemo, CL_WriteDemoMessage } from "../src/client/cl_demo";
 
-// -- fake for the still-broken "./cl_main" specifier (see file header) ------
+const disconnectSpy = spyOn(cl_main, "CL_Disconnect");
 
-let disconnectCalls = 0;
-await mock.module("../src/client/cl_main", () => ({
-  CL_Disconnect: () => {
-    disconnectCalls++;
-  },
-}));
-
-const { CL_GetMessage, CL_PlayDemo_f, CL_Record_f, CL_Stop_f, CL_StopPlayback, CL_TimeDemo_f, CL_FinishTimeDemo, CL_WriteDemoMessage } =
-  await import("../src/client/cl_demo");
+afterAll(() => {
+  disconnectSpy.mockRestore();
+});
 
 // -- shared scratch dir / gamedir setup --------------------------------------
 
@@ -55,9 +53,28 @@ afterAll(() => {
 
 // Every call gets its own basedir/id1, so distinct tests never share a
 // filename or a stale com_gamedir left by an earlier test in this file.
-function initGamedir(prefix: string): void {
+//
+// `withProgs`: CL_Record_f's own C-faithful behavior runs `Cmd_ExecuteString
+// ("map <name>")` whenever a map argument is given (cl_demo.ts:284), and
+// SV_SpawnServer always loads progs.dat before ever checking whether the
+// named map itself exists (sv_main.ts's PR_LoadProgs call precedes its
+// graceful Mod_ForName/"Couldn't spawn server" handling) -- so if the
+// process-wide `Cmd_AddCommand("map", ...)` registration has already
+// happened (any file that has run host_cmd.ts's init this process), "map"
+// stops being a silent no-op and PR_LoadProgs throws a fatal SysError
+// without a real progs.dat reachable. Self-sufficient per standing order
+// 13: rather than depend on whether some other file registered "map" yet,
+// this places a real progs.dat (the same PORTING.md test fixture every
+// other suite uses) as a loose file in this test's own scratch id1/, so
+// PR_LoadProgs always succeeds and SV_SpawnServer's own graceful
+// "Couldn't spawn server maps/somemap.bsp" (the map itself is never
+// fixtured) path is what actually runs, exactly as it would whether or not
+// "map" happened to be registered yet.
+const PROGS_DAT = "/home/buzzkill/Projects/qsrc/quake/progs106/progs.dat";
+function initGamedir(prefix: string, opts?: { withProgs?: boolean }): void {
   const baseDir = join(scratchDir, prefix);
   mkdirSync(join(baseDir, "id1"), { recursive: true });
+  if (opts?.withProgs) writeFileSync(join(baseDir, "id1", "progs.dat"), readFileSync(PROGS_DAT));
   COM_InitArgv(["quake", "-basedir", baseDir]);
   COM_InitFilesystem();
 }
@@ -86,7 +103,7 @@ function resetClientState(): void {
   net_message.cursize = 0;
   host.framecount = 0;
   host.realtime = 0;
-  disconnectCalls = 0;
+  disconnectSpy.mockClear();
 }
 
 beforeEach(resetClientState);
@@ -128,7 +145,7 @@ describe("CL_Record_f", () => {
   });
 
   test("a forced track number becomes cls.forcetrack and demorecording turns on", () => {
-    initGamedir("forcetrack-");
+    initGamedir("forcetrack-", { withProgs: true });
     cmdState.source = CmdSourceT.src_command;
     Cmd_TokenizeString("record demoX somemap 7");
     CL_Record_f();
@@ -232,7 +249,7 @@ describe("CL_PlayDemo_f", () => {
     Cmd_TokenizeString("play posTrack");
     CL_PlayDemo_f();
 
-    expect(disconnectCalls).toBe(1);
+    expect(disconnectSpy).toHaveBeenCalledTimes(1);
     expect(cls.demoplayback).toBe(true);
     expect(cls.state).toBe(CactiveT.ca_connected);
     expect(cls.forcetrack).toBe(5);
@@ -265,7 +282,7 @@ describe("CL_PlayDemo_f", () => {
     Cmd_TokenizeString("play whatever");
     CL_PlayDemo_f();
     expect(cls.demoplayback).toBe(false);
-    expect(disconnectCalls).toBe(0);
+    expect(disconnectSpy).toHaveBeenCalledTimes(0);
   });
 });
 

@@ -431,11 +431,23 @@ describe("CL_EstablishConnection / CL_Disconnect / CL_SendCmd", () => {
 
     const client = cls.netcon;
     if (client === null) throw new Error("expected CL_EstablishConnection to set cls.netcon");
+    // net_loop.ts's `loop_client`/`loop_server` are module-level singletons
+    // Loop_Connect reuses rather than reallocating, and Loop_Connect/
+    // Loop_CheckNewConnections reset every field on them EXCEPT
+    // `disconnected` -- so another test file that marks a loopback socket
+    // `disconnected = true` directly (instead of routing it through
+    // NET_Close, which would null out the singleton for a fresh future
+    // allocation) leaves that flag stuck on the shared object this
+    // `NET_Connect("local")` call goes on to hand back. Cleared explicitly
+    // here so this test's own pass/fail never depends on whether some
+    // other file in the same process already touched the loopback pair.
+    client.disconnected = false;
     // the loopback pair's server side, picked up the way SV_Init's frame
     // loop would (net_driverlevel doesn't need `listening` for the loop
     // driver at index 0 -- see net_main.ts's NET_CheckNewConnections).
     const server = NET_CheckNewConnections();
     if (server === null) throw new Error("expected a server-side socket from the loopback pair");
+    server.disconnected = false;
     openLoopSockets.push(client, server);
 
     // below SIGNONS: CL_BaseMove/IN_Move/CL_SendMove are skipped, but a

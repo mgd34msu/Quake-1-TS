@@ -2,135 +2,48 @@
 //
 // menu.ts statically imports src/common/cvar.ts (Cvar_Set/SetValue/
 // VariableValue/VariableString, by name, per this unit's ruling), src/common/
-// host.ts (host.realtime/host.time, hostClientHooks) and src/client/screen.ts
-// (SCR_ModalMessage, SCR_BeginLoadingPlaque). All three are real, landed
-// modules -- but cvar.ts unconditionally imports src/client/console.ts, which
-// unconditionally imports src/common/host.ts, which unconditionally imports
-// src/common/net_main.ts, whose top-level `export const net_messagetimeout =
-// new CvarT("net_messagetimeout", "300");` runs before cvar.ts's own `class
-// CvarT` declaration has executed (cvar.ts is still resolving its own import
-// of console.ts at that point). This throws `ReferenceError: Cannot access
-// 'CvarT' before initialization` for ANY test that loads cvar.ts first --
-// reproduced in isolation by `bun test test/cvar.test.ts` alone, which never
-// touches menu.ts, so it is not this unit's bug. test/screen.test.ts hit the
-// identical cycle and worked around it by replacing console.ts with a stub
-// before any real import; this file does the same (console.ts's own
-// behavior is not under test here -- only Con_ToggleConsole_f/Con_Printf/
-// Con_DPrintf/conState/setDeveloper are ever reached transitively, and none
-// of menu.ts's required test scenarios exercise Con_ToggleConsole_f's body).
-// snd_dma.ts does not exist on disk yet (concurrent sibling, absent-at-gate
-// rule) and is stubbed the same way, recording S_LocalSound calls for
-// assertions. Every other module below (cvar, cmd, common, host, host_cmd,
-// net_main, server, client, keys, render, vid, screen_types, sys, quakedef,
-// sprintf, screen, cl_main) is the real, unmodified port, imported via
-// `await import` in an order that forces cvar.ts to finish initializing
-// before host.ts/net_main.ts ever run, sidestepping the cycle without
-// touching any file outside this unit's SCOPE. keys.ts in particular is
-// real and unmocked throughout, per this unit's brief.
+// host.ts (host.realtime/host.time, hostClientHooks), src/client/screen.ts
+// (SCR_ModalMessage, SCR_BeginLoadingPlaque), src/client/console.ts
+// (Con_ToggleConsole_f) and src/client/snd_dma.ts (S_LocalSound,
+// S_ExtraUpdate). All are real, landed modules and are imported and driven
+// for real here: neither Con_ToggleConsole_f nor S_LocalSound/S_ExtraUpdate
+// need any setup this suite doesn't already have to be safe to call
+// (S_LocalSound/S_ExtraUpdate are no-ops unless `sound_started` is true,
+// which this suite never sets), and no test in this file asserts on their
+// call args, so no spy is needed for either. keys.ts is real and unmocked
+// throughout, per this unit's brief.
 //
 // Per the brief: the quit menu's 'y'/'Y' key (M_Quit_Key -> Host_Quit_f ->
 // eventually Sys_Quit, which really exits the process) is never exercised
 // here.
 
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ModelLoaderHooks } from "../src/common/model";
 import type { QpicT } from "../src/common/wad";
 import type { Renderer } from "../src/client/render";
-// type-only (fully erased): safe even though keys.ts is otherwise reached
-// only through the dynamic imports below, alongside the console.ts/
-// snd_dma.ts mocks -- see file header. Aliased: the real KeydestT VALUE comes
-// from the dynamic import below (`const { KeydestT } = keysMod`), and a type
-// and a value of the same name from two different import forms conflict.
-import type { KeydestT as KeydestTType } from "../src/client/keys";
-
-// -- stand-ins for the two siblings that can't be loaded for real here -----
-// (see file header). Every other import below is the real module.
-
-const soundCalls: Array<{ fn: string; args: unknown[] }> = [];
-
-const consoleStub = () => ({
-  conState: {
-    con_backscroll: 0,
-    con_totallines: 0,
-    con_forcedup: false,
-    con_initialized: true,
-    con_notifylines: 0,
-  },
-  Con_Printf: (_fmt: string, ..._args: Array<string | number>) => {},
-  Con_DPrintf: (_fmt: string, ..._args: Array<string | number>) => {},
-  Con_SafePrintf: (_fmt: string, ..._args: Array<string | number>) => {},
-  setDeveloper: (_cv: { value: number } | null) => {},
-  Con_ToggleConsole_f: () => {
-    soundCalls.push({ fn: "Con_ToggleConsole_f", args: [] });
-  },
-  Con_Init: () => {},
-  Con_CheckResize: () => {},
-  Con_ClearNotify: () => {},
-  Con_DrawConsole: (_lines: number, _drawinput: boolean) => {},
-  Con_DrawNotify: () => {},
-});
-
-const sndStub = () => ({
-  S_LocalSound: (name: string) => {
-    soundCalls.push({ fn: "S_LocalSound", args: [name] });
-  },
-  S_ExtraUpdate: () => {
-    soundCalls.push({ fn: "S_ExtraUpdate", args: [] });
-  },
-  S_ClearBuffer: () => {},
-  S_StopAllSounds: (_clear?: boolean) => {},
-  S_BeginPrecaching: () => {},
-  S_EndPrecaching: () => {},
-  S_PrecacheSound: (_name: string) => null,
-  S_StartSound: () => {},
-  S_StaticSound: () => {},
-  S_StopSound: () => {},
-  S_TouchSound: (_name: string) => {},
-});
-
-mock.module("../src/client/console", consoleStub);
-mock.module("../src/client/console.ts", consoleStub);
-mock.module("../src/client/snd_dma", sndStub);
-mock.module("../src/client/snd_dma.ts", sndStub);
-
-// Force cvar.ts (and, through it, CvarT) to finish initializing, via the
-// stubbed console above, before anything pulls in the real host.ts/
-// net_main.ts -- see file header.
-const cvarMod = await import("../src/common/cvar");
-const commonMod = await import("../src/common/common");
-const cmdMod = await import("../src/common/cmd");
-const hostMod = await import("../src/common/host");
-await import("../src/common/host_cmd");
-const netMainMod = await import("../src/common/net_main");
-const serverMod = await import("../src/server/server");
-const clientMod = await import("../src/client/client");
-const keysMod = await import("../src/client/keys");
-const renderMod = await import("../src/client/render");
-const vidMod = await import("../src/client/vid");
-await import("../src/client/screen_types");
-await import("../src/client/screen");
-await import("../src/client/cl_main");
-
-const menu = await import("../src/client/menu");
-
-const { CvarT, Cvar_RegisterVariable, Cvar_FindVar, Cvar_Set, Cvar_VariableValue, Cvar_VariableString } = cvarMod;
-const { COM_AddGameDirectory, registered, rogue } = commonMod;
-const { Cbuf_Init, Cbuf_Execute } = cmdMod;
+import { CvarT, Cvar_RegisterVariable, Cvar_FindVar, Cvar_Set, Cvar_VariableValue, Cvar_VariableString } from "../src/common/cvar";
+import { COM_AddGameDirectory, registered, rogue } from "../src/common/common";
+import { Cbuf_Init, Cbuf_Execute } from "../src/common/cmd";
+import { host } from "../src/common/host";
+import "../src/common/host_cmd";
+import { hostCacheCount, hostcache } from "../src/common/net_main";
+import { svs, sv } from "../src/server/server";
+import { cls, cl, CactiveT } from "../src/client/client";
+import { KeydestT, keyState, keybindings, Key_Init, Key_SetBinding, K_ESCAPE, K_ENTER, K_UPARROW, K_DOWNARROW, K_BACKSPACE, K_DEL } from "../src/client/keys";
+import { re } from "../src/client/render";
+import { vid } from "../src/client/vid";
+import "../src/client/screen_types";
+import "../src/client/screen";
+import "../src/client/cl_main";
+import * as menu from "../src/client/menu";
 
 // cmd_text (cmd.ts's command buffer) is unallocated until Cbuf_Init runs;
 // without this, Cbuf_AddText/Cbuf_InsertText immediately "overflow" (maxsize
 // is 0). Host_Init calls this in the real engine; this test does it directly.
 Cbuf_Init();
-const { host } = hostMod;
-const { hostCacheCount, hostcache } = netMainMod;
-const { svs, sv } = serverMod;
-const { cls, cl, CactiveT } = clientMod;
-const { KeydestT, keyState, keybindings, Key_Init, Key_SetBinding, K_ESCAPE, K_ENTER, K_UPARROW, K_DOWNARROW, K_BACKSPACE, K_DEL } = keysMod;
-const { re } = renderMod;
-const { vid } = vidMod;
 
 //=============================================================================
 // A minimal recording Renderer (only Draw_* -- menu.c never touches the
@@ -236,14 +149,13 @@ const fakeRenderer: Renderer = {
 // `expect(keyState.key_dest).toBe(KeydestT.key_menu)` a type error (the same
 // narrowing tsc applies to menu.ts's own menuState.m_state, worked around in
 // menu.ts's M_Draw the same way: not comparable once narrowed away).
-function setKeyDest(v: KeydestTType): void {
+function setKeyDest(v: KeydestT): void {
   keyState.key_dest = v;
 }
 
 function resetMenuState(): void {
   cachePicCalls.length = 0;
   drawCalls.length = 0;
-  soundCalls.length = 0;
 
   re.current = fakeRenderer;
   vid.width = 320;
