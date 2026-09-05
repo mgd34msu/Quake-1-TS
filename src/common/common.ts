@@ -112,10 +112,10 @@ Deviations from PORTING.md / the C source:
   comment just above these bindings' declarations.
 */
 
-import { GAMENAME, MAX_NUM_ARGVS, QuakeParmsT } from "./quakedef";
+import { GAMENAME, MAX_NUM_ARGVS, QuakeParmsT, qw } from "./quakedef";
 import { CRC_Init, CRC_ProcessByte } from "./crc";
 import { Con_Printf } from "../client/console";
-import { Sys_Error, Sys_FileClose, Sys_FileOpenRead, Sys_FileRead, Sys_FileSeek, Sys_Printf } from "../platform/sys";
+import { Sys_Error, Sys_FileClose, Sys_FileOpenRead, Sys_FileRead, Sys_FileSeek, Sys_Printf, Sys_ResolveCase } from "../platform/sys";
 import { Com_sprintf } from "./sprintf";
 import type { CvarT } from "./cvar";
 import type * as CvarModule from "./cvar";
@@ -379,8 +379,9 @@ export function COM_Parse(ps: ParseState): string | null {
     }
   }
 
-  // parse single characters
-  if (SINGLE_CHAR_TOKENS.has(c0)) {
+  // parse single characters (QW/client/common.c has no such branch:
+  // folded under qw.active per PORTING.md)
+  if (!qw.active && SINGLE_CHAR_TOKENS.has(c0)) {
     ps.index = i + 1;
     return String.fromCharCode(c0);
   }
@@ -392,7 +393,7 @@ export function COM_Parse(ps: ParseState): string | null {
     token += String.fromCharCode(c);
     i++;
     c = byteAt(data, i);
-    if (SINGLE_CHAR_TOKENS.has(c)) break;
+    if (!qw.active && SINGLE_CHAR_TOKENS.has(c)) break;
   } while (signedByteAt(data, i) > 32);
 
   ps.index = i;
@@ -1074,6 +1075,8 @@ export function COM_LoadPackFile(packfile: string): PackT | null {
 //================
 
 export function COM_AddGameDirectory(dir: string): void {
+  // Port deviation (Linux target): the C relies on a case-insensitive filesystem
+  dir = Sys_ResolveCase(dir);
   com_gamedir = dir;
 
   // add the directory to the search path
@@ -1081,7 +1084,8 @@ export function COM_AddGameDirectory(dir: string): void {
 
   // add any pak files in the format pak0.pak pak1.pak, ...
   for (let i = 0; ; i++) {
-    const pakfile = `${dir}/pak${i}.pak`;
+    // Port deviation (Linux target): the C relies on a case-insensitive filesystem
+    const pakfile = Sys_ResolveCase(`${dir}/pak${i}.pak`);
     const pak = COM_LoadPackFile(pakfile);
     if (!pak) break;
     com_searchpaths = { kind: "pack", pack: pak, next: com_searchpaths };

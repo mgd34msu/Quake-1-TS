@@ -403,8 +403,16 @@ setNetHostHooks(fakeNetHostHooks);
 NET_Init(); // idempotent across test files sharing this process, see file header
 
 const openLoopSockets: QsocketT[] = [];
+
+// This file's only cls.state test drives CL_EstablishConnection/
+// CL_Disconnect, whose real bodies leave cls.state at ca_disconnected, not
+// the pristine ca_dedicated default -- snapshotted before that test runs,
+// restored below (rule 15).
+const savedClsState = cls.state;
+
 afterAll(() => {
   for (const sock of openLoopSockets) netLoopDriver.Close(sock);
+  cls.state = savedClsState;
 });
 
 // A plain read through a function, not a bare `cls.state` reference: TS's

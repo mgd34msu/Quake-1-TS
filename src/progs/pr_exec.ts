@@ -153,6 +153,16 @@ export function setBuiltins(table: BuiltinT[]): void {
   pr_builtins = table;
 }
 
+// Test-only getter: pr_builtins has no other reader outside this module, so
+// a suite that calls setBuiltins with its own stand-in table (test/pr_exec.test.ts's
+// hand-built bytecode programs) has no way to snapshot the real table
+// (installed at module load by src/progs/pr_cmds.ts's own side-effect
+// import) before overwriting it, and no way to restore it afterward
+// (rule 15).
+export function getBuiltins(): BuiltinT[] {
+  return pr_builtins;
+}
+
 export const pr_opnames: readonly string[] = [
   "DONE",
 

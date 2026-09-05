@@ -15,7 +15,14 @@ import { cmdHost } from "../src/common/cmd";
 import { conState } from "../src/client/console";
 import { setCvarServerHooks } from "../src/common/cvar";
 import { Host_Shutdown, host } from "../src/common/host";
-import { getNetHostHooks, net_activeconnections, setNetActiveConnections, setNetHostHooks } from "../src/common/net_main";
+import {
+  getNetHostHooks,
+  net_activeconnections,
+  net_landrivers,
+  setNetActiveConnections,
+  setNetHostHooks,
+  setNetNumLandrivers,
+} from "../src/common/net_main";
 import { setHostShutdown, sysState } from "../src/platform/sys";
 import { sv, svState, svs } from "../src/server/server";
 import { Sys_Main_Init, runFrames } from "../src/main";
@@ -33,6 +40,15 @@ const savedMaxclients = svs.maxclients;
 const savedMaxclientslimit = svs.maxclientslimit;
 const savedClients = svs.clients;
 const savedActiveConnections = net_activeconnections;
+// Sys_Main_Init's own `registerLandriver(udpLandriver)` call (src/main.ts,
+// guarded so it only ever pushes once per process) leaves udpLandriver in
+// net_main.ts's shared `net_landrivers[]`/`net_numlandrivers` forever --
+// nothing else in this port ever un-registers a landriver. A suite that
+// hard-codes a landriver index against a fake table of its own (e.g.
+// net_dgrm.test.ts's `fakeLandriver` at index 0) breaks if this file's boot
+// runs first and shifts every later registration up by one, so this file
+// restores both back to their pre-test length (rule 15).
+const savedLandriverCount = net_landrivers.length;
 // Host_Init calls console.ts's Con_Init directly (host.ts:1103, even on a
 // dedicated boot), which sets conState.con_initialized = true and is never
 // unset by anything else in this port; a later suite's Con_Printf call
@@ -50,6 +66,8 @@ afterAll(() => {
   setHostShutdown(null);
   setCvarServerHooks(null);
   setNetActiveConnections(savedActiveConnections);
+  net_landrivers.length = savedLandriverCount;
+  setNetNumLandrivers(savedLandriverCount);
   svs.maxclients = savedMaxclients;
   svs.maxclientslimit = savedMaxclientslimit;
   svs.clients = savedClients;

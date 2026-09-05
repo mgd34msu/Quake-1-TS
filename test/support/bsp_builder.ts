@@ -12,7 +12,8 @@
 //   - 1 submodel whose headnode[] points at node 0 / clipnode 0
 //   - entities: worldspawn + one info_player_start
 //   - 8 vertexes / 9 edges / 8 surfedges / 2 faces / 1 texinfo / 1 miptex
-//   - empty lighting; visibility is empty unless `visdata` is passed
+//   - empty lighting unless `lightLevel` is passed; visibility is empty
+//     unless `visdata` is passed
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -53,6 +54,10 @@ export const BSP_NUMVERTEXES = 8;
 export const BSP_NUMEDGES = 9; // edge 0 is the unused reserved entry
 export const BSP_NUMSURFEDGES = 8;
 export const BSP_NUMFACES = 2;
+// each face is a 64-unit square whose texinfo s/t axes are the x/y axes, so
+// Mod_CalcSurfaceExtents gives extents 64 and the lightmap is
+// ((64>>4)+1)^2 = 25 samples per style
+export const BSP_FACE_LIGHTMAP_SAMPLES = 25;
 export const BSP_NUMTEXINFO = 1;
 export const BSP_NUMSUBMODELS = 1;
 export const BSP_NUMMARKSURFACES = 2;
@@ -66,11 +71,26 @@ export const BSP_MIPTEX_NAME = "bsptest";
 export const BSP_MIPTEX_WIDTH = 16;
 export const BSP_MIPTEX_HEIGHT = 16;
 
+// skyFace's second miptex/texinfo, for U/dedicated-surface-extents coverage:
+// a "sky" named texture, a TEX_SPECIAL texinfo whose enlarged s/t vecs blow
+// face 1's extents past the 256 cap without needing new geometry, and face 1
+// (the builder's existing 64x64 square at x=128..192) repointed at it.
+export const BSP_SKY_MIPTEX_NAME = "sky1";
+export const BSP_NUMTEXINFO_WITH_SKY = 2;
+const SKY_TEXINFO_VEC_SCALE = 16; // extents = (192-128) * SKY_TEXINFO_VEC_SCALE = 1024 > 256
+
 export interface BspBuildOptions {
   // when set, becomes the VISIBILITY lump and leaf 1's visofs becomes 0
   visdata?: Uint8Array;
   // overrides the texture name written into the single miptex
   miptexName?: string;
+  // adds a second miptex (BSP_SKY_MIPTEX_NAME) and a second, TEX_SPECIAL
+  // texinfo with oversized extents, and repoints face 1 at it
+  skyFace?: boolean;
+  // fills the LIGHTING lump with this 0..255 sample value and points every
+  // non-sky face's lightofs at its own BSP_FACE_LIGHTMAP_SAMPLES-byte block
+  // under style 0, so a face lights the way a qbsp/light-built map's does
+  lightLevel?: number;
 }
 
 class Writer {
@@ -194,15 +214,25 @@ function edgesLump(): Uint8Array {
 }
 
 function surfedgesLump(): Uint8Array {
-  const se = [1, 2, 3, 4, 5, 6, 7, 8];
+  // qbsp winds a face's vertices CLOCKWISE as seen from the front of its
+  // plane -- checked against maps/start.bsp, where the Newell normal of
+  // every face's vertex loop is the negation of its plane normal. The
+  // software rasterizer depends on it: r_draw.c's R_EmitEdge calls an edge
+  // whose screen v increases a TRAILING edge and one whose v decreases a
+  // LEADING edge, so the other winding puts a surface's leading edge to the
+  // right of its trailing edge and r_edge.c's R_GenerateSpans emits no span
+  // at all. Walking edges 4,3,2,1 (and 8,7,6,5) backwards -- which is what
+  // the negative surfedge numbers mean -- gives that winding.
+  const se = [-4, -3, -2, -1, -8, -7, -6, -5];
   const w = new Writer(se.length * 4);
   for (const v of se) w.i32(v);
   return w.bytes;
 }
 
-function texinfoLump(): Uint8Array {
+function texinfoLump(skyFace: boolean): Uint8Array {
   // texinfo_t: vecs[2][4] float, miptex int, flags int  (40 bytes)
-  const w = new Writer(BSP_NUMTEXINFO * 40);
+  const count = skyFace ? BSP_NUMTEXINFO_WITH_SKY : BSP_NUMTEXINFO;
+  const w = new Writer(count * 40);
   w.f32(1);
   w.f32(0);
   w.f32(0);
@@ -213,10 +243,25 @@ function texinfoLump(): Uint8Array {
   w.f32(0); // t axis
   w.i32(0); // miptex
   w.i32(0); // flags
+  if (skyFace) {
+    // texinfo 1: miptex 1 (the sky miptex), TEX_SPECIAL, and s/t axes scaled
+    // up so face 1's existing 64-unit-wide geometry produces extents > 256
+    // without needing new vertexes (see BSP_SKY_MIPTEX_NAME's comment above).
+    w.f32(SKY_TEXINFO_VEC_SCALE);
+    w.f32(0);
+    w.f32(0);
+    w.f32(0);
+    w.f32(0);
+    w.f32(SKY_TEXINFO_VEC_SCALE);
+    w.f32(0);
+    w.f32(0);
+    w.i32(1); // miptex
+    w.i32(1); // flags: TEX_SPECIAL
+  }
   return w.bytes;
 }
 
-function facesLump(): Uint8Array {
+function facesLump(skyFace: boolean, lit: boolean): Uint8Array {
   // dface_t: planenum short, side short, firstedge int, numedges short,
   // texinfo short, styles[4] byte, lightofs int  (20 bytes)
   const w = new Writer(BSP_NUMFACES * 20);
@@ -225,36 +270,42 @@ function facesLump(): Uint8Array {
     w.i16(0); // side
     w.i32(f * 4); // firstedge
     w.i16(4); // numedges
-    w.i16(0); // texinfo
+    const isSky = skyFace && f === 1;
+    w.i16(isSky ? 1 : 0); // texinfo -- face 1 uses the sky texinfo
     w.u8(0);
     w.u8(255);
     w.u8(255);
     w.u8(255); // styles
-    w.i32(-1); // lightofs -- the lighting lump is empty
+    // a sky face never reaches R_BuildLightMap, and its oversized extents
+    // would size a lightmap the lump does not hold, so it stays unlit
+    w.i32(lit && !isSky ? f * BSP_FACE_LIGHTMAP_SAMPLES : -1); // lightofs
   }
   return w.bytes;
 }
 
-function texturesLump(name: string): Uint8Array {
-  // dmiptexlump_t { int nummiptex; int dataofs[nummiptex]; } then one
-  // miptex_t { char name[16]; unsigned width, height; unsigned offsets[4]; }
-  // followed by its width*height/64*85 mip pixels.
-  const nummiptex = 1;
+function texturesLump(name: string, skyName: string | null): Uint8Array {
+  // dmiptexlump_t { int nummiptex; int dataofs[nummiptex]; } then one (or
+  // two, with skyName) miptex_t { char name[16]; unsigned width, height;
+  // unsigned offsets[4]; } each followed by its width*height/64*85 mip pixels.
+  const nummiptex = skyName === null ? 1 : 2;
   const headerSize = 4 + nummiptex * 4;
   const pixels = ((BSP_MIPTEX_WIDTH * BSP_MIPTEX_HEIGHT) / 64) * 85;
-  const w = new Writer(headerSize + 40 + pixels);
+  const miptexSize = 40 + pixels;
+  const w = new Writer(headerSize + nummiptex * miptexSize);
   w.i32(nummiptex);
-  w.i32(headerSize); // dataofs[0], relative to the start of the lump
-  w.chars(name, 16);
-  w.u32(BSP_MIPTEX_WIDTH);
-  w.u32(BSP_MIPTEX_HEIGHT);
-  // the four mip offsets are relative to the miptex_t
-  let ofs = 40;
-  for (let m = 0; m < MIPLEVELS; m++) {
-    w.u32(ofs);
-    ofs += (BSP_MIPTEX_WIDTH >> m) * (BSP_MIPTEX_HEIGHT >> m);
+  for (let i = 0; i < nummiptex; i++) w.i32(headerSize + i * miptexSize); // dataofs[i], relative to the lump start
+  for (const n of skyName === null ? [name] : [name, skyName]) {
+    w.chars(n, 16);
+    w.u32(BSP_MIPTEX_WIDTH);
+    w.u32(BSP_MIPTEX_HEIGHT);
+    // the four mip offsets are relative to the miptex_t
+    let ofs = 40;
+    for (let m = 0; m < MIPLEVELS; m++) {
+      w.u32(ofs);
+      ofs += (BSP_MIPTEX_WIDTH >> m) * (BSP_MIPTEX_HEIGHT >> m);
+    }
+    for (let i = 0; i < pixels; i++) w.u8(i & 0xff);
   }
-  for (let i = 0; i < pixels; i++) w.u8(i & 0xff);
   return w.bytes;
 }
 
@@ -365,21 +416,29 @@ function modelsLump(): Uint8Array {
   return w.bytes;
 }
 
+function lightingLump(lightLevel: number | undefined): Uint8Array {
+  if (lightLevel === undefined) return new Uint8Array(0);
+  const bytes = new Uint8Array(BSP_NUMFACES * BSP_FACE_LIGHTMAP_SAMPLES);
+  bytes.fill(lightLevel & 0xff);
+  return bytes;
+}
+
 // --- assembly -------------------------------------------------------------
 
 export function buildBsp(options: BspBuildOptions = {}): Uint8Array {
   const vis = options.visdata ?? new Uint8Array(0);
+  const skyFace = options.skyFace ?? false;
 
   const lumps: Uint8Array[] = new Array(HEADER_LUMPS);
   lumps[LUMP_ENTITIES] = latin1(BSP_ENTITIES + "\0");
   lumps[LUMP_PLANES] = planesLump();
-  lumps[LUMP_TEXTURES] = texturesLump(options.miptexName ?? BSP_MIPTEX_NAME);
+  lumps[LUMP_TEXTURES] = texturesLump(options.miptexName ?? BSP_MIPTEX_NAME, skyFace ? BSP_SKY_MIPTEX_NAME : null);
   lumps[LUMP_VERTEXES] = vertexesLump();
   lumps[LUMP_VISIBILITY] = vis;
   lumps[LUMP_NODES] = nodesLump();
-  lumps[LUMP_TEXINFO] = texinfoLump();
-  lumps[LUMP_FACES] = facesLump();
-  lumps[LUMP_LIGHTING] = new Uint8Array(0);
+  lumps[LUMP_TEXINFO] = texinfoLump(skyFace);
+  lumps[LUMP_FACES] = facesLump(skyFace, options.lightLevel !== undefined);
+  lumps[LUMP_LIGHTING] = lightingLump(options.lightLevel);
   lumps[LUMP_CLIPNODES] = clipnodesLump();
   lumps[LUMP_LEAFS] = leafsLump(vis.length > 0);
   lumps[LUMP_MARKSURFACES] = marksurfacesLump();

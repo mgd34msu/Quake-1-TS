@@ -53,7 +53,7 @@ interface ParticleCallLog {
 function makeFakeRenderer(log: ParticleCallLog): Renderer {
   const hooks: ModelLoaderHooks = {
     notexture: new TextureT(),
-    Mod_LoadTextures(): void {},
+    textureLoaded(): void {},
     Mod_LoadLighting(): void {},
     Mod_LoadAliasModel(): void {},
     Mod_LoadSpriteModel(): void {},

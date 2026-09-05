@@ -62,7 +62,7 @@ function makeFakeRenderer(): { renderer: Renderer; draws: DrawCharacterCall[] } 
   const renderer: Renderer = {
     modelHooks: {
       notexture: new TextureT(),
-      Mod_LoadTextures: () => {},
+      textureLoaded: () => {},
       Mod_LoadLighting: () => {},
       Mod_LoadAliasModel: () => {},
       Mod_LoadSpriteModel: () => {},

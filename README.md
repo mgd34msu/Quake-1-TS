@@ -23,7 +23,8 @@ QuakeWorld client and server.
 ## Running
 
 Requires the original game data (`pak0.pak` etc. from a Quake
-installation) in `id1/` under the base directory, and libSDL2.
+installation) in `id1/` under the base directory, and libSDL2. `-basedir` may
+point at a directory containing `Id1/PAK0.PAK` as shipped, mixed case and all.
 
 ```sh
 bun install

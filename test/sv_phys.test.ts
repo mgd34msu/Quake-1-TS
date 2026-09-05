@@ -8,7 +8,7 @@ import { buildBsp, writeGameFile } from "./support/bsp_builder";
 import { vec3 } from "../src/common/mathlib";
 import { EdictT, pr, PR_GetString } from "../src/progs/progs";
 import { PR_LoadProgs, PR_AllocEdicts } from "../src/progs/pr_edict";
-import { setBuiltins, type BuiltinT } from "../src/progs/pr_exec";
+import { getBuiltins, setBuiltins, type BuiltinT } from "../src/progs/pr_exec";
 import { OFS_RETURN } from "../src/progs/pr_comp";
 import {
   sv,
@@ -53,9 +53,17 @@ const scratchDir = mkdtempSync(join(scratchRoot, "sv-phys-test-"));
 const baseDir = join(scratchDir, "quake");
 
 const savedNostdout = sysState.nostdout;
+// src/progs/pr_cmds.ts installs the real builtin table at module load (a
+// side-effect import reached through src/main.ts and test/host.test.ts/
+// test/host_cmd.test.ts's own real-table setBuiltins calls); this suite's
+// own beforeAll below replaces it with a 46-entry stub sized for world.qc's
+// StartFrame alone and never puts the real one back, permanently truncating
+// pr_builtins for the rest of this bun process (rule 15) -- restore it here.
+const savedBuiltins = getBuiltins();
 
 afterAll(() => {
   sysState.nostdout = savedNostdout;
+  setBuiltins(savedBuiltins);
   rmSync(scratchDir, { recursive: true, force: true });
 });
 

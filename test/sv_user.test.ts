@@ -441,6 +441,16 @@ function sendStringcmd(client: QsocketT, text: string): void {
   expect(netLoopDriver.QSendMessage(client, msg)).toBe(1);
 }
 
+// A real function boundary with an explicit return type, not a bare
+// `cmdState.source` read: TS narrows a property read to the literal type of
+// its last-seen assignment even across intervening calls it can't prove are
+// unrelated, which makes a direct `expect(cmdState.source).toBe(otherMember)`
+// a false "no overlap" compile error once this file resets cmdState.source
+// to a known value before provoking a dispatch elsewhere.
+function currentCmdSource(): CmdSourceT {
+  return cmdState.source;
+}
+
 describe("SV_ReadClientMessage", () => {
   const { client, server } = connectLoopback();
 
@@ -450,6 +460,11 @@ describe("SV_ReadClientMessage", () => {
   hostClient.name = "tester";
   hostClient.netconnection = server;
   hostClient.edict = player;
+  // Own private fixture, not a shared singleton -- no restore needed. Sized
+  // so SV_ClientPrintf (host.ts) has somewhere to write if "status" below
+  // dispatches to the real Host_Status_f rather than this suite's own fake
+  // handler (see that test's own comment).
+  SZ_Alloc(hostClient.message, 2048);
 
   // svState.host_client is a shared, process-wide singleton -- other
   // describe blocks in this same file (SV_ReadClientMove's tests, which run
@@ -463,28 +478,36 @@ describe("SV_ReadClientMessage", () => {
   });
 
   test('delivers clc_stringcmd "status" -- dispatches via Cmd_ExecuteString with src_client', () => {
-    let ran = false;
-    const captured: { source: CmdSourceT | null } = { source: null };
-    Cmd_AddCommand("status", () => {
-      ran = true;
-      captured.source = cmdState.source;
-    });
+    // "status" is a real command (host_cmd.ts's Host_InitCommands registers
+    // it to Host_Status_f) with no unregister, matching the C -- once any
+    // suite in this process has run a real boot (test/host_cmd.test.ts,
+    // test/host.test.ts, test/main_boot.test.ts, ...) it is permanently
+    // claimed and Cmd_AddCommand here would be a silent no-op, so this test
+    // does not depend on ITS OWN handler being the one Cmd_ExecuteString
+    // finds. sv_user.ts's allow-list gate (ret2=1 for the "status" prefix)
+    // calls Cmd_ExecuteString(s, src_client) regardless of whether a handler
+    // is registered at all, and Cmd_ExecuteString sets cmdState.source
+    // unconditionally before it looks one up -- reset it to a different
+    // value first so a stale src_client from an earlier test can't produce
+    // a false pass (rule 15).
+    cmdState.source = CmdSourceT.src_command;
 
     sendStringcmd(client, "status");
     expect(SV_ReadClientMessage()).toBe(true);
-    expect(ran).toBe(true);
-    expect(captured.source).toBe(CmdSourceT.src_client);
+    expect(currentCmdSource()).toBe(CmdSourceT.src_client);
   });
 
-  test('an unprivileged "kick" still dispatches -- sv_user.c:564 lists it in the always-allowed prefix table (ret=1) regardless of privilege; the real gate lives in host_cmd.c\'s Kick_f (unlanded). Documented discrepancy from a naive "kick should be refused" expectation.', () => {
-    let kickRan = false;
-    Cmd_AddCommand("kick", () => {
-      kickRan = true;
-    });
+  test('an unprivileged "kick" still dispatches -- sv_user.c:564 lists it in the always-allowed prefix table (ret=1) regardless of privilege; the real gate lives in host_cmd.c\'s Kick_f, landed since this test was written. Documented discrepancy from a naive "kick should be refused" expectation.', () => {
+    // Same reasoning as the "status" test above: host_cmd.ts's Host_Kick_f
+    // is now landed and permanently registered the moment any suite in this
+    // process has booted for real, so assert through cmdState.source
+    // (sv_user.ts's own dispatch decision) rather than a handler this test
+    // installs, which may never run.
+    cmdState.source = CmdSourceT.src_command;
 
     sendStringcmd(client, "kick somebody");
     expect(SV_ReadClientMessage()).toBe(true);
-    expect(kickRan).toBe(true);
+    expect(currentCmdSource()).toBe(CmdSourceT.src_client);
   });
 
   test("an unprivileged command NOT on the allow-list is refused (no dispatch)", () => {
@@ -537,15 +560,27 @@ describe("SV_RunClients", () => {
     host.frametime = 0.1;
     sv.time = 100;
     sv.paused = false;
-    expect(svUserHooks.keyDestIsGame).toBeNull();
+    // src/client/keys.ts installs the real hook (`() => keyState.key_dest ===
+    // KeydestT.key_game`) at module load, the moment anything in this
+    // process imports it (src/main.ts does, so any suite that boots through
+    // Sys_Main_Init pulls it in); this test's own subject is the hook-absent
+    // fallback (sv_user.ts defaults `keyDestIsGame` to true when the hook
+    // isn't installed), so force that precondition here instead of assuming
+    // it's still unset process-wide (rule 15).
+    const savedKeyDestIsGame = svUserHooks.keyDestIsGame;
+    svUserHooks.keyDestIsGame = null;
 
     svs.maxclients = 1;
     svs.clients = [runClient];
 
-    SV_RunClients();
+    try {
+      SV_RunClients();
 
-    const speed = Math.hypot(player.v.velocity[0], player.v.velocity[1], player.v.velocity[2]);
-    expect(speed).toBeGreaterThan(0);
+      const speed = Math.hypot(player.v.velocity[0], player.v.velocity[1], player.v.velocity[2]);
+      expect(speed).toBeGreaterThan(0);
+    } finally {
+      svUserHooks.keyDestIsGame = savedKeyDestIsGame;
+    }
   });
 
   test("SV_RunClients does not run SV_ClientThink while sv.paused", () => {

@@ -48,12 +48,19 @@ const { host } = hostMod;
 
 const { V_CalcBob, V_CalcRoll, V_CalcPowerupCshift, V_ParseDamage } = viewMod;
 
+// resetState()'s own beforeEach baseline (below) parks cls.state at
+// ca_active for every test in this file, but nothing ever puts it back
+// afterward -- the last test to run here leaves cls.state at whatever it set
+// beyond that baseline for the rest of this bun process (rule 15). Snapshot
+// captured before any beforeEach/test runs, restored in this file's afterAll.
+const savedClsState = cls.state;
+
 //=============================================================================
 // A recording Renderer, same shape as test/screen.test.ts / test/view.test.ts.
 
 const hooks: ModelLoaderHooks = {
   notexture: new modelMod.TextureT(),
-  Mod_LoadTextures(): void {},
+  textureLoaded(): void {},
   Mod_LoadLighting(): void {},
   Mod_LoadAliasModel(): void {},
   Mod_LoadSpriteModel(): void {},
@@ -167,6 +174,7 @@ beforeAll(() => {
 
 afterAll(() => {
   qw.active = false;
+  cls.state = savedClsState;
 });
 
 function resetState(): void {

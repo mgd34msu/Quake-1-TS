@@ -212,6 +212,25 @@ function setCvar(cvar: CvarT, value: number): void {
   cvar.string = String(value);
 }
 
+// A `{string, value}` pair, not just `.value`: this suite's own module-load
+// snapshot below runs before test/screen.test.ts's own SCR_Init() (or any
+// other suite's) call ever registers scr_viewsize/scr_fov for real, so
+// `.value` reads 0 (CvarT's own "a cvar is 0 until registered, same as the
+// C" default) while `.string` already carries the real default ("100"/"90")
+// from the CvarT constructor. Restoring through `setCvar(cvar, n)` (which
+// re-derives `.string` from the number `n`) would overwrite that correct
+// "100"/"90" string with "0", and once some suite finally does call the
+// real SCR_Init(), Cvar_RegisterVariable parses that clobbered "0" as if it
+// were the shipped default, permanently, since it only ever registers a
+// name once (rule 15).
+function savedCvar(cvar: CvarT): { string: string; value: number } {
+  return { string: cvar.string, value: cvar.value };
+}
+function restoreCvar(cvar: CvarT, saved: { string: string; value: number }): void {
+  cvar.string = saved.string;
+  cvar.value = saved.value;
+}
+
 const scratchDir = join(import.meta.dir, ".scratch-ref-gl-assembly");
 const baseDir = join(scratchDir, "quake");
 
@@ -249,12 +268,12 @@ const savedScr = {
   block_drawing: scrState.block_drawing,
 };
 const savedCvars = {
-  viewsize: scr_viewsize.value,
-  fov: scr_fov.value,
-  crosshair: crosshair.value,
-  triplebuffer: gl_triplebuffer.value,
-  cshiftpercent: gl_cshiftpercent.value,
-  gamma: v_gamma.value,
+  viewsize: savedCvar(scr_viewsize),
+  fov: savedCvar(scr_fov),
+  crosshair: savedCvar(crosshair),
+  triplebuffer: savedCvar(gl_triplebuffer),
+  cshiftpercent: savedCvar(gl_cshiftpercent),
+  gamma: savedCvar(v_gamma),
   vid_ref: vid_ref.string,
 };
 const savedCl = {
@@ -339,12 +358,12 @@ afterAll(() => {
   r_refdef.fov_x = 0;
   r_refdef.fov_y = 0;
 
-  setCvar(scr_viewsize, savedCvars.viewsize);
-  setCvar(scr_fov, savedCvars.fov);
-  setCvar(crosshair, savedCvars.crosshair);
-  setCvar(gl_triplebuffer, savedCvars.triplebuffer);
-  setCvar(gl_cshiftpercent, savedCvars.cshiftpercent);
-  setCvar(v_gamma, savedCvars.gamma);
+  restoreCvar(scr_viewsize, savedCvars.viewsize);
+  restoreCvar(scr_fov, savedCvars.fov);
+  restoreCvar(crosshair, savedCvars.crosshair);
+  restoreCvar(gl_triplebuffer, savedCvars.triplebuffer);
+  restoreCvar(gl_cshiftpercent, savedCvars.cshiftpercent);
+  restoreCvar(v_gamma, savedCvars.gamma);
   vid_ref.string = savedCvars.vid_ref;
 
   cl.intermission = savedCl.intermission;

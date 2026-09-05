@@ -196,8 +196,11 @@ export function NET_StringToAdr(s: string, a: NetadrT): boolean {
 
   const firstChar = host.charCodeAt(0);
   if (firstChar < 48 || firstChar > 57) {
-    // gethostbyname path -- not supported, see file header
-    return false;
+    // gethostbyname path: Bun has no synchronous resolver, so only the
+    // loopback name resolves here (see file header); other names fail as
+    // the C does for an unknown host.
+    if (host !== "localhost") return false;
+    host = "127.0.0.1";
   }
 
   const ip = stringToIpBytes(host);
@@ -278,7 +281,9 @@ async function UDP_OpenSocket(port: number): Promise<UdpSocket> {
         rxQueue.push({ data: new Uint8Array(data), port: fromPort, address: fromAddress });
       },
       error(_sock, error) {
-        Sys_Printf("NET_GetPacket: %s\n", error.message);
+        // Bun reports ECONNREFUSED (the C's recvfrom errno on an ICMP port
+        // unreachable) with no error object at all.
+        Sys_Printf("NET_GetPacket: %s\n", error instanceof Error ? error.message : String(error));
       },
     },
   });

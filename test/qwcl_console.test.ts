@@ -29,7 +29,7 @@
 // shared `cvar_vars` chain, so the loser's own CvarT object never gets its
 // `.value` set by registration).
 
-import { describe, test, expect, beforeEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterAll } from "bun:test";
 import {
   Con_Init,
   Con_CheckResize,
@@ -53,6 +53,20 @@ import { re, type Renderer } from "../src/client/render";
 import { TextureT } from "../src/common/model";
 import { FileHandle, COM_InitArgv } from "../src/common/common";
 import { clMainState } from "../src/qw/client/cl_main";
+
+// This file's own beforeEach (below) parks cls.state at ca_active for every
+// test, but every other field it touches there is reset back to its own
+// pristine default each time (cls.qw.download/downloadname/downloadpercent,
+// keyState.*, re.current, conState.con_ormask) -- cls.state is the one
+// exception, and nothing ever puts it back to ca_dedicated afterward, so the
+// last test to run here leaks ca_active into the rest of this bun process
+// (rule 15). Snapshot captured before any beforeEach/test runs, restored in
+// a top-level afterAll.
+const savedClsState = cls.state;
+
+afterAll(() => {
+  cls.state = savedClsState;
+});
 
 interface DrawCharacterCall {
   x: number;
@@ -85,7 +99,7 @@ function makeFakeRenderer(): { renderer: Renderer; draws: DrawCharacterCall[]; s
   const renderer: Renderer = {
     modelHooks: {
       notexture: new TextureT(),
-      Mod_LoadTextures: () => {},
+      textureLoaded: () => {},
       Mod_LoadLighting: () => {},
       Mod_LoadAliasModel: () => {},
       Mod_LoadSpriteModel: () => {},

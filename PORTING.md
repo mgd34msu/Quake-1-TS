@@ -84,9 +84,12 @@ trimmed server-only loader and is the proof of where the line falls.
   and the brush lumps every consumer needs (`Mod_LoadVertexes`, `Edges`, `Planes`,
   `Nodes`, `Leafs`, `Clipnodes`, `Submodels`, `Entities`, `Visibility`, `Mod_MakeHull0`,
   `Mod_SetParent`). `model_t`'s fields are the union of `model.h` and `gl_model.h`.
-- The active renderer installs a `ModelLoaderHooks` object (`Mod_LoadTextures`,
-  `Mod_LoadLighting`, `Mod_LoadFaces`/`Texinfo`/`Marksurfaces`/`Surfedges` where they
-  differ, `Mod_LoadAliasModel`, `Mod_LoadSpriteModel`, `GL_SubdivideSurface`).
+- The active renderer installs a `ModelLoaderHooks` object (`textureLoaded`
+  (the one per-renderer step inside the now-shared, unconditional
+  `Mod_LoadTextures` -- WinQuake links it into the dedicated server too, so
+  it always runs and cannot be a hook itself), `Mod_LoadLighting`,
+  `Mod_LoadFaces`/`Texinfo`/`Marksurfaces`/`Surfedges` where they differ,
+  `Mod_LoadAliasModel`, `Mod_LoadSpriteModel`, `GL_SubdivideSurface`).
   `src/ref_soft/model.ts` and `src/ref_gl/gl_model.ts` are those two hook sets, each
   ported from its own C file. With no renderer installed (dedicated), alias and
   sprite loads populate only `mins/maxs/flags/numframes/type`, which is what
@@ -217,6 +220,12 @@ allocation-free wrappers:
 - `rand()`/`random()` → `Math.random()`-backed helpers in `mathlib.ts`.
 - File I/O: `node:fs` sync calls only in `src/platform` and `src/common/common.ts`
   (`COM_*File*`, PAK parsing per `common.c`'s `pack_t`/`dpackfile_t`).
+- Game directory / pak case-insensitivity: id Software's own distribution ships
+  `Id1/PAK0.PAK`; the C built `%s/id1` and `pak%i.pak` lowercase and relied on
+  DOS/Windows case-insensitivity, so `COM_AddGameDirectory` (and QW's
+  `COM_Gamedir`) resolve the game directory and each `pak%i.pak` through
+  `Sys_ResolveCase` (`src/platform/sys.ts`) on this case-sensitive target;
+  `COM_FindFile`'s loose-file lookup stays case-sensitive, matching the C.
 - `Sys_FloatTime` → monotonic clock in `src/platform/sys.ts`, seconds as double.
 - CD audio → `cd_ogg.ts`; the physical CD is replaced by `music/NN.ogg` rips
   (Quake tracks 2–11; mission packs have their own).

@@ -65,6 +65,7 @@ import {
   Mod_ClearAll,
   Mod_ForName,
   Mod_Init,
+  Mod_LoadTextures,
   setModelLoaderHooks,
 } from "../src/common/model";
 import { MplaneT } from "../src/common/mathlib";
@@ -81,13 +82,13 @@ import {
   Mod_LoadSpriteFrame,
   Mod_LoadSpriteGroup,
   Mod_LoadSpriteModel,
-  Mod_LoadTextures,
   R_InitTextures,
   afterBrushLoad,
   glModelHooks,
   notexture,
   pheader,
   poseverts,
+  textureLoaded,
 } from "../src/ref_gl/gl_model";
 import * as glDraw from "../src/ref_gl/gl_draw";
 import * as glWarp from "../src/ref_gl/gl_warp";
@@ -280,13 +281,18 @@ afterAll(() => {
 
 //============================================================================
 
+// Mod_LoadTextures itself is src/common/model.ts's now (shared with the
+// software renderer and the dedicated server, see that file's header); only
+// the per-texture step below (`textureLoaded`) is this renderer's own code,
+// so these tests drive the shared function with `glModelHooks.textureLoaded`
+// to keep exercising it exactly as Mod_LoadBrushModel would with GL installed.
 describe("Mod_LoadTextures (direct)", () => {
   test("a non-sky texture gets a gl_texturenum from the GL_LoadTexture spy", () => {
     const bytes = buildTexturesLump([{ name: "bsptest", width: 16, height: 16 }]);
     const mod = new ModelT();
     loadState.loadname = "test";
 
-    Mod_LoadTextures(mod, bytes, lumpOf(bytes));
+    Mod_LoadTextures(mod, bytes, lumpOf(bytes), textureLoaded);
 
     expect(mod.numtextures).toBe(1);
     const tx = mod.textures?.[0];
@@ -302,7 +308,7 @@ describe("Mod_LoadTextures (direct)", () => {
     const mod = new ModelT();
     loadState.loadname = "test";
 
-    Mod_LoadTextures(mod, bytes, lumpOf(bytes));
+    Mod_LoadTextures(mod, bytes, lumpOf(bytes), textureLoaded);
 
     const tx = mod.textures?.[0];
     if (!tx) throw new Error("expected a loaded texture");
@@ -312,11 +318,25 @@ describe("Mod_LoadTextures (direct)", () => {
     expect(glDraw.GL_LoadTexture).not.toHaveBeenCalled();
   });
 
+  test("with no callback installed (dedicated server), textures still load with no renderer side effects", () => {
+    const bytes = buildTexturesLump([{ name: "sky1", width: 16, height: 16 }]);
+    const mod = new ModelT();
+    loadState.loadname = "test";
+
+    Mod_LoadTextures(mod, bytes, lumpOf(bytes), null);
+
+    const tx = mod.textures?.[0];
+    if (!tx) throw new Error("expected a loaded texture");
+    expect(tx.name).toBe("sky1");
+    expect(glWarp.R_InitSky).not.toHaveBeenCalled();
+    expect(glDraw.GL_LoadTexture).not.toHaveBeenCalled();
+  });
+
   test("a non-16-aligned texture is a Sys_Error", () => {
     const bytes = buildTexturesLump([{ name: "odd", width: 15, height: 16 }]);
     const mod = new ModelT();
     loadState.loadname = "test";
-    expect(() => Mod_LoadTextures(mod, bytes, lumpOf(bytes))).toThrow(SysError);
+    expect(() => Mod_LoadTextures(mod, bytes, lumpOf(bytes), textureLoaded)).toThrow(SysError);
   });
 
   test("an empty lump leaves mod.textures null", () => {
@@ -324,7 +344,7 @@ describe("Mod_LoadTextures (direct)", () => {
     const l = new LumpT();
     l.fileofs = 0;
     l.filelen = 0;
-    Mod_LoadTextures(mod, new Uint8Array(0), l);
+    Mod_LoadTextures(mod, new Uint8Array(0), l, textureLoaded);
     expect(mod.textures).toBeNull();
     expect(mod.numtextures).toBe(0);
   });
@@ -338,7 +358,7 @@ describe("Mod_LoadTextures: animation sequencing", () => {
     ]);
     const mod = new ModelT();
     loadState.loadname = "test";
-    Mod_LoadTextures(mod, bytes, lumpOf(bytes));
+    Mod_LoadTextures(mod, bytes, lumpOf(bytes), textureLoaded);
 
     const tx0 = mod.textures?.[0];
     const tx1 = mod.textures?.[1];
@@ -356,7 +376,7 @@ describe("Mod_LoadTextures: animation sequencing", () => {
 
     let caught: unknown = null;
     try {
-      Mod_LoadTextures(mod, bytes, lumpOf(bytes));
+      Mod_LoadTextures(mod, bytes, lumpOf(bytes), textureLoaded);
     } catch (e) {
       caught = e;
     }

@@ -496,6 +496,51 @@ describe("COM_InitFilesystem / COM_Gamedir", () => {
     COM_Gamedir("a/b");
     expect(gamedirfile).toBe(before);
   });
+
+  // id Software's own distribution ships the game directory as Id1/PAK0.PAK
+  // (mixed case; see src/common/common.ts's COM_AddGameDirectory comment).
+  // This module's own COM_InitFilesystem calls COM_AddGameDirectory("id1")
+  // then COM_AddGameDirectory("qw") -- qw is added last, so it ends up the
+  // current com_gamedir, exactly as the "search order" test above asserts
+  // for the matching-case default directories.
+  test("COM_InitFilesystem resolves id Software's own mixed-case distribution (Id1/PAK0.PAK), com_gamedir ends with /Qw", () => {
+    const baseDir = join(scratchDir, "realdist-qw");
+    ensureDir(join(baseDir, "Id1"));
+    ensureDir(join(baseDir, "Qw"));
+    writePakToDisk(join(baseDir, "Id1", "PAK0.PAK"), [{ name: "gfx/pop.lmp", data: new Uint8Array([9, 9, 9, 9]) }]);
+
+    COM_InitArgv(["quake", "-basedir", baseDir]);
+    COM_InitFilesystem();
+
+    expect(gamedirfile).toBe("qw");
+    expect(com_gamedir).toBe(join(baseDir, "Qw"));
+    expect(com_gamedir.endsWith("/Qw")).toBe(true);
+
+    // Id1/ is still on the search path underneath Qw/, reached through the
+    // resolved PAK0.PAK
+    const data = COM_LoadHunkFile("gfx/pop.lmp");
+    if (data === null) throw new Error("expected gfx/pop.lmp to be found inside Id1/PAK0.PAK");
+    expect(Array.from(data.subarray(0, 4))).toEqual([9, 9, 9, 9]);
+  });
+
+  // "Qw"-style casing: a non-default gamedir whose real on-disk name is
+  // mixed-case, requested (as a real QW server would) in plain lowercase.
+  test("COM_Gamedir resolves a mismatched-case gamedir directory (real disk dir 'Ctf', requested 'ctf')", () => {
+    const baseDir = makeBaseDir("gamedircasing");
+    ensureDir(join(baseDir, "Ctf"));
+    writeLoose(join(baseDir, "Ctf", "marker.txt"), "CTF");
+
+    COM_InitArgv(["quake", "-basedir", baseDir]);
+    COM_InitFilesystem();
+
+    COM_Gamedir("ctf");
+    expect(gamedirfile).toBe("ctf");
+    expect(com_gamedir).toBe(join(baseDir, "Ctf"));
+
+    const data = COM_LoadHunkFile("marker.txt");
+    if (data === null) throw new Error("expected marker.txt to resolve inside Ctf/ despite the case mismatch");
+    expect(bytesToLatin1(data)).toBe("CTF");
+  });
 });
 
 //============================================================================

@@ -101,6 +101,13 @@ const savedCvars = [cl_nopred, cl_pushlatency, cl_predict_players, cl_predict_pl
   (c) => ({ c, value: c.value, string: c.string }),
 );
 
+// resetAll() (below) parks cls.state at ca_active as this file's own
+// beforeEach/afterAll baseline, not the pristine ca_dedicated default --
+// snapshotted here, before resetAll ever runs, and put back after afterAll's
+// own resetAll() call so this file's real exit state matches what was there
+// before it ran (rule 15).
+const savedClsState = cls.state;
+
 // Read cls.state without control-flow narrowing: a test that assigns
 // cls.state a literal and then asserts a different member would otherwise
 // compare two disjoint literal types.
@@ -267,6 +274,7 @@ afterAll(() => {
   }
   setComSearchpaths(null);
   setComModified(false);
+  cls.state = savedClsState;
 });
 
 //============================================================================

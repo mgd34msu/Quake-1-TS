@@ -25,7 +25,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { COM_CheckRegistered, COM_InitArgv, COM_InitFilesystem, pop } from "../src/common/common";
+import { COM_CheckRegistered, COM_InitArgv, COM_InitFilesystem, pop, setStaticRegistered, static_registered } from "../src/common/common";
 import { HostEndGame, HostError } from "../src/common/host";
 import { Mod_Init, TextureT, setModelLoaderHooks, type ModelLoaderHooks } from "../src/common/model";
 import { ClcOpsT, PROTOCOL_VERSION, SU_ITEMS, SU_VIEWHEIGHT, SvcOpsT, U_FRAME, U_MOREBITS, U_ORIGIN1 } from "../src/common/protocol";
@@ -66,7 +66,7 @@ const baseDir = join(scratchDir, "quake");
 function makeFakeRenderer(): Renderer & { newMapCalls: number; addEfragsCalls: EntityT[]; translateSkinCalls: number[] } {
   const hooks: ModelLoaderHooks = {
     notexture: new TextureT(),
-    Mod_LoadTextures(): void {},
+    textureLoaded(): void {},
     Mod_LoadLighting(): void {},
     Mod_LoadAliasModel(): void {},
     Mod_LoadSpriteModel(): void {},
@@ -155,6 +155,12 @@ function makeFakeRenderer(): Renderer & { newMapCalls: number; addEfragsCalls: E
 
 let fakeRenderer: ReturnType<typeof makeFakeRenderer>;
 
+// static_registered (src/common/common.ts) is sticky module state: this
+// suite's COM_CheckRegistered() call below sets it from the fixture's
+// gfx/pop.lmp, and nothing else in this process resets it afterward
+// (rule 15), so save/restore it around the suite ourselves.
+const savedStaticRegistered = static_registered;
+
 beforeAll(() => {
   ensureDir(join(baseDir, "id1"));
 
@@ -195,6 +201,11 @@ afterAll(() => {
   setModelLoaderHooks(null);
   re.current = null;
   rmSync(scratchDir, { recursive: true, force: true });
+  // The svc_signonnum test below writes a queued "prespawn" clc_stringcmd
+  // into cls.message and nothing clears it afterward, leaking a nonzero
+  // cursize into the rest of this bun process (rule 15).
+  SZ_Clear(cls.message);
+  setStaticRegistered(savedStaticRegistered);
 });
 
 // Builds a message via MSG_Write* into a scratch SizeBuf, then copies it

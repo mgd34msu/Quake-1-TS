@@ -17,7 +17,7 @@
 // eventually Sys_Quit, which really exits the process) is never exercised
 // here.
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -46,6 +46,17 @@ import * as menu from "../src/client/menu";
 // is 0). Host_Init calls this in the real engine; this test does it directly.
 Cbuf_Init();
 
+// resetMenuState() (below) parks cls.state at ca_disconnected as this file's
+// own beforeEach baseline, not the pristine ca_dedicated default, and this
+// file has no afterAll to put it back -- the last test to run here leaks
+// ca_disconnected into the rest of this bun process (rule 15). Snapshot
+// captured before resetMenuState ever runs, restored below.
+const savedClsState = cls.state;
+
+afterAll(() => {
+  cls.state = savedClsState;
+});
+
 //=============================================================================
 // A minimal recording Renderer (only Draw_* -- menu.c never touches the
 // render.h/view.c/screen.c seam methods).
@@ -59,7 +70,7 @@ const drawCalls: Array<{ fn: string; args: unknown[] }> = [];
 
 const modelHooks: ModelLoaderHooks = {
   notexture: { name: "", width: 0, height: 0, gl_texturenum: 0, texturechain: null, anim_total: 0, anim_min: 0, anim_max: 0, anim_next: null, alternate_anims: null, offsets: new Uint32Array(4), data: new Uint8Array(0) },
-  Mod_LoadTextures(): void {},
+  textureLoaded(): void {},
   Mod_LoadLighting(): void {},
   Mod_LoadAliasModel(): void {},
   Mod_LoadSpriteModel(): void {},
@@ -165,7 +176,15 @@ function resetMenuState(): void {
   vid.width = 320;
   vid.height = 200;
 
+  // host.oldrealtime paired with host.realtime: Host_FilterTime (host.ts)
+  // gates every frame on `host.realtime - host.oldrealtime >= 1/72`, so
+  // zeroing realtime alone leaves oldrealtime at whatever an earlier suite's
+  // own Host_Frame calls last set it to -- a stale, larger oldrealtime makes
+  // that difference deeply negative, and every later suite's first frame
+  // (any dedicated/qwsv/qwcl boot that calls Host_Frame once with a small
+  // synthetic timestep) silently no-ops forever after (rule 15).
   host.realtime = 0;
+  host.oldrealtime = 0;
   host.time = 0;
 
   keyState.key_dest = KeydestT.key_game;

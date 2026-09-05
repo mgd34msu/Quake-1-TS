@@ -13,6 +13,7 @@ import {
   PR_StackTrace,
   pr_opnames,
   prExec,
+  getBuiltins,
   setBuiltins,
 } from "../src/progs/pr_exec";
 import { ENTVARS_OFS, ENTVARS_SIZE_WORDS, GlobalVars } from "../src/progs/progdefs";
@@ -84,6 +85,12 @@ function makeFunction(
 }
 
 let savedNostdout = 0;
+// src/progs/pr_cmds.ts installs the real builtin table at module load
+// (a side-effect import reached through src/main.ts, among others); every
+// test below installs its own hand-built stand-in table via setBuiltins
+// and none of them ever put the real one back, permanently truncating
+// pr_builtins for the rest of this bun process (rule 15) -- restore it here.
+const savedBuiltins = getBuiltins();
 
 beforeAll(() => {
   // PR_RunError and PR_PrintStatement print through Con_Printf -> Sys_Printf;
@@ -94,6 +101,7 @@ beforeAll(() => {
 
 afterAll(() => {
   sysState.nostdout = savedNostdout;
+  setBuiltins(savedBuiltins);
 });
 
 beforeEach(() => {
@@ -122,6 +130,16 @@ beforeEach(() => {
   setBuiltins([]);
   prExec.trace = false;
   prExec.argc = 0;
+  // prExec (src/progs/pr_exec.ts) is a process-wide singleton; depth/
+  // xfunction/xstatement are PR_EnterFunction/PR_ExecuteProgram's own
+  // call-stack bookkeeping, which a test elsewhere in this process may have
+  // left unbalanced (an error path that doesn't unwind, or another suite's
+  // own PR_ExecuteProgram call still "in progress" as far as this state is
+  // concerned) -- reset the full baseline here rather than assume depth is
+  // still 0 (rule 15).
+  prExec.depth = 0;
+  prExec.xfunction = null;
+  prExec.xstatement = 0;
 });
 
 describe("pr_opnames", () => {

@@ -297,7 +297,7 @@ Deviations from PORTING.md / the C source:
   WinQuake's `registered`; QW never registers a `cmdline` cvar (see above).
 */
 
-import { Sys_Error, Sys_Printf, Sys_FileOpenRead, Sys_FileOpenWrite, Sys_FileClose, Sys_FileSeek, Sys_FileRead, Sys_FileWrite, Sys_FileTime, Sys_mkdir } from "../platform/sys";
+import { Sys_Error, Sys_Printf, Sys_FileOpenRead, Sys_FileOpenWrite, Sys_FileClose, Sys_FileSeek, Sys_FileRead, Sys_FileWrite, Sys_FileTime, Sys_mkdir, Sys_ResolveCase } from "../platform/sys";
 import { Con_Printf } from "../client/console";
 import { Cache_Flush } from "../common/zone";
 import { Cmd_AddCommand } from "../common/cmd";
@@ -451,71 +451,11 @@ export type { ParseState };
 
 //============================================================================
 // COM_Parse -- QW drops the WinQuake single-char-token special case ('{' '}'
-// ')' '(' '\'' ':' no longer parse as standalone one-character tokens; see
-// QW/client/common.c's COM_Parse, which has no such branch at all).
+// ')' '(' '\'' ':'); that branch is gated on !qw.active in the shared
+// src/common/common.ts COM_Parse, re-exported below.
 
-function byteAt(data: string, i: number): number {
-  return i < data.length ? data.charCodeAt(i) & 0xff : 0;
-}
-function signedByteAt(data: string, i: number): number {
-  const b = byteAt(data, i);
-  return b >= 128 ? b - 256 : b;
-}
 
-export function COM_Parse(ps: ParseState): string | null {
-  const data = ps.data;
-  let i = ps.index;
-
-  for (;;) {
-    // skip whitespace
-    let c = signedByteAt(data, i);
-    while (c <= 32) {
-      if (c === 0) {
-        ps.index = i;
-        return null; // end of file
-      }
-      i++;
-      c = signedByteAt(data, i);
-    }
-
-    // skip // comments
-    if (byteAt(data, i) === 47 && byteAt(data, i + 1) === 47) {
-      while (byteAt(data, i) !== 0 && byteAt(data, i) !== 10) i++;
-      continue; // goto skipwhite
-    }
-
-    break;
-  }
-
-  const c0 = byteAt(data, i);
-
-  // handle quoted strings specially
-  if (c0 === 34 /* '"' */) {
-    i++;
-    let token = "";
-    for (;;) {
-      const c = byteAt(data, i);
-      i++;
-      if (c === 34 || c === 0) {
-        ps.index = i;
-        return token;
-      }
-      token += String.fromCharCode(c);
-    }
-  }
-
-  // parse a regular word (no single-char token special case, unlike WinQuake)
-  let token = "";
-  let c = c0;
-  do {
-    token += String.fromCharCode(c);
-    i++;
-    c = byteAt(data, i);
-  } while (signedByteAt(data, i) > 32);
-
-  ps.index = i;
-  return token;
-}
+export { COM_Parse } from "../common/common";
 
 //============================================================================
 //
@@ -869,6 +809,9 @@ export function COM_AddGameDirectory(dir: string): void {
   // (unreachable here, every call site passes a dir containing '/'); see file header
   const slashIdx = dir.lastIndexOf("/");
   gamedirfile = slashIdx === -1 ? dir : dir.slice(slashIdx + 1);
+
+  // Port deviation (Linux target): the C relies on a case-insensitive filesystem
+  dir = Sys_ResolveCase(dir);
   setComGamedir(dir);
 
   // add the directory to the search path
@@ -876,7 +819,8 @@ export function COM_AddGameDirectory(dir: string): void {
 
   // add any pak files in the format pak0.pak pak1.pak, ...
   for (let i = 0; ; i++) {
-    const pakfile = `${dir}/pak${i}.pak`;
+    // Port deviation (Linux target): the C relies on a case-insensitive filesystem
+    const pakfile = Sys_ResolveCase(`${dir}/pak${i}.pak`);
     const pak = COM_LoadPackFile(pakfile);
     if (!pak) break;
     setComSearchpaths({ kind: "pack", pack: pak, next: com_searchpaths });
@@ -915,7 +859,8 @@ export function COM_Gamedir(dir: string): void {
 
   if (dir === "id1" || dir === "qw") return;
 
-  setComGamedir(`${com_basedir}/${dir}`);
+  // Port deviation (Linux target): the C relies on a case-insensitive filesystem
+  setComGamedir(Sys_ResolveCase(`${com_basedir}/${dir}`));
 
   //
   // add the directory to the search path
@@ -926,7 +871,8 @@ export function COM_Gamedir(dir: string): void {
   // add any pak files in the format pak0.pak pak1.pak, ...
   //
   for (let i = 0; ; i++) {
-    const pakfile = `${com_gamedir}/pak${i}.pak`;
+    // Port deviation (Linux target): the C relies on a case-insensitive filesystem
+    const pakfile = Sys_ResolveCase(`${com_gamedir}/pak${i}.pak`);
     const pak = COM_LoadPackFile(pakfile);
     if (!pak) break;
     setComSearchpaths({ kind: "pack", pack: pak, next: com_searchpaths });

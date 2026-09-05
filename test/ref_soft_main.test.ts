@@ -15,6 +15,7 @@ import { unregisterRenderer } from "../src/platform/vid";
 import { CalcFov, scr_fov, scr_viewsize } from "../src/client/screen";
 import { lcd_x } from "../src/client/view";
 import { AMP, AMP2, SIN_BUFFER_SIZE, intsintable, modelorg, r_frustum_indexes, rState, screenedge, sintable, view_clipplanes } from "../src/ref_soft/r_local";
+import { dState } from "../src/ref_soft/d_local";
 import {
   R_Init,
   R_InitTurb,
@@ -108,6 +109,16 @@ const savedRInit = hostClientHooks.rInit;
 const savedRInitTextures = hostClientHooks.rInitTextures;
 const savedDrawInit = hostClientHooks.drawInit;
 const savedRViewVectors = hostClientHooks.rViewVectors;
+// The "R_RenderView" describe block below drives a real R_Init/R_ViewChanged/
+// R_RenderView frame, which mutates most of r_shared.ts's `rState` (bumps
+// r_framecount, sets xcenter/yscale/r_viewleaf/..., allocates d_pzbuffer) and
+// d_local.ts's `dState` (D_InitCaches fills in sc_heap/sc_base/sc_rover/
+// sc_size) in place -- both are process-wide singletons every other ref_soft
+// suite reads (test/ref_soft_types.test.ts's own "every field carries its C
+// initial value" check in particular), so restore both fully rather than
+// picking individual fields (rule 15).
+const savedRState = { ...rState };
+const savedDState = { ...dState };
 
 /*
 A cvar's `value` is 0 until Cvar_RegisterVariable or Cvar_Set fills it in, the
@@ -180,7 +191,8 @@ afterAll(() => {
   scrState.sb_lines = 0;
   vid.colormap = savedColormap;
   vid.fullbright = savedFullbright;
-  rState.d_pzbuffer = null;
+  Object.assign(rState, savedRState);
+  Object.assign(dState, savedDState);
   cl_entities[0].model = null;
   cl.viewentity = 0;
   cl.maxclients = 0;

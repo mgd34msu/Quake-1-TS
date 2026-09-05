@@ -105,12 +105,19 @@ const baseDir = join(scratchDir, "quake");
 const startSoundSpy = spyOn(sndDma, "S_StartSound");
 const sendPacketSpy = spyOn(netUdp, "NET_SendPacket");
 
+// This file's header claims cls is "restored afterward", but its own
+// afterAll (below) never puts cls.state back -- beforeEach parks it at
+// ca_disconnected and individual tests move it to ca_active, so the last
+// test to run here leaks that value into the rest of this bun process (rule
+// 15). Snapshot captured before any beforeEach/test runs, restored below.
+const savedClsState = cls.state;
+
 // A do-nothing Renderer with a few counters, the same shape
 // test/cl_parse.test.ts's makeFakeRenderer uses.
 function makeFakeRenderer(): Renderer & { newMapCalls: number; addEfragsCalls: EntityT[]; translateSkinCalls: number[] } {
   const hooks: ModelLoaderHooks = {
     notexture: new TextureT(),
-    Mod_LoadTextures(): void {},
+    textureLoaded(): void {},
     Mod_LoadLighting(): void {},
     Mod_LoadAliasModel(): void {},
     Mod_LoadSpriteModel(): void {},
@@ -232,7 +239,11 @@ beforeAll(() => {
 
   // the five obfuscated command names are XORed at rest and decoded once by
   // Host_Init; this suite reads soundlist/modellist/prespawn through them.
-  Host_FixupModelNames();
+  // The XOR is its own inverse and modelNames is a shared singleton across
+  // every test file in this bun process (rule 15) -- guarded, per
+  // test/qwcl_render.test.ts's own precedent, so running after another suite
+  // that already fixed it up doesn't re-XOR it back to gibberish.
+  if (modelNames.soundlist_name !== "soundlist %i %i") Host_FixupModelNames();
 });
 
 afterAll(() => {
@@ -248,6 +259,7 @@ afterAll(() => {
   startSoundSpy.mockRestore();
   sendPacketSpy.mockRestore();
   rmSync(scratchDir, { recursive: true, force: true });
+  cls.state = savedClsState;
 });
 
 beforeEach(() => {

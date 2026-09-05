@@ -65,7 +65,7 @@ const {
 
 const hooks: ModelLoaderHooks = {
   notexture: new TextureTClass(),
-  Mod_LoadTextures(): void {},
+  textureLoaded(): void {},
   Mod_LoadLighting(): void {},
   Mod_LoadAliasModel(): void {},
   Mod_LoadSpriteModel(): void {},

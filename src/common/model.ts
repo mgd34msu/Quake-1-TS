@@ -26,9 +26,21 @@ against gl_model.c:
     Mod_LoadTexinfo, Mod_SetParent, Mod_LoadClipnodes, Mod_MakeHull0,
     Mod_LoadMarksurfaces, Mod_LoadSurfedges, Mod_LoadPlanes,
     RadiusFromBounds
+  identical except for one step, so that step alone is the ModelLoaderHooks
+  entry, not the whole function -- WinQuake links Mod_LoadTextures into
+  every build, dedicated server included, so the table build and the flags
+  it produces must run on every path, not only when a renderer installs
+  itself. Ported unconditionally, called straight from Mod_LoadBrushModel:
+    Mod_LoadTextures      (model.c calls R_InitSky(tx) for "sky*" names
+                           only, right after each texture's pixels are
+                           copied; gl_model.c calls R_InitSky(tx) for "sky*"
+                           and GL_LoadTexture(tx) for everything else. That
+                           one step is `ModelLoaderHooks.textureLoaded`,
+                           called once per non-null texture; with no
+                           renderer installed it is null and the step is
+                           skipped, exactly as the alias/sprite loaders skip
+                           their renderer-only fields with no hooks.)
   differ, so they are ModelLoaderHooks entries:
-    Mod_LoadTextures      (gl_model.c adds the GL_LoadTexture else-branch
-                           after the "sky" check)
     Mod_LoadFaces         (gl_model.c calls GL_SubdivideSurface for sky and
                            turbulent surfaces; its CalcSurfaceExtents caps
                            extents at 512 instead of 256)
@@ -84,16 +96,23 @@ Deviations from PORTING.md / the C source:
     from pointer differences.
 - `r_notexture_mip` is a renderer global (r_local.h / glquake.h), so
   Mod_LoadTexinfo cannot name it. It is `ModelLoaderHooks.notexture`; with no
-  hooks installed (dedicated server) the texture stays null, which is the
-  state QW/server/model.c's server also tolerates. Mod_LoadFaces therefore
-  treats a null texture as an empty name, so the SURF_DRAWSKY/SURF_DRAWTURB
-  classification is skipped on the dedicated path -- nothing the server reads
-  depends on it.
-- With no hooks installed, Mod_LoadBrushModel skips Mod_LoadTextures and
-  Mod_LoadLighting entirely (model->textures and model->lightdata stay null,
-  the same state the C reaches for a BSP with empty texture/lighting lumps),
-  and the alias and sprite loaders fill in only type/numframes/synctype/
-  flags/mins/maxs and leave `cache.data` null, which is all the server reads.
+  hooks installed (dedicated server) it is null, which is the state
+  QW/server/model.c's server also tolerates -- but only for a texinfo whose
+  own miptex is missing (`dataofs === -1`) or out of range, which is rare.
+  Every OTHER texinfo gets its real `TextureT` (Mod_LoadTextures now runs on
+  every path, see above), so Mod_LoadFaces sees the real name on every path
+  and the SURF_DRAWSKY/SURF_DRAWTURB classification runs identically to the
+  C, dedicated server included.
+- Mod_LoadBrushModel still skips Mod_LoadLighting with no hooks installed
+  (model->lightdata stays null). This IS a deviation from the C, not a match
+  for it: WinQuake's Mod_LoadLighting has no such branch and always loads
+  lightdata, dedicated build included. Nothing under src/server/ or
+  src/progs/ reads `model.lightdata`, so the skip is harmless, but it is a
+  real behavioural difference and is called out as one rather than described
+  as matching C (unlike Mod_LoadTextures above, which this port now does
+  match). The alias and sprite loaders fill in only type/numframes/synctype/
+  flags/mins/maxs with no hooks installed and leave `cache.data` null, which
+  is all the server reads.
 - `model_t.cache` is `CacheUser<RendererModelData>` where `RendererModelData`
   is `unknown`: the aliashdr_t / msprite_t block the C caches there is
   renderer-private and has a different layout in model.c and gl_model.c, so
@@ -146,6 +165,7 @@ import {
   MAX_MAP_HULLS,
   MAX_MAP_LEAFS,
   MIPLEVELS,
+  MIPTEX_T_SIZE,
   NUM_AMBIENTS,
   TEXINFO_T_SIZE,
   TEX_SPECIAL,
@@ -154,10 +174,12 @@ import {
   readDface,
   readDheader,
   readDleaf,
+  readDmiptexlump,
   readDmodel,
   readDnode,
   readDplane,
   readDvertex,
+  readMiptex,
   readTexinfo,
   type LumpT,
 } from "./bspfile";
@@ -453,7 +475,12 @@ export interface ModelLoaderHooks {
   // r_notexture_mip, the renderer's checkerboard texture
   readonly notexture: TextureT;
 
-  Mod_LoadTextures(mod: ModelT, buf: Uint8Array, l: LumpT): void;
+  // the per-texture renderer step inside Mod_LoadTextures (now shared, see
+  // that function below): called once per non-null texture, right after its
+  // pixels are copied into tx.data. model.c's step is R_InitSky for "sky*"
+  // names only; gl_model.c's is R_InitSky for "sky*" and GL_LoadTexture for
+  // everything else.
+  textureLoaded(tx: TextureT): void;
   Mod_LoadLighting(mod: ModelT, buf: Uint8Array, l: LumpT): void;
   // optional: with this absent the shared Mod_LoadFaces below runs
   Mod_LoadFaces?(mod: ModelT, buf: Uint8Array, l: LumpT): void;
@@ -781,6 +808,142 @@ export function Mod_ForName(name: string, crash: boolean): ModelT | null {
 
 ===============================================================================
 */
+
+// a fixed C char[] reads 0 past its NUL; a decoded JS string simply ends
+// there, so this mirrors that read instead of returning NaN from charCodeAt.
+function charAtOrZero(s: string, i: number): number {
+  return i < s.length ? s.charCodeAt(i) : 0;
+}
+
+/*
+=================
+Mod_LoadTextures
+
+model.c and gl_model.c are byte-identical here except for the one step
+after the pixel copy: model.c calls R_InitSky(tx) only for "sky*" names;
+gl_model.c calls R_InitSky(tx) for "sky*" and GL_LoadTexture(tx) for every
+other non-null texture. That step is `textureLoaded`, called once per
+non-null texture (dataofs !== -1) after tx.data is filled in, exactly where
+the C's per-renderer branch sits. With no renderer installed (dedicated
+server) `textureLoaded` is null and the step is skipped -- the table build
+and animation sequencing below still run unconditionally, which is what
+fixes U/dedicated bad-surface-extents: texinfo and faces need real texture
+names and TEX_SPECIAL flags on every path, not just when a renderer is
+present (see this file's header).
+=================
+*/
+export function Mod_LoadTextures(mod: ModelT, buffer: Uint8Array, l: LumpT, textureLoaded: ((tx: TextureT) => void) | null): void {
+  if (!l.filelen) {
+    mod.textures = null;
+    return;
+  }
+
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const m = readDmiptexlump(view, l.fileofs);
+
+  mod.numtextures = m.nummiptex;
+  const textures: Array<TextureT | null> = new Array<TextureT | null>(m.nummiptex).fill(null);
+  mod.textures = textures;
+
+  for (let i = 0; i < m.nummiptex; i++) {
+    const dataofs = m.dataofs[i];
+    if (dataofs === -1) continue;
+
+    const mtOffset = l.fileofs + dataofs;
+    const mt = readMiptex(view, mtOffset);
+
+    if (mt.width & 15 || mt.height & 15) Sys_Error("Texture %s is not 16 aligned", mt.name);
+
+    const pixels = Math.floor((mt.width * mt.height) / 64) * 85;
+    const tx = new TextureT();
+    textures[i] = tx;
+
+    tx.name = mt.name;
+    tx.width = mt.width;
+    tx.height = mt.height;
+    // the pixels immediately follow the structures in the C; here they are
+    // TextureT.data, so each offset is kept relative to that block instead
+    // (mt.offsets[0] === sizeof(miptex_t), so this starts at 0)
+    for (let j = 0; j < MIPLEVELS; j++) tx.offsets[j] = mt.offsets[j] - MIPTEX_T_SIZE;
+
+    const data = Hunk_AllocName(pixels, loadState.loadname);
+    data.set(buffer.subarray(mtOffset + MIPTEX_T_SIZE, mtOffset + MIPTEX_T_SIZE + pixels));
+    tx.data = data;
+
+    if (textureLoaded !== null) textureLoaded(tx);
+  }
+
+  //
+  // sequence the animations
+  //
+  const ANIM_CYCLE = 2;
+  for (let i = 0; i < m.nummiptex; i++) {
+    const tx = textures[i];
+    if (tx === null || charAtOrZero(tx.name, 0) !== "+".charCodeAt(0)) continue;
+    if (tx.anim_next !== null) continue; // already sequenced
+
+    // find the number of frames in the animation
+    const anims: Array<TextureT | null> = new Array<TextureT | null>(10).fill(null);
+    const altanims: Array<TextureT | null> = new Array<TextureT | null>(10).fill(null);
+
+    let max = charAtOrZero(tx.name, 1);
+    let altmax = 0;
+    if (max >= 0x61 && max <= 0x7a) max -= 0x61 - 0x41; // 'a'-'z' -> 'A'-'Z'
+    if (max >= 0x30 && max <= 0x39) {
+      max -= 0x30;
+      altmax = 0;
+      anims[max] = tx;
+      max++;
+    } else if (max >= 0x41 && max <= 0x4a) {
+      altmax = max - 0x41;
+      max = 0;
+      altanims[altmax] = tx;
+      altmax++;
+    } else {
+      Sys_Error("Bad animating texture %s", tx.name);
+    }
+
+    for (let j = i + 1; j < m.nummiptex; j++) {
+      const tx2 = textures[j];
+      if (tx2 === null || charAtOrZero(tx2.name, 0) !== "+".charCodeAt(0)) continue;
+      if (tx2.name.slice(2) !== tx.name.slice(2)) continue;
+
+      let num = charAtOrZero(tx2.name, 1);
+      if (num >= 0x61 && num <= 0x7a) num -= 0x61 - 0x41;
+      if (num >= 0x30 && num <= 0x39) {
+        num -= 0x30;
+        anims[num] = tx2;
+        if (num + 1 > max) max = num + 1;
+      } else if (num >= 0x41 && num <= 0x4a) {
+        num = num - 0x41;
+        altanims[num] = tx2;
+        if (num + 1 > altmax) altmax = num + 1;
+      } else {
+        Sys_Error("Bad animating texture %s", tx.name);
+      }
+    }
+
+    // link them all together
+    for (let j = 0; j < max; j++) {
+      const tx2 = anims[j];
+      if (tx2 === null) Sys_Error("Missing frame %i of %s", j, tx.name);
+      tx2.anim_total = max * ANIM_CYCLE;
+      tx2.anim_min = j * ANIM_CYCLE;
+      tx2.anim_max = (j + 1) * ANIM_CYCLE;
+      tx2.anim_next = anims[(j + 1) % max];
+      if (altmax) tx2.alternate_anims = altanims[0];
+    }
+    for (let j = 0; j < altmax; j++) {
+      const tx2 = altanims[j];
+      if (tx2 === null) Sys_Error("Missing frame %i of %s", j, tx.name);
+      tx2.anim_total = altmax * ANIM_CYCLE;
+      tx2.anim_min = j * ANIM_CYCLE;
+      tx2.anim_max = (j + 1) * ANIM_CYCLE;
+      tx2.anim_next = altanims[(j + 1) % altmax];
+      if (max) tx2.alternate_anims = anims[0];
+    }
+  }
+}
 
 /*
 =================
@@ -1470,7 +1633,9 @@ export function Mod_LoadBrushModel(mod: ModelT, buffer: Uint8Array): void {
   Mod_LoadVertexes(header.lumps[LUMP_VERTEXES]);
   Mod_LoadEdges(header.lumps[LUMP_EDGES]);
   Mod_LoadSurfedges(header.lumps[LUMP_SURFEDGES]);
-  if (hooks !== null) hooks.Mod_LoadTextures(mod, buffer, header.lumps[LUMP_TEXTURES]);
+  // shared and unconditional, per this file's header: texinfo and faces
+  // need real texture names/flags on every path, dedicated server included.
+  Mod_LoadTextures(mod, buffer, header.lumps[LUMP_TEXTURES], hooks !== null ? hooks.textureLoaded : null);
   if (hooks !== null) hooks.Mod_LoadLighting(mod, buffer, header.lumps[LUMP_LIGHTING]);
   Mod_LoadPlanes(header.lumps[LUMP_PLANES]);
   Mod_LoadTexinfo(header.lumps[LUMP_TEXINFO]);

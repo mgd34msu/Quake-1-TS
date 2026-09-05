@@ -13,7 +13,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { COM_InitArgv, COM_InitFilesystem, COM_CheckRegistered, pop } from "../src/common/common";
+import { COM_InitArgv, COM_InitFilesystem, COM_CheckRegistered, pop, setStaticRegistered, static_registered } from "../src/common/common";
 import { writePakToDisk } from "./support/pak_builder";
 import { Mod_ForName, Mod_Init, type ModelT } from "../src/common/model";
 import { buildBsp, ensureDir, writeGameFile } from "./support/bsp_builder";
@@ -31,7 +31,14 @@ const baseDir = join(scratchDir, "quake");
 
 let mod: ModelT;
 
+// static_registered (src/common/common.ts) is sticky module state: this
+// suite's COM_CheckRegistered() call below sets it from the fixture's
+// gfx/pop.lmp, and nothing else in this process resets it afterward
+// (rule 15), so save/restore it around the suite ourselves.
+const savedStaticRegistered = static_registered;
+
 afterAll(() => {
+  setStaticRegistered(savedStaticRegistered);
   rmSync(scratchDir, { recursive: true, force: true });
 });
 

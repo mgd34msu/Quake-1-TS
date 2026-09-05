@@ -35,7 +35,7 @@ function makePic(width: number, height: number): QpicT {
 
 const modelHooks: ModelLoaderHooks = {
   notexture: { name: "", width: 0, height: 0, gl_texturenum: 0, texturechain: null, anim_total: 0, anim_min: 0, anim_max: 0, anim_next: null, alternate_anims: null, offsets: new Uint32Array(4), data: new Uint8Array(0) },
-  Mod_LoadTextures(): void {},
+  textureLoaded(): void {},
   Mod_LoadLighting(): void {},
   Mod_LoadAliasModel(): void {},
   Mod_LoadSpriteModel(): void {},

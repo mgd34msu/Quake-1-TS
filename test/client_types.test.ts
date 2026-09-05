@@ -62,7 +62,7 @@ import { cdAudio } from "../src/client/cdaudio";
 function makeFakeRenderer(): Renderer {
   const hooks: ModelLoaderHooks = {
     notexture: new TextureT(),
-    Mod_LoadTextures(): void {},
+    textureLoaded(): void {},
     Mod_LoadLighting(): void {},
     Mod_LoadAliasModel(): void {},
     Mod_LoadSpriteModel(): void {},
@@ -449,7 +449,14 @@ describe("vid.h", () => {
     expect(vid).toBeInstanceOf(ViddefT);
     expect(d_8to16table.length).toBe(256);
     expect(d_8to24table.length).toBe(256);
-    expect(vidBackend.current).toBe(null);
+    // vidBackend.current cannot be asserted "uninstalled" here: like
+    // sndDma.current/cdAudio.current (see main_boot.test.ts's file header),
+    // src/platform/vid.ts installs it at module load, and that module is
+    // reachable from many other suites' own imports (a renderer module,
+    // src/platform/sdl.ts, or src/main.ts) sharing this one bun process --
+    // once any of them has loaded, the holder never goes back to null. Assert
+    // its shape instead of assuming a pristine, never-imported process.
+    expect(vidBackend.current === null || typeof vidBackend.current.VID_Init === "function").toBe(true);
     expect(vidMenuHooks.vid_menudrawfn).toBe(null);
     expect(vidMenuHooks.vid_menukeyfn).toBe(null);
   });
@@ -479,8 +486,17 @@ describe("screen.h data, input.h and cdaudio.h holders", () => {
     expect(scrState.block_drawing).toBe(false);
   });
 
-  test("the input and cd audio backends start uninstalled", () => {
-    expect(inputBackend.current).toBe(null);
-    expect(cdAudio.current).toBe(null);
+  test("the input and cd audio backends are either uninstalled or a real platform implementation", () => {
+    // Same reasoning as vidBackend.current above: src/platform/sdl.ts and
+    // src/platform/cd_ogg.ts install inputBackend.current/cdAudio.current at
+    // module load (mirrors sndDma.current -- see main_boot.test.ts's file
+    // header), and both modules are reachable from many other suites'
+    // imports (platform/vid.ts imports platform/sdl.ts; src/main.ts imports
+    // both platform/sdl.ts and platform/cd_ogg.ts transitively). Once any
+    // suite sharing this bun process has loaded either module, the holder
+    // stays installed for the rest of the process, so "uninstalled" is not
+    // an assertion this file can make.
+    expect(inputBackend.current === null || typeof inputBackend.current.IN_Init === "function").toBe(true);
+    expect(cdAudio.current === null || typeof cdAudio.current.CDAudio_Init === "function").toBe(true);
   });
 });

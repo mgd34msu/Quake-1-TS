@@ -39,7 +39,19 @@ Deviations from the C:
   as no-ops; id386's Sys_SetFPCW asm is dropped).
 */
 
-import { appendFileSync, openSync, closeSync, readSync, writeSync, statSync, fstatSync, mkdirSync, renameSync } from "node:fs";
+import {
+  appendFileSync,
+  openSync,
+  closeSync,
+  readSync,
+  writeSync,
+  statSync,
+  fstatSync,
+  mkdirSync,
+  renameSync,
+  existsSync,
+  readdirSync,
+} from "node:fs";
 import { Com_sprintf } from "../common/sprintf";
 
 export class SysError extends Error {
@@ -70,7 +82,9 @@ export function Sys_Error(error: string, ...args: Array<string | number>): never
 export function Sys_Printf(fmt: string, ...args: Array<string | number>): void {
   const text = Com_sprintf(fmt, ...args);
 
-  if (text.length > 1024) Sys_Error("memory overwrite in Sys_Printf");
+  // sys_linux.c's `if (strlen(text) > sizeof(text))` guards its own 1024-byte
+  // stack buffer; strings here cannot overwrite memory, and a modern
+  // GL_EXTENSIONS string alone is several KB, so the guard is not ported.
 
   if (sysState.nostdout) return;
 
@@ -227,6 +241,53 @@ export function Sys_mkdir(path: string): void {
   } catch {
     // mkdir(path, 0777); return value ignored, as in the C (e.g. EEXIST)
   }
+}
+
+/*
+============
+Sys_ResolveCase
+
+Not a WinQuake/QW function -- added so common.ts/qw/common.ts can find the
+game directory and pak files id Software's own distribution ships in mixed
+case (Id1/PAK0.PAK) on a case-sensitive filesystem, where the original C
+relied on DOS/Windows case-insensitivity. If `path` exists as given, it is
+returned unchanged. Otherwise each path component is checked in turn against
+its parent's real directory listing for a case-insensitive match (first
+match by directory order), and the resolved (real-case) path is returned. If
+any component has no case-insensitive match, the original `path` is returned
+unchanged, so callers see the same "not found" behaviour the C gets from a
+failed open.
+============
+*/
+export function Sys_ResolveCase(path: string): string {
+  if (existsSync(path)) return path;
+
+  const absolute = path.startsWith("/");
+  const parts = path.split("/").filter((part) => part.length > 0);
+  let resolved = absolute ? "" : ".";
+
+  for (const part of parts) {
+    const candidate = `${resolved}/${part}`;
+    if (existsSync(candidate)) {
+      resolved = candidate;
+      continue;
+    }
+
+    let entries: string[];
+    try {
+      entries = readdirSync(resolved === "" ? "/" : resolved);
+    } catch {
+      return path;
+    }
+
+    const lower = part.toLowerCase();
+    const match = entries.find((entry) => entry.toLowerCase() === lower);
+    if (match === undefined) return path;
+
+    resolved = `${resolved}/${match}`;
+  }
+
+  return resolved;
 }
 
 //=============================================================================

@@ -1,17 +1,22 @@
 /*
 Copyright (C) 1996-1997 Id Software, Inc.
-Ported from WinQuake/model.c (the ALIAS MODELS, SPRITE MODELS and
-Mod_LoadTextures halves) and WinQuake/r_main.c's R_InitTextures (GNU GPL v2
-or later).
+Ported from WinQuake/model.c (the ALIAS MODELS and SPRITE MODELS halves,
+plus the per-texture "sky" step inside Mod_LoadTextures) and
+WinQuake/r_main.c's R_InitTextures (GNU GPL v2 or later).
 
 model.c is linked into the software build; src/common/model.ts's header
 diffs it against gl_model.c and keeps the identical functions shared,
-leaving Mod_LoadTextures, Mod_LoadAliasModel and Mod_LoadSpriteModel as
-`ModelLoaderHooks` entries. This module is that hook set for the software
-renderer, `softModelHooks`, plus R_InitTextures (r_main.c's, not model.c's --
-it owns the checkerboard `notexture` texture the hooks object must carry, so
-it lives here; U062's r_main.ts calls it again from R_Init for call-order
-fidelity and otherwise never touches its return value).
+leaving Mod_LoadAliasModel and Mod_LoadSpriteModel as `ModelLoaderHooks`
+entries. Mod_LoadTextures itself is shared too now (src/common/model.ts,
+fixing the dedicated server's "Bad surface extents" crash -- its table
+build and animation sequencing must run on every path, not only when a
+renderer is installed); only its per-texture step is still per-renderer, so
+that step alone is the hook, `ModelLoaderHooks.textureLoaded`. This module
+is that hook set for the software renderer, `softModelHooks`, plus
+R_InitTextures (r_main.c's, not model.c's -- it owns the checkerboard
+`notexture` texture the hooks object must carry, so it lives here; U062's
+r_main.ts calls it again from R_Init for call-order fidelity and otherwise
+never touches its return value).
 
 Mod_LoadFaces is NOT a hook here: src/common/model.ts's port of it already
 caps extents at 256 (model.c's cap, not gl_model.c's 512), so the shared
@@ -81,13 +86,8 @@ Deviations from PORTING.md / the C source:
   Uint8Array via a DataView (byte-for-byte what the C's `unsigned short *`
   aliasing a `byte *` buffer produces), per this unit's brief ("keep skins as
   Uint8Arrays"), reading the palette from src/client/vid.ts's `d_8to16table`.
-- Mod_LoadTextures's `sky` branch imports `R_InitSky` from "./r_sky"
-  (r_sky.c, U064, concurrent with this unit and not yet landed): per this
-  unit's brief this is the accepted, anticipated absent-sibling failure, not
-  something in this file's scope to fix. `bun run check` / any test that
-  imports this module currently fails at load time with exactly "Cannot find
-  module './r_sky'" until U064 lands; every function below is otherwise
-  ready to run.
+- `textureLoaded`'s `sky` branch imports `R_InitSky` from "./r_sky" (r_sky.c,
+  U064, landed since this note was first written).
 - Mod_LoadLighting is listed as IDENTICAL between model.c and gl_model.c in
   src/common/model.ts's own header, and that shared implementation is
   exported from there already; the ModelLoaderHooks slot is still mandatory
@@ -104,13 +104,7 @@ Deviations from PORTING.md / the C source:
   Mod_LoadTexinfo, entirely covered by ModelLoaderHooks.notexture already).
 */
 
-import {
-  MIPLEVELS,
-  MIPTEX_T_SIZE,
-  readDmiptexlump,
-  readMiptex,
-  type LumpT,
-} from "../common/bspfile";
+import { type LumpT } from "../common/bspfile";
 import {
   ALIAS_VERSION,
   AliasframetypeT,
@@ -187,6 +181,7 @@ import { R_InitSky } from "./r_sky";
 import { qw } from "../common/quakedef";
 import { cls, CactiveT } from "../client/client";
 import { CRC_Block } from "../common/crc";
+import { com_filesize } from "../common/common";
 import { Info_SetValueForKey, MAX_INFO_STRING } from "../qw/common";
 import { modelNames } from "../qw/client/cl_main";
 import { MSG_WriteByte, SZ_Print } from "../common/sizebuf";
@@ -195,133 +190,21 @@ import { ClcOpsT } from "../qw/protocol";
 /*
 ==============================================================================
 
-BRUSHMODEL LOADING -- Mod_LoadTextures
+BRUSHMODEL LOADING -- Mod_LoadTextures's per-texture step
 
 ==============================================================================
 */
 
 /*
 =================
-Mod_LoadTextures
+textureLoaded
+
+model.c's per-texture step inside Mod_LoadTextures (now shared, see
+src/common/model.ts): R_InitSky for "sky*" names, nothing otherwise.
 =================
 */
-export function Mod_LoadTextures(mod: ModelT, buffer: Uint8Array, l: LumpT): void {
-  if (!l.filelen) {
-    mod.textures = null;
-    return;
-  }
-
-  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-  const m = readDmiptexlump(view, l.fileofs);
-
-  mod.numtextures = m.nummiptex;
-  const textures: Array<TextureT | null> = new Array<TextureT | null>(m.nummiptex).fill(null);
-  mod.textures = textures;
-
-  for (let i = 0; i < m.nummiptex; i++) {
-    const dataofs = m.dataofs[i];
-    if (dataofs === -1) continue;
-
-    const mtOffset = l.fileofs + dataofs;
-    const mt = readMiptex(view, mtOffset);
-
-    if (mt.width & 15 || mt.height & 15) Sys_Error("Texture %s is not 16 aligned", mt.name);
-
-    const pixels = Math.floor((mt.width * mt.height) / 64) * 85;
-    const tx = new TextureT();
-    textures[i] = tx;
-
-    tx.name = mt.name;
-    tx.width = mt.width;
-    tx.height = mt.height;
-    // the pixels immediately follow the structures in the C; here they are
-    // TextureT.data, so each offset is kept relative to that block instead
-    // (mt.offsets[0] === sizeof(miptex_t), so this starts at 0)
-    for (let j = 0; j < MIPLEVELS; j++) tx.offsets[j] = mt.offsets[j] - MIPTEX_T_SIZE;
-
-    const data = Hunk_AllocName(pixels, loadState.loadname);
-    data.set(buffer.subarray(mtOffset + MIPTEX_T_SIZE, mtOffset + MIPTEX_T_SIZE + pixels));
-    tx.data = data;
-
-    if (mt.name.startsWith("sky")) R_InitSky(tx);
-  }
-
-  //
-  // sequence the animations
-  //
-  const ANIM_CYCLE = 2;
-  for (let i = 0; i < m.nummiptex; i++) {
-    const tx = textures[i];
-    if (tx === null || charAtOrZero(tx.name, 0) !== "+".charCodeAt(0)) continue;
-    if (tx.anim_next !== null) continue; // already sequenced
-
-    // find the number of frames in the animation
-    const anims: Array<TextureT | null> = new Array<TextureT | null>(10).fill(null);
-    const altanims: Array<TextureT | null> = new Array<TextureT | null>(10).fill(null);
-
-    let max = charAtOrZero(tx.name, 1);
-    let altmax = 0;
-    if (max >= 0x61 && max <= 0x7a) max -= 0x61 - 0x41; // 'a'-'z' -> 'A'-'Z'
-    if (max >= 0x30 && max <= 0x39) {
-      max -= 0x30;
-      altmax = 0;
-      anims[max] = tx;
-      max++;
-    } else if (max >= 0x41 && max <= 0x4a) {
-      altmax = max - 0x41;
-      max = 0;
-      altanims[altmax] = tx;
-      altmax++;
-    } else {
-      Sys_Error("Bad animating texture %s", tx.name);
-    }
-
-    for (let j = i + 1; j < m.nummiptex; j++) {
-      const tx2 = textures[j];
-      if (tx2 === null || charAtOrZero(tx2.name, 0) !== "+".charCodeAt(0)) continue;
-      if (tx2.name.slice(2) !== tx.name.slice(2)) continue;
-
-      let num = charAtOrZero(tx2.name, 1);
-      if (num >= 0x61 && num <= 0x7a) num -= 0x61 - 0x41;
-      if (num >= 0x30 && num <= 0x39) {
-        num -= 0x30;
-        anims[num] = tx2;
-        if (num + 1 > max) max = num + 1;
-      } else if (num >= 0x41 && num <= 0x4a) {
-        num = num - 0x41;
-        altanims[num] = tx2;
-        if (num + 1 > altmax) altmax = num + 1;
-      } else {
-        Sys_Error("Bad animating texture %s", tx.name);
-      }
-    }
-
-    // link them all together
-    for (let j = 0; j < max; j++) {
-      const tx2 = anims[j];
-      if (tx2 === null) Sys_Error("Missing frame %i of %s", j, tx.name);
-      tx2.anim_total = max * ANIM_CYCLE;
-      tx2.anim_min = j * ANIM_CYCLE;
-      tx2.anim_max = (j + 1) * ANIM_CYCLE;
-      tx2.anim_next = anims[(j + 1) % max];
-      if (altmax) tx2.alternate_anims = altanims[0];
-    }
-    for (let j = 0; j < altmax; j++) {
-      const tx2 = altanims[j];
-      if (tx2 === null) Sys_Error("Missing frame %i of %s", j, tx.name);
-      tx2.anim_total = altmax * ANIM_CYCLE;
-      tx2.anim_min = j * ANIM_CYCLE;
-      tx2.anim_max = (j + 1) * ANIM_CYCLE;
-      tx2.anim_next = altanims[(j + 1) % altmax];
-      if (max) tx2.alternate_anims = anims[0];
-    }
-  }
-}
-
-// a fixed C char[] reads 0 past its NUL; a decoded JS string simply ends
-// there, so this mirrors that read instead of returning NaN from charCodeAt.
-function charAtOrZero(s: string, i: number): number {
-  return i < s.length ? s.charCodeAt(i) : 0;
+export function textureLoaded(tx: TextureT): void {
+  if (tx.name.startsWith("sky")) R_InitSky(tx);
 }
 
 /*
@@ -520,7 +403,11 @@ export function Mod_LoadAliasModel(mod: ModelT, buffer: Uint8Array): void {
   // QW/client/model.c: player.mdl/eyes.mdl CRC -> cls.userinfo "pmodel"/"emodel",
   // so the server can verify the skin the client says it is using.
   if (qw.active && (mod.name === "progs/player.mdl" || mod.name === "progs/eyes.mdl")) {
-    const crc = CRC_Block(buffer);
+    // CRC_Block(buffer, com_filesize): com_filesize is the exact on-disk
+    // length COM_LoadStackFile just set, WITHOUT the trailing 0 byte
+    // COM_LoadFile appends to `buffer` -- CRC_Block(buffer) alone would hash
+    // that extra byte too and disagree with SV_CheckModel's CRC (sv_init.c).
+    const crc = CRC_Block(buffer, com_filesize);
     const key = mod.name === "progs/player.mdl" ? modelNames.pmodel_name : modelNames.emodel_name;
     const value = String(crc);
     cls.qw.userinfo = Info_SetValueForKey(cls.qw.userinfo, key, value, MAX_INFO_STRING);
@@ -841,7 +728,7 @@ softModelHooks -- the ModelLoaderHooks this renderer installs
 
 export const softModelHooks: ModelLoaderHooks = {
   notexture,
-  Mod_LoadTextures,
+  textureLoaded,
   // Mod_LoadLighting is identical between renderers (see this file's
   // header); this delegates to src/common/model.ts's own copy instead of
   // duplicating its body.

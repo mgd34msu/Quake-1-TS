@@ -125,6 +125,11 @@ import { Sys_Error } from "./sys";
 import { qw } from "../common/quakedef";
 import { S_Init } from "../client/snd_dma";
 import { hostClientHooks, host_colormap } from "../common/host";
+import type * as QwClMainModule from "../qw/client/cl_main";
+
+function qwClMainMod(): typeof QwClMainModule {
+  return require("../qw/client/cl_main");
+}
 import { COM_CheckParm, Q_atoi, com_argc, com_argv } from "../common/common";
 import { CvarT, Cvar_RegisterVariable, Cvar_Set } from "../common/cvar";
 import { Cmd_AddCommand } from "../common/cmd";
@@ -379,6 +384,12 @@ function VID_CheckChanges_(runRInit: boolean): void {
   vid.buffer = new Uint8Array(width * height);
   vid.conwidth = width; // vid_x.c: `vid.conwidth = vid.width; vid.conheight = vid.height;`
   vid.conheight = height;
+  // vid_x.c:668 and gl_vidlinuxglx.c:890, identically. R_ViewChanged takes
+  // this through screen.c's `R_ViewChanged (&vrect, sb_lines, vid.aspect)`
+  // as pixelAspect, and the software rasterizer's yscale is
+  // `xscale * pixelAspect`: leaving it 0 collapses every projected vertex
+  // onto ycenter, so every edge is horizontal and no span is ever drawn.
+  vid.aspect = (vid.height / vid.width) * (320.0 / 240.0);
 
   if (name === "gl") {
     SDL_SetFullscreenHint(fullscreen);
@@ -464,7 +475,10 @@ export function VID_Init(palette: Uint8Array): void {
 
   vid.maxwarpwidth = WARP_WIDTH;
   vid.maxwarpheight = WARP_HEIGHT;
-  vid.colormap = host_colormap;
+  // QW/client/vid_x.c:379 reads the same `host_colormap` global, but in
+  // the qwcl binary that global lives in QW's cl_main.c (cl_main.ts's
+  // holder), not host.c's.
+  vid.colormap = qw.active ? qwClMainMod().host_colormap.data : host_colormap;
   if (vid.colormap) {
     const view = new DataView(vid.colormap.buffer, vid.colormap.byteOffset, vid.colormap.byteLength);
     vid.fullbright = 256 - view.getInt32(2048 * 4, true);

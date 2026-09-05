@@ -29,7 +29,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { qw } from "../src/common/quakedef";
-import { COM_InitArgv, COM_InitFilesystem, setComModified, setComSearchpaths } from "../src/common/common";
+import { COM_InitArgv, COM_InitFilesystem, com_filesize, setComFilesize, setComModified, setComSearchpaths } from "../src/common/common";
 import { Memory_Init, Z_Print } from "../src/common/zone";
 import { ModelT, ModtypeT } from "../src/common/model";
 import { CRC_Block } from "../src/common/crc";
@@ -69,7 +69,7 @@ import { QGLRecording, SetQGL, qglHolder } from "../src/ref_gl/qgl";
 import { R_NetGraph, ngraphState } from "../src/ref_gl/gl_ngraph";
 import { R_TranslatePlayerSkin } from "../src/ref_gl/gl_rmisc";
 import { R_InitBubble, R_RenderDlight } from "../src/ref_gl/gl_rlight";
-import { glState } from "../src/ref_gl/glquake";
+import { cnttextures, glState } from "../src/ref_gl/glquake";
 import { Mod_LoadAliasModel as Mod_LoadAliasModel_GL } from "../src/ref_gl/gl_model";
 
 import { CDAudio_Init } from "../src/platform/cd_ogg";
@@ -79,6 +79,14 @@ import type { ChannelT } from "../src/client/sound";
 const baseDir = mkdtempSync(join(tmpdir(), "qwcl-render-"));
 const savedQwActive = qw.active;
 const savedRenderer = re.current;
+// The GL describe blocks below (R_NetGraph, Draw_Crosshair GL,
+// R_RenderDlight, R_TranslatePlayerSkin, R_AliasSetupSkin) call real
+// GL_Bind/GL_LoadTexture-shaped code that mutates src/ref_gl/glquake.ts's
+// process-wide `glState` (currenttexture, texture_extension_number,
+// playertextures, ...) and `cnttextures` (GL_SelectTexture's per-unit
+// cache) in place; nothing else in this file restores them (rule 15).
+const savedGlState = { ...glState };
+const savedCntTextures = Array.from(cnttextures);
 
 function initFilesystem(): void {
   setComSearchpaths(null);
@@ -103,6 +111,8 @@ beforeAll(() => {
 afterAll(() => {
   qw.active = savedQwActive;
   re.current = savedRenderer;
+  Object.assign(glState, savedGlState);
+  cnttextures.set(savedCntTextures);
   setComSearchpaths(null);
   setComModified(false);
   rmSync(baseDir, { recursive: true, force: true });
@@ -423,13 +433,23 @@ describe("Renderer.isGL / Renderer.R_NetGraph", () => {
 
 describe("player.mdl/eyes.mdl CRC -> cls.qw.userinfo pmodel/emodel (QW model.c/gl_model.c)", () => {
   const savedUserinfo = cls.qw.userinfo;
+  const savedComFilesize = com_filesize;
 
   beforeEach(() => {
     cls.qw.userinfo = "";
+    // ref_soft/model.ts's/ref_gl's Mod_LoadAliasModel_* CRCs `com_filesize`
+    // bytes of the buffer (mirrors the real engine's CRC_Block(buffer,
+    // com_filesize), fed by COM_LoadFile before Mod_LoadAliasModel ever
+    // runs) -- this suite calls the loader directly, skipping COM_LoadFile,
+    // so it must set com_filesize itself (rule 13) rather than read whatever
+    // an earlier suite's own COM_LoadFile happened to leave in the shared
+    // global. garbageMdlBuffer() is always 128 bytes.
+    setComFilesize(128);
   });
 
   afterAll(() => {
     cls.qw.userinfo = savedUserinfo;
+    setComFilesize(savedComFilesize);
   });
 
   function garbageMdlBuffer(): Uint8Array {
@@ -781,7 +801,7 @@ function makeMinimalRenderer(): Renderer {
   return {
     modelHooks: {
       notexture: new (require("../src/common/model") as typeof import("../src/common/model")).TextureT(),
-      Mod_LoadTextures(): void {},
+      textureLoaded(): void {},
       Mod_LoadLighting(): void {},
       Mod_LoadAliasModel(): void {},
       Mod_LoadSpriteModel(): void {},

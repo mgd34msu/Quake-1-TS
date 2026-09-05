@@ -29,6 +29,7 @@ import { AliashdrT } from "../src/ref_gl/gl_model_types";
 import { QGLRecording, qglHolder } from "../src/ref_gl/qgl";
 import { glModelHooks, poseverts } from "../src/ref_gl/gl_model";
 import { GL_MakeAliasModelDisplayLists, glMeshState } from "../src/ref_gl/gl_mesh";
+import { cnttextures, glState } from "../src/ref_gl/glquake";
 import { ensureDir, writeGameFile } from "./support/bsp_builder";
 import { writePakToDisk } from "./support/pak_builder";
 
@@ -130,6 +131,13 @@ const rec = new QGLRecording();
 
 const saved = {
   qgl: qglHolder.current,
+  // Mod_ForName below drives the real loader (glModelHooks), which loads a
+  // real skin through gl_draw.ts's real (unmocked, unlike
+  // test/ref_gl_model.test.ts's spy) GL_LoadTexture/GL_Bind -- that mutates
+  // src/ref_gl/glquake.ts's process-wide glState (currenttexture,
+  // texture_extension_number, ...) and cnttextures in place (rule 15).
+  glState: { ...glState },
+  cnttextures: Array.from(cnttextures),
 };
 
 beforeAll(() => {
@@ -158,6 +166,8 @@ beforeAll(() => {
 
 afterAll(() => {
   qglHolder.current = saved.qgl;
+  Object.assign(glState, saved.glState);
+  cnttextures.set(saved.cnttextures);
   setModelLoaderHooks(null);
   Mod_ClearAll();
   rmSync(scratchDir, { recursive: true, force: true });

@@ -5,7 +5,7 @@ import { COM_InitArgv, COM_InitFilesystem, COM_CheckRegistered, pop } from "../s
 import { writePakToDisk } from "./support/pak_builder";
 import { SysError } from "../src/platform/sys";
 import { SynctypeT } from "../src/common/modelgen";
-import { CONTENTS_EMPTY, CONTENTS_SOLID, MAX_MAP_LEAFS } from "../src/common/bspfile";
+import { CONTENTS_EMPTY, CONTENTS_SOLID, LumpT, MAX_MAP_LEAFS, TEX_SPECIAL } from "../src/common/bspfile";
 import { vec3 } from "../src/common/mathlib";
 import {
   CalcSurfaceExtents,
@@ -17,11 +17,13 @@ import {
   Mod_Init,
   Mod_LeafPVS,
   Mod_LoadFaces,
+  Mod_LoadTexinfo,
   Mod_PointInLeaf,
   ModelT,
   ModtypeT,
   NL_PRESENT,
   NL_UNREFERENCED,
+  SURF_DRAWSKY,
   TextureT,
   loadState,
   mod_novis,
@@ -30,6 +32,7 @@ import {
 } from "../src/common/model";
 import {
   BSP_ENTITIES,
+  BSP_MIPTEX_NAME,
   BSP_NUMCLIPNODES,
   BSP_NUMEDGES,
   BSP_NUMFACES,
@@ -40,7 +43,9 @@ import {
   BSP_NUMSUBMODELS,
   BSP_NUMSURFEDGES,
   BSP_NUMTEXINFO,
+  BSP_NUMTEXINFO_WITH_SKY,
   BSP_NUMVERTEXES,
+  BSP_SKY_MIPTEX_NAME,
   BSP_VISLEAFS,
   buildBsp,
   buildMdl,
@@ -132,12 +137,19 @@ describe("Mod_ForName: brush model, no hooks installed (dedicated path)", () => 
     expect(mod.edges.length).toBe(BSP_NUMEDGES + 1);
   });
 
-  test("textures and lighting are skipped with no hooks installed", () => {
+  test("textures load even with no hooks installed; only lighting is skipped", () => {
+    // Mod_LoadTextures is shared and unconditional (see src/common/model.ts's
+    // header): WinQuake links it into the dedicated server too, so texinfo
+    // and faces need real texture names/flags on every path. Lighting is the
+    // one genuine deviation the dedicated path still has -- see below.
     const mod = loadWorld("maps/test.bsp");
-    expect(mod.textures).toBeNull();
-    expect(mod.numtextures).toBe(0);
+    const tex = mod.textures?.[0];
+    if (!tex) throw new Error("expected a loaded texture");
+    expect(mod.numtextures).toBe(1);
+    expect(tex.name).toBe(BSP_MIPTEX_NAME);
+    expect(mod.texinfo[0].texture).toBe(tex);
+
     expect(mod.lightdata).toBeNull();
-    expect(mod.texinfo[0].texture).toBeNull();
     expect(mod.surfaces[0].samples).toBeNull();
     expect(mod.surfaces[0].lightofs).toBe(-1);
   });
@@ -366,25 +378,23 @@ describe("alias and sprite models, no hooks installed (dedicated path)", () => {
 
 describe("ModelLoaderHooks", () => {
   test("the hooks fire in the C's lump order", () => {
+    // Mod_LoadTextures itself is no longer a hook (it's shared and
+    // unconditional, see src/common/model.ts's header); `textureLoaded` is
+    // its per-texture step, called with the REAL texture the shared table
+    // build produced from maps/hooks.bsp's single "bsptest" miptex.
     const calls: string[] = [];
+    let loadedTexture: TextureT | null = null;
 
     const notexture = new TextureT();
     notexture.name = "notexture";
     notexture.width = 16;
     notexture.height = 16;
 
-    const tex = new TextureT();
-    tex.name = "bsptest";
-    tex.width = 16;
-    tex.height = 16;
-    tex.gl_texturenum = 7;
-
     const hooks: ModelLoaderHooks = {
       notexture,
-      Mod_LoadTextures(mod) {
-        calls.push("Mod_LoadTextures");
-        mod.textures = [tex];
-        mod.numtextures = 1;
+      textureLoaded(tx) {
+        calls.push("textureLoaded");
+        loadedTexture = tx;
       },
       Mod_LoadLighting(mod, buf, l) {
         calls.push("Mod_LoadLighting");
@@ -410,36 +420,37 @@ describe("ModelLoaderHooks", () => {
       const mod = loadWorld("maps/hooks.bsp");
 
       expect(calls).toEqual([
-        "Mod_LoadTextures",
+        "textureLoaded",
         "Mod_LoadLighting",
         "Mod_LoadFaces",
         "afterBrushLoad:maps/hooks.bsp",
       ]);
 
-      // Mod_LoadTexinfo resolved the miptex through the hook's texture list
+      // Mod_LoadTexinfo resolved the miptex through the shared table build,
+      // and textureLoaded saw that same object.
       expect(mod.numtextures).toBe(1);
-      expect(mod.texinfo[0].texture).toBe(tex);
+      expect(mod.texinfo[0].texture).toBe(loadedTexture);
+      expect(mod.texinfo[0].texture?.name).toBe(BSP_MIPTEX_NAME);
       expect(mod.surfaces[0].texinfo).toBe(mod.texinfo[0]);
     } finally {
       setModelLoaderHooks(null);
     }
   });
 
-  test("with hooks installed, an unresolved miptex falls back to notexture", () => {
-    const calls: string[] = [];
+  test("with hooks installed, an unresolved miptex (dataofs -1) falls back to notexture", () => {
+    // Direct Mod_LoadTexinfo coverage: mod.textures with a null slot is what
+    // the shared Mod_LoadTextures leaves for a dataofs of -1 (see
+    // test/ref_soft_model.test.ts and test/ref_gl_model.test.ts, which drive
+    // Mod_LoadTextures itself with exactly this case); this test only needs
+    // to prove Mod_LoadTexinfo's own notexture-fallback branch, given that
+    // state, still reads ModelLoaderHooks.notexture correctly.
     const notexture = new TextureT();
     notexture.name = "notexture";
 
     const hooks: ModelLoaderHooks = {
       notexture,
-      Mod_LoadTextures(mod) {
-        calls.push("Mod_LoadTextures");
-        // the C leaves loadmodel->textures[i] NULL for a dataofs of -1
-        mod.textures = [null];
-        mod.numtextures = 1;
-      },
+      textureLoaded() {},
       Mod_LoadLighting(mod) {
-        calls.push("Mod_LoadLighting");
         mod.lightdata = null;
       },
       Mod_LoadAliasModel() {},
@@ -448,13 +459,29 @@ describe("ModelLoaderHooks", () => {
 
     setModelLoaderHooks(hooks);
     try {
-      writeGameFile(baseDir, "id1/maps/notex.bsp", buildBsp());
-      const mod = loadWorld("maps/notex.bsp");
-      expect(calls).toEqual(["Mod_LoadTextures", "Mod_LoadLighting"]);
+      const mod = new ModelT();
+      mod.textures = [null];
+      mod.numtextures = 1;
+
+      // texinfo_t: vecs[2][4] float, miptex int, flags int (40 bytes);
+      // miptex 0 / flags 0, s/t vecs irrelevant to this test.
+      const tiBytes = new Uint8Array(40);
+      new DataView(tiBytes.buffer).setFloat32(0, 1, true);
+      new DataView(tiBytes.buffer).setFloat32(16, 1, true);
+
+      loadState.loadmodel = mod;
+      loadState.mod_base = tiBytes;
+      const l = new LumpT();
+      l.fileofs = 0;
+      l.filelen = tiBytes.length;
+      Mod_LoadTexinfo(l);
+
       expect(mod.texinfo[0].texture).toBe(notexture);
       expect(mod.texinfo[0].flags).toBe(0);
     } finally {
       setModelLoaderHooks(null);
+      loadState.loadmodel = null;
+      loadState.mod_base = null;
     }
   });
 
@@ -464,7 +491,7 @@ describe("ModelLoaderHooks", () => {
 
     const hooks: ModelLoaderHooks = {
       notexture,
-      Mod_LoadTextures() {},
+      textureLoaded() {},
       Mod_LoadLighting() {},
       Mod_LoadAliasModel(mod) {
         calls.push("Mod_LoadAliasModel");
@@ -484,6 +511,66 @@ describe("ModelLoaderHooks", () => {
       Mod_ForName("progs/hooked.mdl", true);
       Mod_ForName("progs/hooked.spr", true);
       expect(calls).toEqual(["Mod_LoadAliasModel", "Mod_LoadSpriteModel"]);
+    } finally {
+      setModelLoaderHooks(null);
+    }
+  });
+});
+
+// Reproduces and fixes the retail-pak dedicated-server crash: Mod_LoadTexinfo
+// used to zero every texinfo's flags whenever no renderer hooks were
+// installed (because mod.textures stayed null, since Mod_LoadTextures used
+// to run only through a hook), so a sky/water texinfo lost TEX_SPECIAL and
+// CalcSurfaceExtents rejected its oversized extents with "Bad surface
+// extents". Mod_LoadTextures is now shared and unconditional (see
+// src/common/model.ts's header), so this no longer happens on any path.
+describe("dedicated path: sky/TEX_SPECIAL surface with oversized extents", () => {
+  test("with NO hooks installed, the surface loads without Sys_Error and keeps TEX_SPECIAL/SURF_DRAWSKY", () => {
+    writeGameFile(baseDir, "id1/maps/sky.bsp", buildBsp({ skyFace: true }));
+
+    const mod = loadWorld("maps/sky.bsp");
+
+    expect(mod.numtexinfo).toBe(BSP_NUMTEXINFO_WITH_SKY);
+    expect(mod.numtextures).toBe(2);
+    expect(mod.textures?.[0]?.name).toBe(BSP_MIPTEX_NAME);
+    expect(mod.textures?.[1]?.name).toBe(BSP_SKY_MIPTEX_NAME);
+
+    // texinfo 1 (face 1's) kept TEX_SPECIAL -- the bug zeroed this to 0
+    const skyTexinfo = mod.texinfo[1];
+    expect(skyTexinfo.flags & TEX_SPECIAL).toBe(TEX_SPECIAL);
+
+    // face 1's extents are > 256 (the non-TEX_SPECIAL cap); CalcSurfaceExtents
+    // only lets that through because TEX_SPECIAL survived, and Mod_LoadFaces
+    // classified it as sky from the texture's real name
+    const skySurface = mod.surfaces[1];
+    expect(skySurface.extents[0]).toBeGreaterThan(256);
+    expect(skySurface.flags & SURF_DRAWSKY).toBe(SURF_DRAWSKY);
+  });
+
+  test("with hooks installed, textureLoaded fires once per non-null texture", () => {
+    writeGameFile(baseDir, "id1/maps/sky2.bsp", buildBsp({ skyFace: true }));
+
+    const loaded: TextureT[] = [];
+    const hooks: ModelLoaderHooks = {
+      notexture: new TextureT(),
+      textureLoaded(tx) {
+        loaded.push(tx);
+      },
+      Mod_LoadLighting(mod) {
+        mod.lightdata = null;
+      },
+      Mod_LoadAliasModel() {},
+      Mod_LoadSpriteModel() {},
+    };
+
+    setModelLoaderHooks(hooks);
+    try {
+      const mod = loadWorld("maps/sky2.bsp");
+      const tex0 = mod.textures?.[0];
+      const tex1 = mod.textures?.[1];
+      if (!tex0 || !tex1) throw new Error("expected both textures to load");
+      expect(mod.numtextures).toBe(2);
+      expect(loaded).toEqual([tex0, tex1]);
     } finally {
       setModelLoaderHooks(null);
     }

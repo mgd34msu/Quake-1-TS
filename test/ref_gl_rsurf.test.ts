@@ -45,6 +45,7 @@ import {
   GlpolyT,
   MAX_LIGHTMAPS,
   VERTEXSIZE,
+  cnttextures,
   d_lightstylevalue,
   frustum,
   glState,
@@ -86,22 +87,14 @@ const restoreCvar = (c: { string: string; value: number }, s: { string: string; 
 const saved = {
   qgl: qglHolder.current,
   lightmapFormat: 0,
-  glState: {
-    r_viewleaf: glState.r_viewleaf,
-    r_oldviewleaf: glState.r_oldviewleaf,
-    r_framecount: glState.r_framecount,
-    r_visframecount: glState.r_visframecount,
-    c_brush_polys: glState.c_brush_polys,
-    currententity: glState.currententity,
-    currenttexture: glState.currenttexture,
-    lightmap_textures: glState.lightmap_textures,
-    texture_extension_number: glState.texture_extension_number,
-    skytexturenum: glState.skytexturenum,
-    mirrortexturenum: glState.mirrortexturenum,
-    mirror: glState.mirror,
-    mirror_plane: glState.mirror_plane,
-    gl_mtexable: glState.gl_mtexable,
-  },
+  // A full snapshot rather than hand-picked fields: this file's own suite
+  // (GL_BuildLightmaps/DrawTextureChains, through gl_draw.ts's GL_Bind/
+  // GL_SelectTexture) also mutates glState.oldtarget and the separate
+  // `cnttextures` array, and a hand-picked field list has already missed
+  // fields once (rule 15) -- restore everything so a future field addition
+  // to GlStateT can't reopen the same gap.
+  glState: { ...glState },
+  cnttextures: Array.from(cnttextures),
   rsurf: { ...glRsurfState },
   allocated: new Int32Array(allocated),
   lightmapStyles: new Int32Array(d_lightstylevalue),
@@ -145,6 +138,7 @@ afterAll(() => {
   qglHolder.current = saved.qgl;
   glDrawState.gl_lightmap_format = saved.lightmapFormat;
   Object.assign(glState, saved.glState);
+  cnttextures.set(saved.cnttextures);
   Object.assign(glRsurfState, saved.rsurf);
   allocated.set(saved.allocated);
   d_lightstylevalue.set(saved.lightmapStyles);

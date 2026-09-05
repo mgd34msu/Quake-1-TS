@@ -37,8 +37,16 @@ import { CL_GetMessage, CL_PlayDemo_f, CL_Record_f, CL_Stop_f, CL_StopPlayback, 
 
 const disconnectSpy = spyOn(cl_main, "CL_Disconnect");
 
+// resetClientState() (below) parks cls.state at ca_disconnected as this
+// file's own beforeEach baseline, not the pristine ca_dedicated default, and
+// nothing puts it back afterward -- the last test to run here leaks whatever
+// it left cls.state as into the rest of this bun process (rule 15).
+// Snapshot captured before resetClientState ever runs, restored below.
+const savedClsState = cls.state;
+
 afterAll(() => {
   disconnectSpy.mockRestore();
+  cls.state = savedClsState;
 });
 
 // -- shared scratch dir / gamedir setup --------------------------------------

@@ -16,10 +16,11 @@
 // test tails from both states. r_sky.ts landed mid-session and all tests
 // below now run and pass against the real import.
 //
-// Most tests below call the exported hook functions directly (Mod_LoadTextures,
+// Most tests below call the exported hook functions directly (textureLoaded,
 // Mod_LoadAliasModel, Mod_LoadSpriteModel, and the Mod_LoadAlias*/Mod_LoadSprite*
-// helpers) against hand-built buffers, bypassing Mod_ForName/COM_LoadStackFile
-// entirely -- self-sufficient and independent of any filesystem/pak fixture.
+// helpers, plus src/common/model.ts's now-shared Mod_LoadTextures) against
+// hand-built buffers, bypassing Mod_ForName/COM_LoadStackFile entirely --
+// self-sufficient and independent of any filesystem/pak fixture.
 // One integration describe block ("Mod_ForName integration") additionally
 // drives softModelHooks through the real Mod_ForName path with a synthetic
 // BSP and the pak/pop.lmp fixture, following test/model.test.ts's own
@@ -28,7 +29,7 @@
 // Test-only Cmd_AddCommand names are not used by this file (no commands are
 // registered here).
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { SysError } from "../src/platform/sys";
@@ -42,6 +43,7 @@ import {
   Mod_ForName,
   Mod_Init,
   Mod_LoadTexinfo,
+  Mod_LoadTextures,
   setModelLoaderHooks,
 } from "../src/common/model";
 import { COM_CheckRegistered, COM_InitArgv, COM_InitFilesystem, pop } from "../src/common/common";
@@ -61,11 +63,12 @@ import {
   Mod_LoadAliasSkinGroup,
   Mod_LoadSpriteGroup,
   Mod_LoadSpriteModel,
-  Mod_LoadTextures,
   R_InitTextures,
   notexture,
   softModelHooks,
+  textureLoaded,
 } from "../src/ref_soft/model";
+import * as rSky from "../src/ref_soft/r_sky";
 import { buildBsp, buildMdl, buildSpr, ensureDir, writeGameFile } from "./support/bsp_builder";
 import { writePakToDisk } from "./support/pak_builder";
 
@@ -245,6 +248,8 @@ mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "ref-soft-model-test-"));
 const baseDir = join(scratchDir, "quake");
 
+let initSkySpy: ReturnType<typeof spyOn>;
+
 beforeAll(() => {
   ensureDir(join(baseDir, "id1"));
   writeGameFile(baseDir, "id1/maps/test.bsp", buildBsp());
@@ -261,6 +266,16 @@ beforeAll(() => {
   COM_InitFilesystem();
   COM_CheckRegistered();
   Mod_Init();
+
+  // r_sky.c's R_InitSky reads a 256x128 layout out of tx.data; the small
+  // synthetic textures below don't carry real sky pixels, so this spy
+  // verifies textureLoaded's branch selection without exercising R_InitSky's
+  // own pixel copy.
+  initSkySpy = spyOn(rSky, "R_InitSky").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  initSkySpy.mockClear();
 });
 
 afterAll(() => {
@@ -271,17 +286,24 @@ afterAll(() => {
   rState.r_pixbytes = 1;
   Mod_ClearAll();
   rmSync(scratchDir, { recursive: true, force: true });
+  initSkySpy.mockRestore();
 });
 
 //============================================================================
 
+// Mod_LoadTextures itself is src/common/model.ts's now (shared with the GL
+// renderer and the dedicated server -- fixing the dedicated server's "Bad
+// surface extents" crash, see that file's header); these tests drive it
+// directly with `null` since none of them depend on the per-texture step.
+// The per-texture step itself (`textureLoaded`, this renderer's own code) is
+// covered by its own describe block below.
 describe("Mod_LoadTextures (direct)", () => {
   test("loads four mips whose byte counts are w*h + w*h/4 + w*h/16 + w*h/64", () => {
     const bytes = buildTexturesLump([{ name: "bsptest", width: 16, height: 16 }]);
     const mod = new ModelT();
     loadState.loadname = "test";
 
-    Mod_LoadTextures(mod, bytes, lumpOf(bytes));
+    Mod_LoadTextures(mod, bytes, lumpOf(bytes), null);
 
     expect(mod.numtextures).toBe(1);
     const tx = mod.textures?.[0];
@@ -305,7 +327,7 @@ describe("Mod_LoadTextures (direct)", () => {
     const bytes = buildTexturesLump([{ name: "odd", width: 15, height: 16 }]);
     const mod = new ModelT();
     loadState.loadname = "test";
-    expect(() => Mod_LoadTextures(mod, bytes, lumpOf(bytes))).toThrow(SysError);
+    expect(() => Mod_LoadTextures(mod, bytes, lumpOf(bytes), null)).toThrow(SysError);
   });
 
   test("an empty lump leaves mod.textures null", () => {
@@ -313,7 +335,7 @@ describe("Mod_LoadTextures (direct)", () => {
     const l = new LumpT();
     l.fileofs = 0;
     l.filelen = 0;
-    Mod_LoadTextures(mod, new Uint8Array(0), l);
+    Mod_LoadTextures(mod, new Uint8Array(0), l, null);
     expect(mod.textures).toBeNull();
     expect(mod.numtextures).toBe(0);
   });
@@ -322,7 +344,7 @@ describe("Mod_LoadTextures (direct)", () => {
     const texBytes = buildTexturesLump([{ name: "gone", width: 16, height: 16, missing: true }]);
     const mod = new ModelT();
     loadState.loadname = "test";
-    Mod_LoadTextures(mod, texBytes, lumpOf(texBytes));
+    Mod_LoadTextures(mod, texBytes, lumpOf(texBytes), null);
     expect(mod.textures?.[0]).toBeNull();
 
     setModelLoaderHooks(softModelHooks);
@@ -348,7 +370,7 @@ describe("Mod_LoadTextures: animation sequencing", () => {
     ]);
     const mod = new ModelT();
     loadState.loadname = "test";
-    Mod_LoadTextures(mod, bytes, lumpOf(bytes));
+    Mod_LoadTextures(mod, bytes, lumpOf(bytes), null);
 
     const tx0 = mod.textures?.[0];
     const tx1 = mod.textures?.[1];
@@ -373,12 +395,35 @@ describe("Mod_LoadTextures: animation sequencing", () => {
 
     let caught: unknown = null;
     try {
-      Mod_LoadTextures(mod, bytes, lumpOf(bytes));
+      Mod_LoadTextures(mod, bytes, lumpOf(bytes), null);
     } catch (e) {
       caught = e;
     }
     expect(caught).toBeInstanceOf(SysError);
     expect(caught instanceof Error ? caught.message : "").toBe("Missing frame 0 of +2wall");
+  });
+});
+
+describe("textureLoaded (per-texture step)", () => {
+  test("a sky-named texture calls R_InitSky", () => {
+    const bytes = buildTexturesLump([{ name: "sky1", width: 16, height: 16 }]);
+    const mod = new ModelT();
+    loadState.loadname = "test";
+    Mod_LoadTextures(mod, bytes, lumpOf(bytes), textureLoaded);
+
+    const tx = mod.textures?.[0];
+    if (!tx) throw new Error("expected a loaded texture");
+    expect(rSky.R_InitSky).toHaveBeenCalledTimes(1);
+    expect(rSky.R_InitSky).toHaveBeenCalledWith(tx);
+  });
+
+  test("a non-sky texture does not call R_InitSky", () => {
+    const bytes = buildTexturesLump([{ name: "bsptest", width: 16, height: 16 }]);
+    const mod = new ModelT();
+    loadState.loadname = "test";
+    Mod_LoadTextures(mod, bytes, lumpOf(bytes), textureLoaded);
+
+    expect(rSky.R_InitSky).not.toHaveBeenCalled();
   });
 });
 

@@ -30,7 +30,8 @@ import { Cmd_TokenizeString } from "../src/common/cmd";
 import { COM_InitArgv, COM_InitFilesystem, COM_CheckRegistered, COM_Parse, pop, type ParseState } from "../src/qw/common";
 import { writePakToDisk } from "./support/pak_builder";
 import { PROGHEADER_CRC } from "../src/qw/server/progdefs";
-import { MAX_EDICTS } from "../src/qw/bothdefs";
+import { MAX_EDICTS, MAX_MSGLEN } from "../src/qw/bothdefs";
+import { SZ_Alloc, net_message } from "../src/common/sizebuf";
 import { MAX_CLIENTS } from "../src/qw/protocol";
 import { EDICT_NUM, PR_GetString, QwEdictT, qwpr, setEdictTable } from "../src/qw/server/progs";
 import { sv, svs } from "../src/qw/server/server";
@@ -63,11 +64,15 @@ const scratchDir = mkdtempSync(join(scratchRoot, "qwsv-progs-test-"));
 const baseDir = join(scratchDir, "quake");
 
 const savedNostdout = sysState.nostdout;
+const savedNetMessageData = net_message.data;
+const savedNetMessageMaxsize = net_message.maxsize;
 
 afterAll(() => {
   sysState.nostdout = savedNostdout;
   setComSearchpaths(null);
   setComModified(false);
+  net_message.data = savedNetMessageData;
+  net_message.maxsize = savedNetMessageMaxsize;
   rmSync(scratchDir, { recursive: true, force: true });
 });
 
@@ -112,6 +117,14 @@ beforeAll(() => {
   PR_AllocEdicts(MAX_EDICTS);
   sv.num_edicts = 1;
   sv.time = 0;
+
+  // SV_Error (sv_main.ts) unconditionally calls SV_FinalMessage, which
+  // writes into net_message before checking whether any client is even
+  // connected -- the two "throws PRRunError" tests below provoke SV_Error
+  // for real, so net_message needs a real buffer the same way a booted
+  // server's own NET_Init would have given it (net_main.ts's own SZ_Alloc,
+  // never called by this suite's own fixture).
+  SZ_Alloc(net_message, MAX_MSGLEN);
 
   // pr_cmds.ts (Q012) is not landed yet; install a stub table big enough to
   // cover every builtin index the retail progs' QuakeC ever emits, via

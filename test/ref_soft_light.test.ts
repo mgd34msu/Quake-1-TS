@@ -27,11 +27,17 @@ const baseDir = join(scratchDir, "quake");
 
 const MAP = "maps/refsoftlight.bsp";
 
+// A full snapshot rather than the individual r_framecount/r_dlightframecount
+// fields alone: R_AddEfrags/R_StoreEfrags below (through R_AnimateLight's own
+// R_MarkLights and R_LightPoint's tree walk) also leave rState.r_pefragtopnode
+// pointing at a real MleafT instead of null, which test/ref_soft_types.test.ts's
+// exhaustive "every field carries its C initial value" check catches; restore
+// the whole singleton so no individually-touched field can be missed (rule 15).
+const savedRState = { ...rState };
+
 const saved = {
   worldmodel: cl.worldmodel,
   clTime: cl.time,
-  r_framecount: rState.r_framecount,
-  r_dlightframecount: rState.r_dlightframecount,
   ambientlight: r_refdef.ambientlight,
   cl_numvisedicts: clState.cl_numvisedicts,
   free_efrags: cl.free_efrags,
@@ -72,8 +78,7 @@ afterAll(() => {
   setModelLoaderHooks(null);
   cl.worldmodel = saved.worldmodel;
   cl.time = saved.clTime;
-  rState.r_framecount = saved.r_framecount;
-  rState.r_dlightframecount = saved.r_dlightframecount;
+  Object.assign(rState, savedRState);
   r_refdef.ambientlight = saved.ambientlight;
   clState.cl_numvisedicts = saved.cl_numvisedicts;
   cl.free_efrags = saved.free_efrags;

@@ -52,6 +52,13 @@ const { scrState, scr_vrect } = screenTypesMod;
 const { vid } = vidMod;
 const { conState } = consoleMod;
 
+// resetScreenState()'s own beforeEach baseline (below) parks cls.state at
+// ca_connected for every test in this file, but nothing ever puts it back
+// afterward -- the last test to run here leaves cls.state at whatever it set
+// beyond that baseline for the rest of this bun process (rule 15). Snapshot
+// captured before any beforeEach/test runs, restored in this file's afterAll.
+const savedClsState = cls.state;
+
 // -- spies wrapping the real console/menu/sbar/snd_dma exports (see file
 // header): each replaces only its own function with a name-recording body.
 // These REPLACE real behavior (unlike a call-through spy), so unlike a
@@ -90,6 +97,7 @@ afterAll(() => {
   sbarFinaleSpy.mockRestore();
   sStopAllSoundsSpy.mockRestore();
   sClearBufferSpy.mockRestore();
+  cls.state = savedClsState;
 });
 
 // the registered-name/default-string pairs, captured as early as this file's
@@ -154,7 +162,7 @@ const picsFromWad: string[] = [];
 
 const hooks: ModelLoaderHooks = {
   notexture: new TextureTClass(),
-  Mod_LoadTextures(): void {},
+  textureLoaded(): void {},
   Mod_LoadLighting(): void {},
   Mod_LoadAliasModel(): void {},
   Mod_LoadSpriteModel(): void {},

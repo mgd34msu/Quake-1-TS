@@ -204,6 +204,12 @@ const testWavBytes = buildWav({ channels: 1, rate: 11025, widthBytes: 1, pcm: te
 const savedCmdInitialized = cmdHost.initialized;
 const savedMemsize = host_parms.memsize;
 const savedViewentity = cl.viewentity;
+// src/platform/snd.ts installs the real SndDma at module load (a
+// side-effect import reached through src/main.ts); this suite installs its
+// own fake driver for the duration of its own tests. Hard-nulling it in
+// afterAll (instead of restoring this snapshot) would permanently wipe out
+// that real installation for the rest of this bun process (rule 15).
+const savedSndDma = sndDma.current;
 
 const baseDir = join(scratchDir, "snd-fs");
 const pakPath = join(baseDir, "id1", "pak0.pak");
@@ -212,7 +218,7 @@ afterAll(() => {
   cmdHost.initialized = savedCmdInitialized;
   host_parms.memsize = savedMemsize;
   cl.viewentity = savedViewentity;
-  sndDma.current = null;
+  sndDma.current = savedSndDma;
   rmSync(scratchDir, { recursive: true, force: true });
 });
 

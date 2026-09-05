@@ -49,6 +49,18 @@ import { sysState } from "../src/platform/sys";
 const sentPackets: Uint8Array[] = [];
 const sendPacketSpy = spyOn(netUdp, "NET_SendPacket"); // module scope: bare spyOn (rule 15)
 
+// This file's own top-level beforeEach below (not scoped to any describe)
+// runs before every test in this file and unconditionally sets
+// cls.state/cls.qw.netchan/cls.demoplayback/cls.demorecording -- with
+// nothing to put them back afterward, the values the last-run test's
+// beforeEach installed leaked into every other suite sharing this bun
+// process (rule 15). Snapshotted here, before any beforeEach has run, and
+// restored in a top-level afterAll.
+const savedClsState = cls.state;
+const savedClsNetchan = cls.qw.netchan;
+const savedClsDemoplayback = cls.demoplayback;
+const savedClsDemorecording = cls.demorecording;
+
 beforeAll(() => {
   sendPacketSpy.mockImplementation((length: number, data: Uint8Array) => {
     sentPackets.push(data.slice(0, length));
@@ -57,6 +69,10 @@ beforeAll(() => {
 
 afterAll(() => {
   sendPacketSpy.mockRestore();
+  cls.state = savedClsState;
+  cls.qw.netchan = savedClsNetchan;
+  cls.demoplayback = savedClsDemoplayback;
+  cls.demorecording = savedClsDemorecording;
 });
 
 function makeAdr(s: string): NetadrT {

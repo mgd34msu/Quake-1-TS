@@ -95,6 +95,15 @@ const startSoundSpy = spyOn(snd_dma, "S_StartSound");
 let lastFakeModel: ModelT | null = null;
 let modForNameSpy: Mock<(name: string, crash: boolean) => ModelT | null>;
 
+// src/platform/snd.ts installs the real SndDma at module load (a
+// side-effect import reached through src/main.ts); installFakeSoundDriver
+// below replaces it with this file's own fake for the duration of this
+// suite. Hard-nulling it in afterAll (instead of restoring this snapshot)
+// would permanently wipe out that real installation for the rest of this
+// bun process, breaking any later suite that expects sndDma.current
+// installed (test/main_boot.test.ts's own check in particular) (rule 15).
+const savedSndDma = sndDma.current;
+
 afterAll(() => {
   allocDlightSpy.mockRestore();
   runParticleEffectSpy.mockRestore();
@@ -106,7 +115,7 @@ afterAll(() => {
   precacheSoundSpy.mockRestore();
   startSoundSpy.mockRestore();
   modForNameSpy.mockRestore();
-  sndDma.current = null;
+  sndDma.current = savedSndDma;
 });
 
 // -- fake SndDma driver (src/platform/snd.ts), same pattern as

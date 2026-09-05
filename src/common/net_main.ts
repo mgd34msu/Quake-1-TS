@@ -849,6 +849,16 @@ export function registerLandriver(d: NetLandriverT): void {
   net_numlandrivers = net_landrivers.length;
 }
 
+// Test-only setter: `net_landrivers` is already a mutable exported array a
+// suite can snapshot/truncate directly, but `net_numlandrivers` is a bare
+// `let` with no other writer than registerLandriver above, so a suite that
+// calls registerLandriver (directly, or through Sys_Main_Init's own call)
+// has no way to put the counter back in sync after truncating the array
+// back to its pre-test length (rule 15).
+export function setNetNumLandrivers(n: number): void {
+  net_numlandrivers = n;
+}
+
 /*
 ====================
 NET_Init
