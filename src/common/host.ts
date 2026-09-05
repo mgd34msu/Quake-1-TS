@@ -24,6 +24,19 @@ import { CvarT } from "./cvar";
 import { Com_sprintf } from "./sprintf";
 import { Con_Printf, Con_DPrintf } from "../client/console";
 import { Sys_Error } from "../platform/sys";
+import { MSG_WriteByte, MSG_WriteString } from "./sizebuf";
+import { SvcOpsT } from "./protocol";
+import { Hunk_FreeToLowMark } from "./zone";
+import { Mod_ClearAll } from "./model";
+import { sv, svState } from "../server/server";
+
+// The client-side pieces Host_ClearMemory touches (D_FlushCaches, cls.signon,
+// memset(&cl)) live in units not yet landed; they register here. Until then
+// the server half of the C body runs alone.
+export const hostClientHooks: { flushCaches: (() => void) | null; clearClient: (() => void) | null } = {
+  flushCaches: null,
+  clearClient: null,
+};
 
 export const host = {
   initialized: false, // true if into command execution
@@ -104,4 +117,38 @@ export function Host_EndGame(message: string, ...args: Array<string | number>): 
   Con_DPrintf("Host_EndGame: %s\n", string);
 
   throw new HostEndGame(string);
+}
+
+/*
+=================
+Host_ClientCommands
+
+Send text over to the client to be executed
+=================
+*/
+export function Host_ClientCommands(fmt: string, ...args: Array<string | number>): void {
+  const string = Com_sprintf(fmt, ...args);
+
+  const host_client = svState.host_client;
+  if (host_client === null) Sys_Error("Host_ClientCommands: no host_client");
+  MSG_WriteByte(host_client.message, SvcOpsT.svc_stufftext);
+  MSG_WriteString(host_client.message, string);
+}
+
+/*
+================
+Host_ClearMemory
+
+This clears all the memory used by both the client and server, but does
+not reinitialize anything.
+================
+*/
+export function Host_ClearMemory(): void {
+  Con_DPrintf("Clearing memory\n");
+  if (hostClientHooks.flushCaches) hostClientHooks.flushCaches(); // D_FlushCaches
+  Mod_ClearAll();
+  if (host.hunklevel) Hunk_FreeToLowMark(host.hunklevel);
+
+  if (hostClientHooks.clearClient) hostClientHooks.clearClient(); // cls.signon = 0; memset (&cl, 0, sizeof(cl))
+  sv.clear();
 }
