@@ -249,9 +249,21 @@ export function VID_SetPalette(palette: Uint8Array): void {
     const b = palette[i * 3 + 2];
     table[i] = (255 << 24) + (r << 0) + (g << 8) + (b << 16);
   }
+  // gl_vidlinuxglx.c's VID_SetPalette ends with `d_8to24table[255] &=
+  // 0xffffff;  // 255 is transparent`, which is what makes GL_Upload8's alpha
+  // pass produce alpha-0 texels for index 255 so GL_Set2D's alpha test throws
+  // them away. vid_x.c's VID_SetPalette has no such line -- the software
+  // present path needs entry 255's real alpha byte -- so the mask belongs to
+  // the GL build only. This one function serves both, hence the check.
+  if (activeRendererKind === "gl") table[255] &= 0xffffff;
 }
 
 export function VID_ShiftPalette(palette: Uint8Array): void {
+  // gl_vidlinuxglx.c's VID_ShiftPalette is an empty body (its one statement,
+  // `VID_SetPalette(p);`, is commented out); only vid_x.c's reloads the
+  // palette. Reloading it under GL would undo the `& 0xffffff` above on every
+  // V_UpdatePalette.
+  if (activeRendererKind === "gl") return;
   VID_SetPalette(palette);
 }
 
@@ -382,6 +394,12 @@ function VID_CheckChanges_(runRInit: boolean): void {
   vid.height = height;
   vid.rowbytes = width;
   vid.buffer = new Uint8Array(width * height);
+  // vid_x.c: `vid.conbuffer = vid.buffer;` (ResetFrameBuffer) and
+  // `vid.conrowbytes = vid.rowbytes;` (VID_Init). draw.c's Draw_Character /
+  // Draw_String / Draw_ConsoleBackground / Draw_Pixel write through these,
+  // not through vid.buffer.
+  vid.conbuffer = vid.buffer;
+  vid.conrowbytes = vid.rowbytes;
   vid.conwidth = width; // vid_x.c: `vid.conwidth = vid.width; vid.conheight = vid.height;`
   vid.conheight = height;
   // vid_x.c:668 and gl_vidlinuxglx.c:890, identically. R_ViewChanged takes
@@ -511,9 +529,11 @@ export function VID_Shutdown(): void {
   Con_Printf("VID_Shutdown\n");
   teardownActiveRenderer();
   vid.buffer = null;
+  vid.conbuffer = null;
   vid.width = 0;
   vid.height = 0;
   vid.rowbytes = 0;
+  vid.conrowbytes = 0;
 }
 
 // see file header: unreached in this port's call graph, ported for
@@ -579,9 +599,11 @@ hostClientHooks.vidShutdown = VID_Shutdown;
 export function VID_ResetForTests(): void {
   teardownActiveRenderer();
   vid.buffer = null;
+  vid.conbuffer = null;
   vid.width = 0;
   vid.height = 0;
   vid.rowbytes = 0;
+  vid.conrowbytes = 0;
   vid.colormap = null;
   vid.conwidth = 0;
   vid.conheight = 0;

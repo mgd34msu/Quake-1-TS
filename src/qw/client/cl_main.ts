@@ -15,7 +15,12 @@ Deviations from PORTING.md / the C source:
   src/qw/server/sv_main.ts uses for `svMainState` and src/common/host.ts for
   `host`. `netchanState.realtime` (src/qw/net_chan.ts) is net_chan.c's read of
   the same `realtime` global; Host_Frame republishes it once per frame, the
-  only writer on the client side.
+  only writer on the client side. `host.realtime`/`host.frametime`/
+  `host.framecount` (src/common/host.ts) are those same three C globals as the
+  shared src/client modules see them -- view.c's V_CalcBob/CalcGunAngle/
+  DropPunchAngle, screen.c's SCR_SetUpToDrawConsole/SCR_DrawNet, cl_input.c's
+  CL_AdjustAngles and snd_dma.c's ambient fade all read them on both tracks --
+  so Host_Frame republishes those three as well, for the same reason.
 - `Sys_DoubleTime` is this port's `Sys_FloatTime` (src/platform/sys.ts).
 - `setjmp (host_abort)` / `longjmp (host_abort, 1)` -> `HostEndGame`
   (src/common/host.ts's class, reused rather than redeclared) thrown by
@@ -121,7 +126,7 @@ import { NET_AdrToString, NET_CompareAdr, NET_Init, NET_IsClientLegal, NET_SendP
 import { Netchan_Init, Netchan_Process, Netchan_Setup, Netchan_Transmit, netchanState } from "../net_chan";
 import { A2A_ACK, A2A_PING, A2C_CLIENT_COMMAND, A2C_PRINT, ClcOpsT, MAX_CLIENTS, PORT_CLIENT, PROTOCOL_VERSION, S2C_CHALLENGE, S2C_CONNECTION } from "../protocol";
 import { Cvar_RegisterVariable, Cvar_Set, Cvar_VariableValue, Cvar_WriteVariables, CvarT, setCvarInfoHook } from "../../common/cvar";
-import { HostEndGame, SysFileTextWriter } from "../../common/host";
+import { host, HostEndGame, SysFileTextWriter } from "../../common/host";
 import { FileHandle } from "../../common/common";
 import type { QuakeParmsT } from "../../common/quakedef";
 import { Mod_ClearAll, Mod_Init } from "../../common/model";
@@ -1272,6 +1277,7 @@ export function Host_Frame(time: number): void {
 
     // decide the simulation time
     clMainState.realtime += time;
+    host.realtime = clMainState.realtime; // see below: one C global, two holders
     if (clMainState.oldrealtime > clMainState.realtime) clMainState.oldrealtime = 0;
 
     if (cl_maxfps.value) fps = Math.max(30.0, Math.min(cl_maxfps.value, 72.0));
@@ -1282,6 +1288,14 @@ export function Host_Frame(time: number): void {
     clMainState.host_frametime = clMainState.realtime - clMainState.oldrealtime;
     clMainState.oldrealtime = clMainState.realtime;
     if (clMainState.host_frametime > 0.2) clMainState.host_frametime = 0.2;
+
+    // `realtime` and `host_frametime` are single globals in the C, declared by
+    // whichever Host_Frame is linked and read by every client file. This port
+    // has two homes for them -- `clMainState` here and `host`
+    // (src/common/host.ts), which the shared src/client modules read on both
+    // tracks -- so Host_Frame republishes both, the same way it republishes
+    // `netchanState.realtime` below.
+    host.frametime = clMainState.host_frametime;
 
     netchanState.realtime = clMainState.realtime; // net_chan.c reads the `realtime` global
 
@@ -1339,6 +1353,7 @@ export function Host_Frame(time: number): void {
     }
 
     clMainState.host_framecount++;
+    host.framecount = clMainState.host_framecount; // one C global, two holders (see above)
     clMainState.fps_count++;
   } catch (err) {
     if (err instanceof HostEndGame) return; // something bad happened, or the server disconnected

@@ -211,6 +211,13 @@ describe("VID_Init -- the 8-bit buffer and palette upload", () => {
     expect(vid.width).toBeGreaterThan(0);
     expect(vid.height).toBeGreaterThan(0);
     expect(vid.rowbytes).toBe(vid.width);
+    // vid_x.c: `vid.conbuffer = vid.buffer;` (ResetFrameBuffer) and
+    // `vid.conrowbytes = vid.rowbytes;` (VID_Init). draw.c's
+    // Draw_Character/Draw_String/Draw_ConsoleBackground/Draw_Pixel write
+    // through these two, not through vid.buffer, so leaving them null makes
+    // every console line and every status-bar digit invisible.
+    expect(vid.conbuffer).toBe(vid.buffer);
+    expect(vid.conrowbytes).toBe(vid.rowbytes);
     expect(vid.conwidth).toBe(vid.width);
     expect(vid.conheight).toBe(vid.height);
     expect(vid.numpages).toBe(2);

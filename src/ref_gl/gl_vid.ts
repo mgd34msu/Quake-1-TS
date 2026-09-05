@@ -142,6 +142,20 @@ import { CString } from "bun:ffi";
 import { Con_Printf, Con_SafePrintf } from "../client/console";
 import { COM_CheckParm, com_gamedir } from "../common/common";
 import { host_basepal } from "../common/host";
+import { qw } from "../common/quakedef";
+// host.c's `byte *host_basepal` is one global; this port has two holders for
+// it -- src/common/host.ts on the WinQuake track, and src/qw/client/cl_main.ts
+// on the qwcl one, whose own Host_Init is what loads gfx/palette.lmp there.
+// Resolved exactly as src/platform/vid.ts resolves `host_colormap`.
+import type * as QwClMainModule from "../qw/client/cl_main";
+
+function qwClMainMod(): typeof QwClMainModule {
+  return require("../qw/client/cl_main");
+}
+
+function hostBasepal(): Uint8Array | null {
+  return qw.active ? qwClMainMod().host_basepal.data : host_basepal;
+}
 import { Sys_Error, Sys_mkdir } from "../platform/sys";
 import { d_8to24table, vid } from "../client/vid";
 import { glimpHolder } from "../platform/glimp";
@@ -378,7 +392,7 @@ export function GL_VidInit(): void {
   const gldir = `${com_gamedir}/glquake`;
   Sys_mkdir(gldir);
 
-  const palette = host_basepal;
+  const palette = hostBasepal();
   if (palette) VID_SetPalette(palette);
 
   // Check for 3DFX Extensions and initialize them.

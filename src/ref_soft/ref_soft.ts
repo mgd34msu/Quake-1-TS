@@ -120,6 +120,20 @@ import { CalcFov, scr_fov, scr_viewsize } from "../client/screen";
 import { Sbar_Changed } from "../client/sbar";
 import { cl_crossx, cl_crossy, crosshair, gammatable, V_CalcPowerupCshift, V_CheckGamma } from "../client/view";
 import { qw } from "../common/quakedef";
+
+// host.c's `byte *host_basepal` is one global; this port has two holders for
+// it -- src/common/host.ts on the WinQuake track, and src/qw/client/cl_main.ts
+// on the qwcl one, whose own Host_Init is what loads gfx/palette.lmp there.
+// Resolved exactly as src/platform/vid.ts resolves `host_colormap`.
+import type * as QwClMainModule from "../qw/client/cl_main";
+
+function qwClMainMod(): typeof QwClMainModule {
+  return require("../qw/client/cl_main");
+}
+
+function hostBasepal(): Uint8Array | null {
+  return qw.active ? qwClMainMod().host_basepal.data : host_basepal;
+}
 import { registerRenderer } from "../platform/vid";
 import { dState } from "./d_local";
 import { R_Init, R_NewMap, R_RenderView, R_SetVrect, R_ViewChanged } from "./r_main";
@@ -197,7 +211,7 @@ function V_UpdatePalette(): void {
   force = V_CheckGamma();
   if (!isnew && !force) return;
 
-  const basepal = host_basepal;
+  const basepal = hostBasepal();
   if (!basepal) return;
 
   let basepalIdx = 0;
@@ -439,7 +453,7 @@ function SCR_ScreenShot_f(): void {
   //  buffer
 
   const buffer = vid.buffer;
-  const basepal = host_basepal;
+  const basepal = hostBasepal();
   if (buffer && basepal) WritePCXfile(pcxname, buffer, vid.width, vid.height, vid.rowbytes, basepal);
 
   D_DisableBackBufferAccess(); // for adapters that can't stay mapped in

@@ -35,7 +35,7 @@ const { qw } = quakedefMod;
 const { vec3 } = mathMod;
 const { IT_QUAD, IT_INVULNERABILITY } = quakedefMod;
 const { STAT_ITEMS } = bothdefsMod;
-const { UPDATE_BACKUP } = protocolMod;
+const { PF_DEAD, UPDATE_BACKUP } = protocolMod;
 const { pmState } = pmoveTypesMod;
 const { CSHIFT_DAMAGE, CSHIFT_POWERUP, CactiveT, cl, cls } = clientMod;
 const { re } = renderMod;
@@ -162,7 +162,9 @@ const fake: Renderer = {
   Draw_SubPic(): void {},
   Draw_Alt_String(): void {},
   isGL: false,
-  SCR_ScreenShot_f(): void {},
+  SCR_ScreenShot_f(): void {
+    calls.push("SCR_ScreenShot_f");
+  },
 };
 
 beforeAll(() => {
@@ -295,15 +297,117 @@ describe("SCR_DrawNet (qw)", () => {
   });
 });
 
-describe("SCR_RSShot_f / SCR_ScreenShot_f (qw) -- gated", () => {
-  test("without a software framebuffer, both report the renderer gap and do nothing else observable", () => {
-    vid.buffer = null; // no software framebuffer (as if GL were active)
-    cls.state = CactiveT.ca_active;
-    screenMod.SCR_RSShot_f();
+describe("SCR_ScreenShot_f / SCR_RSShot_f (qw)", () => {
+  // screen.c writes a PCX of vid.buffer, gl_screen.c writes a TGA of
+  // glReadPixels; both bodies live behind the renderer seam, so this command
+  // has to forward instead of carrying its own software-only copy (which
+  // captured an all-black PCX under -vid_ref gl, since this port allocates
+  // vid.buffer for both renderers).
+  test("forwards to Renderer.SCR_ScreenShot_f", () => {
     screenMod.SCR_ScreenShot_f();
-    // no exception, no upload/write attempted; the exact Con_Printf gap
-    // message is this unit's own reported deviation (see screen.ts's header)
-    expect(true).toBe(true);
+    expect(calls).toContain("SCR_ScreenShot_f");
+  });
+
+  test("forwards even when vid.buffer is null, i.e. it does not gate on the software framebuffer", () => {
+    const savedBuffer = vid.buffer;
+    vid.buffer = null;
+    try {
+      screenMod.SCR_ScreenShot_f();
+      expect(calls).toContain("SCR_ScreenShot_f");
+    } finally {
+      vid.buffer = savedBuffer;
+    }
+  });
+
+  test("SCR_RSShot_f (snap) keeps screen.c's own software body and does not reach the seam", () => {
+    const savedBuffer = vid.buffer;
+    vid.buffer = null; // no software framebuffer to sample
+    cls.state = CactiveT.ca_active;
+    try {
+      screenMod.SCR_RSShot_f();
+      expect(calls).not.toContain("SCR_ScreenShot_f");
+    } finally {
+      vid.buffer = savedBuffer;
+    }
+  });
+});
+
+describe("V_CalcRefdef (qw): where the eye and the view weapon end up", () => {
+  // QW/client/view.c V_CalcRefdef: r_refdef.vieworg is cl.simorg + bob +
+  // 1/16 on every axis + 22 (view height); cl.viewent.origin is cl.simorg +
+  // 22 + forward*bob*0.4 + bob, plus the scr_viewsize fudge (+2 at 100).
+  // With bob 0 that puts the gun 2 units above the eye minus the 1/16 nudge,
+  // NOT above the top of the screen.
+  function settleRefdef(simorg: [number, number, number], simangles: [number, number, number]): void {
+    cls.state = CactiveT.ca_active;
+    cls.demoplayback = false;
+    cls.qw.netchan.incoming_sequence = 0;
+    cl.qw.playernum = 0;
+    cl.qw.spectator = 1; // V_CalcBob returns 0 for a spectator, so bob is exactly 0
+    cl.qw.punchangle = 0;
+    for (let i = 0; i < 3; i++) {
+      cl.qw.simorg[i] = simorg[i];
+      cl.qw.simangles[i] = simangles[i];
+      cl.qw.simvel[i] = 0;
+    }
+    const ps = cl.qw.frames[0].playerstate[0];
+    ps.flags = 0;
+    ps.onground = -1; // V_DriftPitch returns early; no stair-step smoothing
+    ps.weaponframe = 0;
+    screenMod.scr_viewsize.value = 100;
+
+    // several frames so view.c's damage-kick timer (v_dmg_time) and
+    // CalcGunAngle's oldyaw/oldpitch statics have settled, whatever an
+    // earlier suite left behind
+    for (let i = 0; i < 10; i++) viewMod.V_RenderView();
+  }
+
+  test("the eye is 22 above cl.simorg and the gun is 2 above the eye (viewsize 100)", () => {
+    settleRefdef([100, 200, 50], [0, 90, 0]);
+
+    expect(renderMod.r_refdef.vieworg[0]).toBeCloseTo(100 + 1 / 16, 5);
+    expect(renderMod.r_refdef.vieworg[1]).toBeCloseTo(200 + 1 / 16, 5);
+    expect(renderMod.r_refdef.vieworg[2]).toBeCloseTo(50 + 22 + 1 / 16, 5);
+
+    expect(cl.viewent.origin[0]).toBeCloseTo(100, 5);
+    expect(cl.viewent.origin[1]).toBeCloseTo(200, 5);
+    expect(cl.viewent.origin[2]).toBeCloseTo(50 + 22 + 2, 5);
+
+    // the gun sits just above the eye, never a screen-height away from it
+    expect(cl.viewent.origin[2] - renderMod.r_refdef.vieworg[2]).toBeCloseTo(2 - 1 / 16, 5);
+  });
+
+  test("the gun's pitch is the negated view pitch and its yaw matches (CalcGunAngle)", () => {
+    settleRefdef([0, 0, 0], [10, 90, 0]);
+
+    expect(renderMod.r_refdef.viewangles[0]).toBeCloseTo(10, 5);
+    expect(renderMod.r_refdef.viewangles[1]).toBeCloseTo(90, 5);
+    expect(cl.viewent.angles[0]).toBeCloseTo(-10, 5);
+    expect(cl.viewent.angles[1]).toBeCloseTo(90, 5);
+    expect(cl.viewent.angles[2]).toBeCloseTo(0, 5); // V_RenderView zeroes cl.simangles[ROLL]
+  });
+
+  test("PF_DEAD drops the eye 16 below cl.simorg instead of raising it 22", () => {
+    cls.state = CactiveT.ca_active;
+    cls.demoplayback = false;
+    cls.qw.netchan.incoming_sequence = 0;
+    cl.qw.playernum = 0;
+    cl.qw.spectator = 1;
+    cl.qw.punchangle = 0;
+    for (let i = 0; i < 3; i++) {
+      cl.qw.simorg[i] = 0;
+      cl.qw.simangles[i] = 0;
+      cl.qw.simvel[i] = 0;
+    }
+    cl.qw.simorg[2] = 50;
+    const ps = cl.qw.frames[0].playerstate[0];
+    ps.flags = PF_DEAD;
+    ps.onground = -1;
+    for (let i = 0; i < 10; i++) viewMod.V_RenderView();
+
+    expect(renderMod.r_refdef.vieworg[2]).toBeCloseTo(50 - 16 + 1 / 16, 5);
+    expect(renderMod.r_refdef.viewangles[2]).toBeCloseTo(80, 5); // dead view angle
+    expect(cl.viewent.model).toBe(null);
   });
 });
 

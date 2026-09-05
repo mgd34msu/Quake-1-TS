@@ -133,6 +133,18 @@ Deviations from PORTING.md / the C source:
 - Dropped `#ifdef GLQUAKE` branches: every member listed as "empty" in the
   table above is the GL side of a site whose only body is in screen.c,
   view.c or a d_*.c/r_*.c software file.
+
+QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
+../qsrc/quake/QW/client/gl_screen.c against WinQuake/gl_screen.c):
+- `SCR_CalcRefdef`: QW's `h` is `vid.height` (not `vid.height - sb_lines`)
+  when `!cl_sbar.value && full`, and the height clamp becomes an either/or --
+  `if (cl_sbar.value || !full)` clamps to `vid.height - sb_lines`, `else`
+  clamps to `vid.height`, where WinQuake's applies both in sequence. With
+  qwcl's default `cl_sbar 0` at viewsize 100 the refresh therefore fills the
+  screen and the status bar overlays it, exactly as R_SetVrect already does
+  on the software side (src/ref_soft/r_main.ts).
+- `host_basepal` is one C global with two holders in this port; see
+  `hostBasepal()` below.
 */
 
 import { COM_WriteFile, com_gamedir } from "../common/common";
@@ -148,6 +160,20 @@ import { CalcFov, scr_fov, scr_viewsize } from "../client/screen";
 import { Sbar_Changed } from "../client/sbar";
 import { crosshair, gammatable, V_CalcPowerupCshift, V_CheckGamma } from "../client/view";
 import { qw } from "../common/quakedef";
+
+// host.c's `byte *host_basepal` is one global; this port has two holders for
+// it -- src/common/host.ts on the WinQuake track, and src/qw/client/cl_main.ts
+// on the qwcl one, whose own Host_Init is what loads gfx/palette.lmp there.
+// Resolved exactly as src/platform/vid.ts resolves `host_colormap`.
+import type * as QwClMainModule from "../qw/client/cl_main";
+
+function qwClMainMod(): typeof QwClMainModule {
+  return require("../qw/client/cl_main");
+}
+
+function hostBasepal(): Uint8Array | null {
+  return qw.active ? qwClMainMod().host_basepal.data : host_basepal;
+}
 import { registerRenderer } from "../platform/vid";
 import { glState } from "./glquake";
 import { GL_RGB, GL_UNSIGNED_BYTE, qgl, qglHolder, QGL_Shutdown } from "./qgl";
@@ -257,7 +283,7 @@ function V_UpdatePalette(): void {
     ramps[2][i] = gammatable[ib];
   }
 
-  const basepal = host_basepal;
+  const basepal = hostBasepal();
   if (!basepal) return;
 
   let basepalIdx = 0;
@@ -326,7 +352,14 @@ function SCR_CalcRefdef(): void {
   }
   size /= 100.0;
 
-  h = vid.height - scrState.sb_lines;
+  // QW/client/gl_screen.c: with `cl_sbar 0` (its default) and a full-size
+  // view, the refresh gets the whole screen and the status bar overlays it,
+  // instead of the view being cut short by sb_lines. The same fold is in the
+  // software renderer's R_SetVrect (src/ref_soft/r_main.ts).
+  const qwFullNoSbar = qw.active && !qwClMainMod().cl_sbar.value && full;
+
+  if (qwFullNoSbar) h = vid.height;
+  else h = vid.height - scrState.sb_lines;
 
   r_refdef.vrect.width = (vid.width * size) | 0;
   if (r_refdef.vrect.width < 96) {
@@ -335,8 +368,10 @@ function SCR_CalcRefdef(): void {
   }
 
   r_refdef.vrect.height = (vid.height * size) | 0;
-  if (r_refdef.vrect.height > vid.height - scrState.sb_lines) r_refdef.vrect.height = vid.height - scrState.sb_lines;
-  if (r_refdef.vrect.height > vid.height) r_refdef.vrect.height = vid.height;
+  if (!qwFullNoSbar) {
+    if (r_refdef.vrect.height > vid.height - scrState.sb_lines) r_refdef.vrect.height = vid.height - scrState.sb_lines;
+    if (!qw.active && r_refdef.vrect.height > vid.height) r_refdef.vrect.height = vid.height;
+  } else if (r_refdef.vrect.height > vid.height) r_refdef.vrect.height = vid.height;
   r_refdef.vrect.x = ((vid.width - r_refdef.vrect.width) / 2) | 0;
   if (full) r_refdef.vrect.y = 0;
   else r_refdef.vrect.y = ((h - r_refdef.vrect.height) / 2) | 0;

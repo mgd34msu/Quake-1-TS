@@ -45,6 +45,7 @@ import { re } from "./src/client/render";
 import { scrState } from "./src/client/screen_types";
 import { con_main, conState } from "./src/qw/client/console";
 import { clMainState } from "./src/qw/client/cl_main";
+import { host } from "./src/common/host";
 import { Info_ValueForKey } from "./src/qw/common";
 
 const fixture = buildQwclFixture("qwcl-boot-child-");
@@ -82,6 +83,15 @@ try {
     conOrmask: conState.con_ormask,
     hostFramecount: clMainState.host_framecount,
     realtime: clMainState.realtime,
+    // realtime / host_frametime / host_framecount are single C globals that
+    // this port keeps in two holders; QW's Host_Frame republishes them into
+    // the host holder (src/common/host.ts), which every shared src/client
+    // module reads.
+    hostHolderRealtime: host.realtime,
+    hostHolderFrametime: host.frametime,
+    hostHolderFramecount: host.framecount,
+    vidConbufferIsBuffer: vid.conbuffer !== null && vid.conbuffer === vid.buffer,
+    vidConrowbytes: vid.conrowbytes,
     userinfo: cls.qw.userinfo,
     userinfoVer: Info_ValueForKey(cls.qw.userinfo, "*ver"),
     userinfoName: Info_ValueForKey(cls.qw.userinfo, "name"),
@@ -144,6 +154,11 @@ interface BootSnapshot {
   conOrmask: number;
   hostFramecount: number;
   realtime: number;
+  hostHolderRealtime: number;
+  hostHolderFrametime: number;
+  hostHolderFramecount: number;
+  vidConbufferIsBuffer: boolean;
+  vidConrowbytes: number;
   userinfo: string;
   userinfoVer: string;
   userinfoName: string;
@@ -199,6 +214,11 @@ function parseSnapshot(value: unknown): BootSnapshot {
     conOrmask: num(r, "conOrmask"),
     hostFramecount: num(r, "hostFramecount"),
     realtime: num(r, "realtime"),
+    hostHolderRealtime: num(r, "hostHolderRealtime"),
+    hostHolderFrametime: num(r, "hostHolderFrametime"),
+    hostHolderFramecount: num(r, "hostHolderFramecount"),
+    vidConbufferIsBuffer: bool(r, "vidConbufferIsBuffer"),
+    vidConrowbytes: num(r, "vidConrowbytes"),
     userinfo: str(r, "userinfo"),
     userinfoVer: str(r, "userinfoVer"),
     userinfoName: str(r, "userinfoName"),
@@ -314,6 +334,28 @@ describe("Sys_Main_Init + runFrames -- a real qwcl boot", () => {
     expect(s.vidWidth).toBe(640);
     expect(s.vidHeight).toBe(480);
     expect(s.vidBufferLen).toBe(640 * 480);
+  });
+
+  test("Host_Frame published realtime/host_frametime/host_framecount into the shared `host` holder", () => {
+    const s = requireSnapshot();
+    // view.c's V_CalcBob/CalcGunAngle/DropPunchAngle, screen.c's
+    // SCR_SetUpToDrawConsole and cl_input.c's CL_AdjustAngles all read these
+    // as `host.frametime` / `host.realtime`; leaving them at 0 froze the
+    // console fully open (scr_con_current never slid down), which in turn made
+    // Sbar_Draw return early on its `scr_con_current == vid.height` check.
+    expect(s.hostHolderRealtime).toBeCloseTo(s.realtime, 5);
+    expect(s.hostHolderFrametime).toBeGreaterThan(0);
+    expect(s.hostHolderFramecount).toBe(s.hostFramecount);
+  });
+
+  test("VID_Init pointed vid.conbuffer at the software framebuffer", () => {
+    const s = requireSnapshot();
+    // vid_x.c's `vid.conbuffer = vid.buffer; vid.conrowbytes = vid.rowbytes;`
+    // -- draw.c's Draw_Character/Draw_String/Draw_ConsoleBackground/
+    // Draw_Pixel write through these, so a null conbuffer means no console
+    // text and no status-bar characters anywhere.
+    expect(s.vidConbufferIsBuffer).toBe(true);
+    expect(s.vidConrowbytes).toBe(s.vidWidth);
   });
 
   test("Host_Frame ran SCR_UpdateScreen and the software renderer painted a frame", () => {

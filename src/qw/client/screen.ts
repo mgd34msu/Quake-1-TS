@@ -27,24 +27,27 @@ own header table:
     GL_Set2D, SCR_TileClear, SCR_DrawCrosshair, D_UpdateRects -> called
     exactly where the landed WinQuake screen.ts calls them; their renderer
     bodies (ref_soft/ref_gl, Q024's scope) are unmodified by this unit.
-  * SCR_ScreenShot_f/SCR_RSShot_f are NOT routed through the renderer seam
-    here (unlike WinQuake's, which forwards to `Renderer.SCR_ScreenShot_f()`):
-    both QW C bodies (in screen.c AND gl_screen.c) are self-contained given
-    only `vid.buffer`/`vid.rowbytes` (the software framebuffer, already
-    exported by src/client/vid.ts) and `host_basepal.data`
-    (src/qw/client/cl_main.ts) -- no renderer capability was missing, so
-    WritePCXfile/MipColor/SCR_DrawCharToSnap/SCR_DrawStringToSnap are ported
-    directly here (this module's own private helpers), using
+  * SCR_ScreenShot_f forwards to `Renderer.SCR_ScreenShot_f()`, exactly as
+    the landed WinQuake screen.ts does. screen.c and gl_screen.c each define
+    the command -- a PCX of `vid.buffer` in a software build, a TGA of
+    `glReadPixels` in a GLQUAKE one -- and QW's gl_screen.c body is
+    byte-identical to WinQuake's while QW's screen.c body differs from
+    WinQuake's only in the "Couldn't create a PCX" text, so both live behind
+    the seam already (src/ref_soft/ref_soft.ts, src/ref_gl/ref_gl.ts). A
+    second software-only copy here wrote an all-black PCX under
+    `-vid_ref gl`, since this port allocates `vid.buffer` for both renderers.
+  * SCR_RSShot_f (the `snap` command, QW-only) is NOT on the seam: its body
+    needs CL_StartUpload and cls/name, client state no renderer module owns,
+    and its GL twin's `glReadPixels` capture would need a new render.ts
+    method. screen.c's software body is ported here, with
+    WritePCXfile/MipColor/SCR_DrawCharToSnap/SCR_DrawStringToSnap as this
+    module's own private helpers and
     `getRenderer().D_EnableBackBufferAccess()`/`D_DisableBackBufferAccess()`
-    (already-existing Renderer methods) exactly as screen.c's own bodies do.
-    Ported from screen.c's (software) bodies specifically: gl_screen.c's own
-    SCR_RSShot_f captures via `glReadPixels`, which needs a real GL renderer
-    method this unit cannot add (render.ts is out of SCOPE) -- when
-    `vid.buffer` is null (a GL renderer is active, so the software framebuffer
-    was never allocated), both commands Con_Printf a
-    "not supported without the software framebuffer" message and return.
-    Reported as a render.ts gap, the same shape as the WinQuake module's own
-    "Four Draw_TileClear sites... reported as a render.ts gap" note.
+    exactly where the C calls them. Under a GL renderer `vid.buffer` holds no
+    rendered pixels, so `snap` captures a black frame there; reported as a
+    render.ts gap (a pixel-readback method), the same shape as the WinQuake
+    module's own "Four Draw_TileClear sites... reported as a render.ts gap"
+    note.
   * `ctime()`'s exact glibc format ("Www Mmm dd hh:mm:ss yyyy") is
     approximated by a small local formatter (day/month names, zero-padded
     fields) rather than `Date.prototype.toString()`'s locale/engine-dependent
@@ -118,13 +121,13 @@ Deviations from PORTING.md / the C source:
 */
 
 import { Cmd_AddCommand } from "../../common/cmd";
-import { COM_WriteFile, com_gamedir } from "../../common/common";
+import { COM_WriteFile } from "../../common/common";
 import { CvarT, Cvar_RegisterVariable, Cvar_SetValue } from "../../common/cvar";
 import { M_PI } from "../../common/mathlib";
 import { host } from "../../common/host";
 import { MSG_WriteByte, SZ_Print } from "../../common/sizebuf";
 import { QpicT, W_GetLumpName, W_GetQpic } from "../../common/wad";
-import { Sys_Error, Sys_FileTime, Sys_SendKeyEvents } from "../../platform/sys";
+import { Sys_Error, Sys_SendKeyEvents } from "../../platform/sys";
 import { CactiveT, cl, cls } from "../../client/client";
 import { Con_CheckResize, Con_ClearNotify, Con_DrawConsole, Con_DrawNotify, Con_Printf, conState } from "./console";
 import { K_ESCAPE, KeydestT, keyState, key_lastpress } from "../../client/keys";
@@ -484,12 +487,8 @@ function writePCXfile(
 
   let pack = PCX_DATA_OFS;
 
-  // The C walks `data` bottom row to top (see file header: two `+=`/`-=`
-  // pointer adjustments per row that net to `-rowbytes`); tracked directly
-  // here as a single per-row decrement.
-  let rowStart = rowbytes * (height - 1);
+  let srcIdx = 0;
   for (let i = 0; i < height; i++) {
-    let srcIdx = rowStart;
     for (let j = 0; j < width; j++) {
       const b = data[srcIdx] ?? 0;
       srcIdx++;
@@ -500,7 +499,8 @@ function writePCXfile(
         buf[pack++] = b;
       }
     }
-    rowStart -= rowbytes;
+
+    srcIdx += rowbytes - width;
   }
 
   buf[pack++] = 0x0c; // palette ID byte
@@ -512,34 +512,17 @@ function writePCXfile(
 }
 
 export function SCR_ScreenShot_f(): void {
-  if (!vid.buffer) {
-    Con_Printf("screenshot: not supported without the software framebuffer (see file header)\n");
-    return;
-  }
-
-  let pcxname = "";
-  let found = false;
-  for (let i = 0; i <= 99; i++) {
-    const candidate = `quake${String(i).padStart(2, "0")}.pcx`;
-    if (Sys_FileTime(`${com_gamedir}/${candidate}`) === -1) {
-      pcxname = candidate;
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
-    Con_Printf("SCR_ScreenShot_f: Couldn't create a PCX");
-    return;
-  }
-
-  const re = getRenderer();
-  re.D_EnableBackBufferAccess();
-
-  writePCXfile(pcxname, vid.buffer, vid.width, vid.height, vid.rowbytes, host_basepal.data ?? new Uint8Array(768), false);
-
-  re.D_DisableBackBufferAccess();
-
-  Con_Printf("Wrote %s\n", pcxname);
+  // screen.c and gl_screen.c each define this command: the software build
+  // writes quake00.pcx out of vid.buffer, the GLQUAKE build writes
+  // quake00.tga out of glReadPixels. That is exactly the split PORTING.md's
+  // renderer seam owns, and both bodies already live behind it
+  // (src/ref_soft/ref_soft.ts, src/ref_gl/ref_gl.ts, ported from WinQuake's
+  // identical pair -- QW's gl_screen.c body is byte-identical to WinQuake's,
+  // and QW's screen.c body differs from WinQuake's only in the
+  // "Couldn't create a PCX" text), so this forwards the same way
+  // src/client/screen.ts does instead of carrying a second software-only
+  // copy that renders black under -vid_ref gl.
+  getRenderer().SCR_ScreenShot_f();
 }
 
 //=============================================================================

@@ -368,6 +368,52 @@ describe("Sbar_Draw / Sbar_DrawInventory: cl_sbar and cl_hudswap", () => {
     expect(pics.some((p) => p.picName === "sbar")).toBe(false);
   });
 
+  test("headsup ammo strips land at the bottom-right: x = vid.width-42, y = vid.height-24 + (-24-(4-i)*11)", () => {
+    cl_sbar.value = 0;
+    scr_viewsize.value = 100;
+    cl_hudswap.value = 0;
+    vid.width = 640;
+    vid.height = 480;
+
+    fake.calls.length = 0;
+    Sbar_DrawInventory();
+
+    const subs = fake.calls.filter((c): c is Extract<DrawCall, { fn: "Draw_SubPic" }> => c.fn === "Draw_SubPic");
+    // sbar.c: Sbar_DrawSubPic((hudswap)?0:(vid.width-42), -24-(4-i)*11,
+    // sb_ibar, 3+(i*48), 0, 42, 11), and Sbar_DrawSubPic adds
+    // (vid.height - SBAR_HEIGHT) to y.
+    for (let i = 0; i < 4; i++) {
+      const expectedY = -24 - (4 - i) * 11 + (vid.height - 24);
+      const hit = subs.find((c) => c.picName === "ibar" && c.srcx === 3 + i * 48);
+      expect(hit).toBeDefined();
+      expect(hit?.x).toBe(vid.width - 42);
+      expect(hit?.y).toBe(expectedY);
+      expect(hit?.w).toBe(42);
+      expect(hit?.h).toBe(11);
+      // all four strips sit in the bottom quarter of the screen, never the top
+      expect(expectedY).toBeGreaterThan(vid.height / 2);
+    }
+  });
+
+  test("cl_hudswap 1 moves the headsup ammo strips to the left edge and leaves y alone", () => {
+    cl_sbar.value = 0;
+    scr_viewsize.value = 100;
+    cl_hudswap.value = 1;
+    vid.width = 640;
+    vid.height = 480;
+
+    fake.calls.length = 0;
+    Sbar_DrawInventory();
+
+    const subs = fake.calls.filter((c): c is Extract<DrawCall, { fn: "Draw_SubPic" }> => c.fn === "Draw_SubPic");
+    for (let i = 0; i < 4; i++) {
+      const hit = subs.find((c) => c.picName === "ibar" && c.srcx === 3 + i * 48);
+      expect(hit).toBeDefined();
+      expect(hit?.x).toBe(0);
+      expect(hit?.y).toBe(-24 - (4 - i) * 11 + (vid.height - 24));
+    }
+  });
+
   test("cl_hudswap moves the headsup ammo-count digits between the left and right edges", () => {
     cl_sbar.value = 0;
     scr_viewsize.value = 100;
