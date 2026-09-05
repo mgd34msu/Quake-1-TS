@@ -32,29 +32,80 @@ Deviations from PORTING.md / the C source:
   wraps a real file for it. Formats every archived cvar as `Com_sprintf('%s
   "%s"\n', var.name, var.string)`, matching the C's `fprintf (f, "%s \"%s\"\n"
   ...)` exactly, one `write` call per line.
+- QuakeWorld track (Q001/Q005, PORTING.md's "Cvars gain flags" ruling,
+  corrected 2026-09-05): the original ruling's premise was wrong. QW 2.33's
+  actual `cvar.h` (QW/client/cvar.h) has no `CVAR_*` bitmask constants at all
+  -- checked by reading the header and grepping the entire QW/ source tree
+  for `CVAR_` (no hits outside .mak dependency-file noise). `cvar_t` there
+  has exactly two `qboolean` fields, `archive` and `info` (a single flag
+  meaning "propagate to userinfo" on the client binary and "propagate to
+  serverinfo" on the server binary -- the same field, read differently
+  depending on which binary is compiled; see QW/client/cvar.c's `Cvar_Set`,
+  `#ifdef SERVERONLY`). `CVAR_NOSET` does not exist anywhere in this GPL
+  release either; it is a later fork's addition (ProQuake/ezQuake-era
+  engines), not QW 2.33's. The synthesized `flags` bitmask + `CVAR_ARCHIVE`/
+  `CVAR_USERINFO`/`CVAR_SERVERINFO` Q001 added are removed; `CvarT` instead
+  gains a plain `info: boolean` (5th constructor argument, default `false`),
+  matching QW's actual `cvar_t` shape one-for-one. `archive`/`server` keep
+  their exact prior meaning and are unaffected (WinQuake call sites, all
+  existing tests).
+- QW's `Cvar_Set` (QW/client/cvar.c) differs from WinQuake's landed one only
+  by this `info` propagation (the `#ifndef SERVERONLY`/`#ifdef SERVERONLY`
+  branches send to userinfo or serverinfo respectively); folded here under
+  the `qw.active` runtime flag (PORTING.md: "small deltas fold into the
+  landed module under qw.active") rather than kept as a second `Cvar_Set` in
+  src/qw/cvar.ts. `cvarInfoHook`/`setCvarInfoHook` below is the registrable
+  hook the qwcl entry point (userinfo + the setinfo network message) and the
+  qwsv entry point (serverinfo) each install; those entry points are later
+  units, so with no hook registered an info-flagged cvar still updates
+  correctly and only the propagation side effect is a no-op, the same
+  convention `CvarServerHooks` above already uses.
+- QW's `Cvar_SetValue` is textually identical to WinQuake's
+  (`sprintf (val, "%f", value); Cvar_Set (var_name, val);` in both
+  QW/client/cvar.c and WinQuake/cvar.c) -- no fold needed, src/qw/cvar.ts
+  re-exports this module's `Cvar_SetValue` unchanged.
+- QW's `Cvar_RegisterVariable` links the cvar into `cvar_vars` and then calls
+  `Cvar_Set (variable->name, value)` unconditionally (so an info-flagged cvar
+  propagates immediately on registration too), where WinQuake's never calls
+  `Cvar_Set` from here. This is additive and under the same `qw.active` fold.
+- QW's `Cvar_CompleteVariable` checks for an exact name match before falling
+  back to the same prefix-match loop WinQuake's uses; folded the same way.
 */
 
 import { Q_atof } from "./common";
 import { Cmd_Exists, Cmd_Argc, Cmd_Argv } from "./cmd";
 import { Con_Printf } from "../client/console";
 import { Com_sprintf } from "./sprintf";
+import { qw } from "./quakedef";
 
 export class CvarT {
   name: string;
   string: string;
   archive: boolean;
   server: boolean; // notifies players when changed
+  info: boolean; // QuakeWorld track: propagate to userinfo (qwcl) / serverinfo (qwsv) when changed
   value: number;
   next: CvarT | null;
 
-  constructor(name: string, string: string, archive = false, server = false) {
+  constructor(name: string, string: string, archive = false, server = false, info = false) {
     this.name = name;
     this.string = string;
     this.archive = archive;
     this.server = server;
+    this.info = info;
     this.value = 0; // set by Cvar_RegisterVariable/Cvar_Set; a cvar is 0 until registered, same as the C
     this.next = null;
   }
+}
+
+// QuakeWorld track: registrable hook for CvarT.info propagation -- see file
+// header. The qwcl entry point installs the userinfo/setinfo-message
+// behavior, the qwsv entry point the serverinfo behavior; only one is ever
+// registered in a given process (qwcl and qwsv are separate binaries).
+export type CvarInfoHook = (name: string, value: string) => void;
+let cvarInfoHook: CvarInfoHook | null = null;
+export function setCvarInfoHook(fn: CvarInfoHook | null): void {
+  cvarInfoHook = fn;
 }
 
 // cvar_t *cvar_vars;
@@ -113,6 +164,13 @@ export function Cvar_CompleteVariable(partial: string): string | null {
 
   if (!len) return null;
 
+  // QW/client/cvar.c's Cvar_CompleteVariable checks for an exact match before
+  // falling back to the prefix match below; folded under qw.active (see file
+  // header). WinQuake's cvar.c has no such exact-match pass.
+  if (qw.active) {
+    for (let cvar = cvar_vars; cvar !== null; cvar = cvar.next) if (partial === cvar.name) return cvar.name;
+  }
+
   // check functions
   for (let cvar = cvar_vars; cvar !== null; cvar = cvar.next) if (cvar.name.startsWith(partial)) return cvar.name;
 
@@ -136,6 +194,13 @@ export function Cvar_Set(var_name: string, value: string): void {
 
   v.string = value; // Z_Free the old value string, Z_Malloc + copy the new one -> plain assignment
   v.value = Q_atof(v.string);
+
+  // QuakeWorld track (QW/client/cvar.c's Cvar_Set): propagate an info-flagged
+  // cvar to userinfo (qwcl) or serverinfo (qwsv) -- see file header.
+  if (qw.active && v.info && cvarInfoHook !== null) {
+    cvarInfoHook(v.name, value);
+  }
+
   if (v.server && changed) {
     if (serverHooks !== null && serverHooks.active()) {
       serverHooks.broadcastPrintf('"%s" changed to "%s"\n', v.name, v.string);
@@ -180,6 +245,12 @@ export function Cvar_RegisterVariable(variable: CvarT): void {
   // link the variable in
   variable.next = cvar_vars;
   cvar_vars = variable;
+
+  // QW/client/cvar.c's Cvar_RegisterVariable calls Cvar_Set(variable->name,
+  // value) right after linking, unconditionally, so an info-flagged cvar
+  // propagates immediately on registration; WinQuake's never does this.
+  // Folded under qw.active (see file header).
+  if (qw.active) Cvar_Set(variable.name, variable.string);
 }
 
 /*

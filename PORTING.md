@@ -261,10 +261,23 @@ Rulings:
   `download*`, ...). Shared code (renderers, sound, sbar seam) reads the common fields on
   `cl`/`cls`; QW modules read `cl.qw`. `CactiveT` gains QW's `ca_demostart`, `ca_onserver`,
   `ca_active` values after the WinQuake ones.
-- **Cvars gain flags.** `CvarT` keeps `archive`/`server` and gains `flags` (`CVAR_ARCHIVE`,
-  `CVAR_USERINFO`, `CVAR_SERVERINFO`, `CVAR_NOSET`? -- exactly QW `cvar.h`'s set) kept in
-  sync by the constructor; `src/qw/cvar.ts` ports QW `cvar.c` (Cvar_Info, the
-  userinfo/serverinfo propagation) over the same `CvarT`.
+- **Cvars gain `info`.** Corrected 2026-09-05: QW 2.33's actual `cvar_t` (QW/client/cvar.h)
+  has no `CVAR_*` bitmask at all -- just two `qboolean`s, `archive` and `info` (a single
+  flag meaning "propagate to userinfo" on the client binary, "propagate to serverinfo" on
+  the server binary, read differently depending on which binary is compiled). `CvarT`
+  keeps `archive`/`server` and gains a plain `info: boolean` (5th constructor argument,
+  default `false`) instead of a synthesized flags word. QW `cvar.c`'s userinfo/serverinfo
+  propagation, its `Cvar_RegisterVariable`'s post-link `Cvar_Set` call, and its
+  `Cvar_CompleteVariable`'s exact-match-first check are each small, additive deltas over
+  the landed `Cvar_Set`/`Cvar_RegisterVariable`/`Cvar_CompleteVariable`, so they are folded
+  into `src/common/cvar.ts` under `qw.active` (via a registrable `setCvarInfoHook`) rather
+  than kept as a second `Cvar_Set` in `src/qw/cvar.ts`, which is now re-exports plus a thin
+  `qwCvarHooks` adapter for tests and the qwcl/qwsv entry points. The same fold applies to
+  `src/qw/cmd.ts`'s `Cbuf_InsertText`/`Cmd_StuffCmds_f`/`Cmd_ExecuteString`, each of which
+  duplicated a shared `src/common/cmd.ts` function to change one small thing; folded there
+  under `qw.active` too, so the shared `Cmd_ExecuteString`/`Cvar_Command` path every
+  registered command goes through behaves as QW when qw.active. `Cmd_ForwardToServer`
+  stays hook-based, as it already was.
 - **Protocol, netchan, common** are separate QW modules: `src/qw/protocol.ts` (protocol 28,
   `svc_*`/`clc_*` renumbered, `PF_*`/`U_*`/`SU_*`? per QW `protocol.h`), `src/qw/net_chan.ts`
   + `src/qw/net_udp.ts` (QW's packet API over `Bun.udpSocket`, the `netadr_t` shape as in

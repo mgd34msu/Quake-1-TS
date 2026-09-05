@@ -31,6 +31,13 @@ Deviations from PORTING.md / the C source:
   been a C crash.
 - `EDICT_FROM_AREA(l)` (progs.h's macro over `STRUCT_FROM_LINK`) becomes
   `l.owner` with a null check -- see progs.ts's `LinkT.owner` deviation note.
+  Task 3 (2026-09-05) widened `LinkT.owner` to `EdictT | QwEdictT | null` so
+  QW's own progs host (src/qw/server/progs.ts) can back-reference its own
+  edict type through the same `LinkT`; this module's world.c is the
+  WinQuake/NQ server only, so `EDICT_FROM_AREA` narrows with `instanceof
+  EdictT` and `Sys_Error`s if a `QwEdictT` ever turned up here (which would
+  mean a QW edict got linked into this server's own area lists -- a bug, not
+  a case to handle).
 - `moveclip_t` is a plain local typedef in the C, declared and used only
   inside world.c with no world.h declaration; ported the same way here, as
   an unexported `MoveClipT` class. Its `mins`/`maxs`/`start`/`end` fields are
@@ -131,6 +138,7 @@ export const MOVE_MISSILE = 2;
 
 function EDICT_FROM_AREA(l: LinkT): EdictT {
   if (l.owner === null) throw new SysError("EDICT_FROM_AREA: link has no owner");
+  if (!(l.owner instanceof EdictT)) throw new SysError("EDICT_FROM_AREA: link owner is not an EdictT");
   return l.owner;
 }
 

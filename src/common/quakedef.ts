@@ -204,3 +204,11 @@ export class QuakeParmsT {
   membase: ArrayBuffer | null = null;
   memsize = 0;
 }
+
+// PORTING.md's QuakeWorld track ruling: "Small deltas fold into the landed
+// module under a runtime flag `qw.active`... set true by the QW entry points
+// (src/qw/main_cl.ts, src/qw/main_sv.ts) before Host_Init." This is the port's
+// equivalent of the `#ifdef QUAKEWORLD` id never wrote -- the C keeps two
+// separate source trees (WinQuake and QW/client / QW/server) instead. No C
+// source line: this flag exists only in this port.
+export const qw = { active: false };

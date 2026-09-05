@@ -50,6 +50,14 @@ Deviations from PORTING.md / the C source:
     Key_KeynumToString -> keys.ts (U048).
 - Dropped `#ifdef QUAKE2` blocks: usercmd_t's `byte lightlevel`, dlight_t's
   `qboolean dark`, and client_state_t's `int light_level`.
+- QuakeWorld track (Q001, PORTING.md's "Client state is a superset" ruling):
+  `ClientStaticT`/`ClientStateT` each gain one additive `qw` member
+  (`QwClientStaticExtT`/`QwClientStateExtT`, src/qw/client/client.ts, a value
+  import -- acyclic, since that module imports nothing from this one) holding
+  the QW-only fields of `client_static_t`/`client_state_t`. `CactiveT` gains
+  QW's `ca_demostart`/`ca_onserver`/`ca_active`, appended after `ca_connected`;
+  see the enum's own comment for why the numbering cannot match the C's QW
+  `cactive_t` order.
 */
 
 import type { FileHandle } from "../common/common";
@@ -61,6 +69,7 @@ import { SizeBuf } from "../common/sizebuf";
 import { UsercmdT } from "../server/server";
 import { EntityT, EfragT } from "./render";
 import { VID_GRADES } from "./vid";
+import { QwClientStateExtT, QwClientStaticExtT } from "../qw/client/client";
 
 export { UsercmdT };
 
@@ -132,10 +141,21 @@ export const MAX_MAPSTRING = 2048;
 export const MAX_DEMOS = 8;
 export const MAX_DEMONAME = 16;
 
+// QuakeWorld (QW/client/client.h) appends ca_demostart/ca_onserver/ca_active,
+// continuing this enum's own numbering (3, 4, 5). The C's QW cactive_t is its
+// own enum with a different member order (ca_disconnected, ca_demostart,
+// ca_connected, ca_onserver, ca_active = 0-4) that a single shared enum with
+// WinQuake's ca_dedicated/ca_disconnected/ca_connected (0-2) cannot reproduce
+// numerically for both trees at once -- cactive_t is never sent over the
+// wire, so nothing depends on the number, but QW code must compare `cls.state`
+// against the named CactiveT members below, never against a literal int.
 export enum CactiveT {
   ca_dedicated = 0, // a dedicated server with no ability to start a client
   ca_disconnected = 1, // full screen console with no connection
   ca_connected = 2, // valid netcon, talking to a server
+  ca_demostart = 3, // QW: starting up a demo
+  ca_onserver = 4, // QW: processing data lists, downloading, etc
+  ca_active = 5, // QW: everything is in, so frames can be rendered
 }
 
 //
@@ -168,6 +188,10 @@ export class ClientStaticT {
   signon = 0; // 0 to SIGNONS
   netcon: QsocketT | null = null;
   message: SizeBuf = new SizeBuf(); // writing buffer to send to server
+
+  // QuakeWorld-only members of client_static_t (QW/client/client.h); see
+  // src/qw/client/client.ts's file header.
+  qw: QwClientStaticExtT = new QwClientStaticExtT();
 }
 
 export const cls = new ClientStaticT();
@@ -255,6 +279,14 @@ export class ClientStateT {
 
   // frag scoreboard
   scores: ScoreboardT[] = []; // [cl.maxclients]
+
+  // QuakeWorld-only members of client_state_t (QW/client/client.h); see
+  // src/qw/client/client.ts's file header. Not reset by clear() below: the
+  // SCOPE ruling for this file is additive-only (field + import), so
+  // resetting it is QW's own CL_ClearState (src/qw/client/cl_main.ts, not yet
+  // landed) to do, mirroring how the same C function clears client_state_t
+  // including QW's additions in the C's single struct.
+  qw: QwClientStateExtT = new QwClientStateExtT();
 
   clear(): void {
     this.movemessages = 0;

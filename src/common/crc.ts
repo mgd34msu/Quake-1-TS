@@ -11,7 +11,25 @@ Deviations from PORTING.md / the C source:
 - `byte data` (crc.h's second `CRC_ProcessByte` parameter) is typed `number`
   here: `byte`'s `common.h` alias (see quakedef.ts's header) has not landed yet,
   since `common.ts` is outside this unit's scope.
-- crc.h declares no `CRC_Block`; none is added here.
+
+QW/client/crc.c addition (Q005, QuakeWorld track): QW's crc.c adds one
+function WinQuake's crc.c does not have:
+
+  unsigned short CRC_Block (byte *start, int count)
+  {
+  	unsigned short	crc;
+  	CRC_Init (&crc);
+  	while (count--)
+  		crc = (crc << 8) ^ crctable[(crc >> 8) ^ *start++];
+  	return crc;
+  }
+
+Ported below as `CRC_Block`, over the same `CRC_Init`/`CRC_ProcessByte` this
+file already exports (it does not call `CRC_Value`/the final XOR itself, and
+neither does the C -- `CRC_XOR_VALUE` is 0 in this table anyway, so the two
+are equivalent). `byte *start, int count` -> `(data: Uint8Array, count?:
+number)`; `count` defaults to `data.length` when omitted (the C's `count` is
+required, since a raw `byte *` carries no length of its own).
 */
 
 // crc.c
@@ -65,4 +83,14 @@ export function CRC_ProcessByte(crcvalue: number, data: number): number {
 
 export function CRC_Value(crcvalue: number): number {
   return crcvalue ^ CRC_XOR_VALUE;
+}
+
+// QW/client/crc.c addition -- see file header.
+export function CRC_Block(data: Uint8Array, count?: number): number {
+  const n = count ?? data.length;
+
+  let crc = CRC_Init();
+  for (let i = 0; i < n; i++) crc = CRC_ProcessByte(crc, data[i]!);
+
+  return crc;
 }

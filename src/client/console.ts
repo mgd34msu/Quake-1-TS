@@ -192,7 +192,15 @@ let con_debuglog = false;
 // cvar_t con_notifytime = {"con_notifytime","3"}; -- see file header: CvarT
 // is a type-only import here, so this object literal carries zero runtime
 // dependency on cvar.ts's class.
-export const con_notifytime: CvarT = { name: "con_notifytime", string: "3", archive: false, server: false, value: 0, next: null };
+export const con_notifytime: CvarT = {
+  name: "con_notifytime",
+  string: "3",
+  archive: false,
+  server: false,
+  info: false,
+  value: 0,
+  next: null,
+};
 
 interface DeveloperCvar {
   value: number;

@@ -48,13 +48,22 @@ Deviations from the C source:
   either a progs-string offset (`n >= 0`) or an engine string
   (`n < 0`, deduplicated by content) allocated through
   `PR_SetEngineString`/cleared by `PR_ClearEngineStrings`.
-- `LinkT` gains an `owner: EdictT | null` field with no C counterpart, so
-  `STRUCT_FROM_LINK`/`EDICT_FROM_AREA(l)` become `l.owner` at call sites
-  instead of pointer arithmetic (`common.h`'s `STRUCT_FROM_LINK` macro and
-  `link_t` itself are ported once here rather than in a `common.ts`-owned
-  header, because `edict_t.area`/`EDICT_FROM_AREA` are progs.h's only use of
-  the type and no `LinkT` exists yet in model.ts or elsewhere -- reported as
-  the ruling PORTING.md already calls for).
+- `LinkT` gains an `owner: EdictT | QwEdictT | null` field with no C
+  counterpart, so `STRUCT_FROM_LINK`/`EDICT_FROM_AREA(l)` become `l.owner` at
+  call sites instead of pointer arithmetic (`common.h`'s `STRUCT_FROM_LINK`
+  macro and `link_t` itself are ported once here rather than in a
+  `common.ts`-owned header, because `edict_t.area`/`EDICT_FROM_AREA` are
+  progs.h's only use of the type and no `LinkT` exists yet in model.ts or
+  elsewhere -- reported as the ruling PORTING.md already calls for). QW's own
+  progs host (src/qw/server/progs.ts) reuses this same `LinkT` for its own
+  `QwEdictT.area` rather than declaring a second link type (PORTING.md: QW's
+  `common.h`/`link_t` is identical to WinQuake's) -- `owner` is a union of
+  both edict types so `QwEdictT`'s constructor can set `this.area.owner =
+  this` the same way `EdictT`'s does (Task 3, 2026-09-05; QwEdictT used to
+  leave `area.owner` null because this field was typed `EdictT | null` only).
+  `QwEdictT` is reached with `import type` only (erased at runtime, so this
+  creates no runtime edge / import cycle even though src/qw/server/progs.ts
+  itself imports `LinkT` from this file).
 */
 
 import type { Vec3 } from "../common/mathlib";
@@ -62,16 +71,18 @@ import { EntityStateT } from "../common/quakedef";
 import { SysError } from "../platform/sys";
 import { EtypeT, OFS_RETURN, type DdefT, type DfunctionT, type FuncT, type StringT } from "./pr_comp";
 import { EntVars, GlobalVars } from "./progdefs";
+import type { QwEdictT } from "../qw/server/progs";
 
 // common.h's `link_t` (`struct link_s { struct link_s *prev, *next; }`),
 // used for the doubly linked area lists in world.c and embedded in
 // edict_t.area. `owner` is this port's STRUCT_FROM_LINK back-reference
 // (see file header); it is null for the free-standing area-node sentinels
-// world.c allocates, and set once by EdictT's constructor for edict.area.
+// world.c allocates, and set once by EdictT's (or QW's own QwEdictT's)
+// constructor for edict.area.
 export class LinkT {
   prev: LinkT | null = null;
   next: LinkT | null = null;
-  owner: EdictT | null = null;
+  owner: EdictT | QwEdictT | null = null;
 }
 
 export const MAX_ENT_LEAFS = 16;

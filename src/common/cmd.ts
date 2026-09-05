@@ -62,6 +62,40 @@ Deviations from PORTING.md / the C source:
 - `host_initialized` (host.c) is read by `Cmd_AddCommand`; per this unit's
   ruling it is the holder `cmdHost = { initialized: false }`, set by host.ts
   once it exists.
+- QuakeWorld track (Task 2, 2026-09-05): QW/client/cmd.c duplicated three of
+  this file's functions only to change one small, additive thing each; all
+  three are folded here under the `qw.active` runtime flag (PORTING.md:
+  "small deltas fold into the landed module under qw.active") instead of
+  being kept as separate forks in src/qw/cmd.ts, so that the Cmd_ExecuteString
+  /Cvar_Command path every registered command (WinQuake or QW) goes through
+  behaves as QW when qw.active:
+  - `Cbuf_InsertText`: QW/client/cmd.c's body is WinQuake's plus one extra
+    line, `SZ_Write (&cmd_text, "\n", 1)`, right after `Cbuf_AddText (text)`
+    -- equivalent to appending "\n" to `text` itself before the one call,
+    since nothing reads `cmd_text` in between.
+  - `Cmd_StuffCmds_f`: QW has no `if (Cmd_Argc() != 1)` guard (added later in
+    retail WinQuake); skipped when qw.active.
+  - `Cmd_ExecuteString`: QW gates the final "Unknown command" print behind
+    `!Cvar_Command() && (cl_warncmd.value || developer.value)` instead of
+    printing unconditionally. `cl_warncmd` (QW/client/cmd.c, ported at
+    src/qw/cmd.ts) is declared but never registered anywhere in the QW client
+    tree -- a preserved bug (see that file's header) -- so its value is
+    permanently 0 and the gate reduces to `developer.value`; referencing
+    `cl_warncmd` itself here would also mean this shared module reaching
+    backward into a QuakeWorld-track-only module, which breaks this port's
+    layering (qw/* depends on common/*, never the reverse). `developer`
+    (src/common/host.ts) is reached through a lazy `require()`
+    (`hostMod()` below), the same cycle-breaking idiom src/common/common.ts's
+    `cvarMod()` already uses, since host.ts statically imports this module's
+    `Cmd_Init`/`Cbuf_*` (a real cycle a top-level import would deadlock).
+  `Cmd_ForwardToServer` is not folded: it stays hook-based, as it already is
+  (`setForwardToServerHandler`); QW's own `Cmd_ForwardToServer`/
+  `Cmd_ForwardToServer_f` (src/qw/cmd.ts) write directly into a netchan
+  SizeBuf via their own `qwCmdHooks`, a structurally different mechanism, not
+  a one-line delta. `Cmd_Exec_f`'s analogous print-gate difference (QW gates
+  "execing %s\n" the same way) is also not folded -- src/qw/cmd.ts's own
+  `Cmd_Exec_f` already ports it faithfully as its own fork, and the unit
+  brief names only the three functions above.
 */
 
 import { SizeBuf, SZ_Alloc, SZ_Clear, SZ_Write } from "./sizebuf";
@@ -70,6 +104,16 @@ import { Cvar_Command, Cvar_VariableString } from "./cvar";
 import { Hunk_LowMark, Hunk_FreeToLowMark } from "./zone";
 import { Con_Printf } from "../client/console";
 import { Sys_Error } from "../platform/sys";
+import { qw } from "./quakedef";
+import type * as HostModule from "./host";
+
+// see file header's QuakeWorld-track deviation note: host.ts statically
+// imports this module, so this module cannot statically import host.ts back
+// without deadlocking the load order; reached lazily, only inside
+// Cmd_ExecuteString, well after both modules have finished loading.
+function hostMod(): typeof HostModule {
+  return require("./host");
+}
 
 // mirrors common.c's Q_strcasecmp: case-insensitive comparison, used only
 // for its ===0 result throughout this file, same as every C call site.
@@ -153,7 +197,9 @@ export function Cbuf_InsertText(text: string): void {
   }
 
   // add the entire text of the file
-  Cbuf_AddText(text);
+  // QW/client/cmd.c appends an extra "\n" after the text itself -- folded
+  // under qw.active, see file header.
+  Cbuf_AddText(qw.active ? `${text}\n` : text);
 
   // add the copied off data
   if (templen && temp) {
@@ -210,7 +256,9 @@ export function Cbuf_Execute(): void {
 // quake +prog jctest.qp +cmd amlev1
 // quake -nosound +cmd amlev1
 export function Cmd_StuffCmds_f(): void {
-  if (Cmd_Argc() !== 1) {
+  // QW/client/cmd.c has no such guard (added later in retail WinQuake) --
+  // folded under qw.active, see file header.
+  if (!qw.active && Cmd_Argc() !== 1) {
     Con_Printf("stuffcmds : execute command line parameters\n");
     return;
   }
@@ -486,7 +534,16 @@ export function Cmd_ExecuteString(text: string, src: CmdSourceT): void {
   }
 
   // check cvars
-  if (!Cvar_Command()) Con_Printf('Unknown command "%s"\n', Cmd_Argv(0));
+  if (!Cvar_Command()) {
+    // QW/client/cmd.c gates this print behind `cl_warncmd.value ||
+    // developer.value` instead of printing unconditionally -- folded under
+    // qw.active as `developer.value` alone, see file header.
+    if (qw.active) {
+      if (hostMod().developer.value) Con_Printf('Unknown command "%s"\n', Cmd_Argv(0));
+    } else {
+      Con_Printf('Unknown command "%s"\n', Cmd_Argv(0));
+    }
+  }
 }
 
 // the C's cls-reaching body moves to cl_main.ts (U041), which registers

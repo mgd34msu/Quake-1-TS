@@ -94,6 +94,14 @@ Deviations from PORTING.md / the C source:
   copies into a fixed-size buffer, so no length enforcement applies to JS
   strings. MAX_NUM_ARGVS already lives in quakedef.ts and is imported rather
   than redeclared.
+- QuakeWorld track (Task 1, 2026-09-05): `setComArgc`/`setComArgv`/
+  `setComSearchpaths`/`setComGamedir`/`setComModified`/`setStaticRegistered`/
+  `setComFilesize` are exported setters, with no C counterpart, so that
+  src/qw/common.ts's own filesystem functions can reassign this module's
+  shared `com_argc`/`com_argv`/`com_searchpaths`/`com_gamedir`/`com_modified`/
+  `static_registered`/`com_filesize` instead of keeping (and never being
+  found through) a second parallel copy of this state -- see the "state"
+  comment just above these bindings' declarations.
 */
 
 import { GAMENAME, MAX_NUM_ARGVS, QuakeParmsT } from "./quakedef";
@@ -486,6 +494,40 @@ export let hipnotic = false;
 export let proghack = false;
 export let com_searchpaths: SearchPathT | null = null;
 
+// QuakeWorld track (Task 1, 2026-09-05): src/qw/common.ts's own filesystem
+// functions (COM_InitFilesystem, COM_Gamedir, COM_AddGameDirectory,
+// COM_LoadPackFile, COM_CheckRegistered, COM_InitArgv, COM_AddParm) differ
+// from these bodies but must reassign this module's shared state -- every
+// consumer of COM_FindFile/COM_LoadFile (model.ts's Mod_ForName, wad.ts,
+// cmd.ts's Cmd_Exec_f, ...) reads com_searchpaths/com_gamedir/etc. through
+// THIS module, so a QW binary that kept its own parallel copies (as it used
+// to) would never actually be found by any of them. ES module named imports
+// are read-only bindings (TS2540, "Cannot assign to '...' because it is a
+// read-only property"), so a same-module setter is the only way another
+// module can reassign an `export let` here; see src/qw/common.ts's own
+// header for exactly which of its functions call each of these and why.
+export function setComArgc(n: number): void {
+  com_argc = n;
+}
+export function setComArgv(argv: string[]): void {
+  com_argv = argv;
+}
+export function setComSearchpaths(p: SearchPathT | null): void {
+  com_searchpaths = p;
+}
+export function setComGamedir(s: string): void {
+  com_gamedir = s;
+}
+export function setComModified(b: boolean): void {
+  com_modified = b;
+}
+export function setStaticRegistered(n: number): void {
+  static_registered = n;
+}
+export function setComFilesize(n: number): void {
+  com_filesize = n;
+}
+
 export const host_parms = new QuakeParmsT();
 
 export function COM_InitArgv(argv: string[]): void {
@@ -544,8 +586,24 @@ export function COM_InitArgv(argv: string[]): void {
 // cvar_t cmdline = {"cmdline","0", false, true};
 // Plain object literals (structurally a CvarT) rather than `new CvarT(...)`
 // -- see cvarMod()'s comment above.
-export const registered: CvarT = { name: "registered", string: "0", archive: false, server: false, value: 0, next: null };
-export const cmdline: CvarT = { name: "cmdline", string: "0", archive: false, server: true, value: 0, next: null };
+export const registered: CvarT = {
+  name: "registered",
+  string: "0",
+  archive: false,
+  server: false,
+  info: false,
+  value: 0,
+  next: null,
+};
+export const cmdline: CvarT = {
+  name: "cmdline",
+  string: "0",
+  archive: false,
+  server: true,
+  info: false,
+  value: 0,
+  next: null,
+};
 
 export function COM_Init(basedir: string): void {
   // basedir is unused in the C too -- host_parms.basedir is what
