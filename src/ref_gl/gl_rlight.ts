@@ -31,9 +31,26 @@ Deviations from PORTING.md / the C source:
   gl_rmain.c's R_PolyBlend is its other reader); AddLightBlend imports it.
 - R_RenderDlight's `v` is one vec3 reused across all 18 glVertex3fv calls,
   exactly as in the C.
+
+QuakeWorld deltas (QW/client/gl_rlight.c vs WinQuake/gl_rlight.c), folded
+under qw.active:
+- QW adds `bubble_sintable[17]`/`bubble_costable[17]` and `R_InitBubble()`,
+  precomputing the 17 angle steps R_RenderDlight's fan loop used to call
+  `sin`/`cos` for on every vertex, every dlight, every frame. Ported as
+  `bubbleSintable`/`bubbleCostable` + `R_InitBubble` below; gl_rmisc.ts calls
+  it from R_Init under qw.active (gl_rmisc.c:207).
+- QW also changes R_RenderDlight's fan color from the fixed
+  `glColor3f(0.2,0.1,0.0)` to `glColor4f(light->color[0..3])`, reading a new
+  per-dlight `color[4]` field QW's dlight_t gains. BLOCKED: the landed
+  `DlightT` (src/client/client.ts, out of this unit's SCOPE) has no `color`
+  field -- client.ts is owned by another unit and this unit may not add data
+  fields to it (SCOPE only allows touching render.ts for a Renderer-interface
+  member, and DlightT is not that). Reported as a deviation; both branches
+  keep emitting `glColor3f(0.2,0.1,0.0)` until `DlightT.color` lands.
 */
 
 import { DotProduct, Length, M_PI, MplaneT, type Vec3, VectorCopy, VectorSubtract, vec3 } from "../common/mathlib";
+import { qw } from "../common/quakedef";
 import { MAX_LIGHTSTYLES } from "../common/quakedef";
 import { MAXLIGHTMAPS } from "../common/bspfile";
 import { SURF_DRAWTILED, type MleafT, type MnodeT, isMleaf } from "../common/model";
@@ -51,6 +68,22 @@ export const rlightState: { r_dlightframecount: number; lightplane: MplaneT | nu
 };
 
 export const lightspot: Vec3 = vec3();
+
+// QW/client/gl_rlight.c: `float bubble_sintable[17], bubble_costable[17];`
+// and `R_InitBubble()` (see file header). Populated by R_InitBubble, read by
+// R_RenderDlight's fan loop in place of per-vertex sin/cos when qw.active.
+export const bubbleSintable = new Float32Array(17);
+export const bubbleCostable = new Float32Array(17);
+
+export function R_InitBubble(): void {
+  let bi = 0;
+  for (let i = 16; i >= 0; i--) {
+    const a = (i / 16.0) * M_PI * 2;
+    bubbleSintable[bi] = Math.sin(a);
+    bubbleCostable[bi] = Math.cos(a);
+    bi++;
+  }
+}
 
 /*
 ==================
@@ -108,14 +141,26 @@ export function R_RenderDlight(light: DlightT): void {
   }
 
   qgl().qglBegin(GL_TRIANGLE_FAN);
+  // QW/client/gl_rlight.c would read a per-dlight light.color[4] here via
+  // glColor4f; blocked on DlightT.color (see file header) -- both branches
+  // keep the WinQuake fixed color.
   qgl().qglColor3f(0.2, 0.1, 0.0);
   for (let i = 0; i < 3; i++) dlightV[i] = light.origin[i] - vpn[i] * rad;
   qgl().qglVertex3fv(dlightV);
   qgl().qglColor3f(0, 0, 0);
-  for (let i = 16; i >= 0; i--) {
-    const a = (i / 16.0) * M_PI * 2;
-    for (let j = 0; j < 3; j++) dlightV[j] = light.origin[j] + vright[j] * Math.cos(a) * rad + vup[j] * Math.sin(a) * rad;
-    qgl().qglVertex3fv(dlightV);
+  if (qw.active) {
+    // QW/client/gl_rlight.c: table lookup instead of per-vertex sin/cos
+    // (R_InitBubble precomputes bubbleSintable/bubbleCostable).
+    for (let i = 0; i < 17; i++) {
+      for (let j = 0; j < 3; j++) dlightV[j] = light.origin[j] + (vright[j] * bubbleCostable[i] + vup[j] * bubbleSintable[i]) * rad;
+      qgl().qglVertex3fv(dlightV);
+    }
+  } else {
+    for (let i = 16; i >= 0; i--) {
+      const a = (i / 16.0) * M_PI * 2;
+      for (let j = 0; j < 3; j++) dlightV[j] = light.origin[j] + vright[j] * Math.cos(a) * rad + vup[j] * Math.sin(a) * rad;
+      qgl().qglVertex3fv(dlightV);
+    }
   }
   qgl().qglEnd();
 }

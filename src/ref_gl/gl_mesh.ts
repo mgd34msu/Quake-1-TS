@@ -60,6 +60,18 @@ Deviations from PORTING.md / the C source:
 - `maliasgroup_t *paliasgroup;` (gl_mesh.c:293) is an unused local and is
   dropped; so are BuildTris's unused `last`/`check`/`m1`/`m2`/`striplength`/
   `v`/`tv`/`index` locals.
+
+QuakeWorld delta (QW/client/gl_mesh.c vs WinQuake/gl_mesh.c), folded under
+qw.active: the rest of the diff is the same non-functional C89 declaration
+cleanup PORTING.md's idiom already drops (unused locals). The one real
+change is in GL_MakeAliasModelDisplayLists's cache-write path: if the first
+`fopen(fullpath, "wb")` fails (the `com_gamedir/glquake/` directory does not
+exist yet -- WinQuake relies on gl_vidlinuxglx.c's VID_Init having already
+created it, per this file's header note above), QW retries after creating
+that directory itself (`sprintf(gldir,"%s/glquake",com_gamedir);
+Sys_mkdir(gldir); f = fopen(fullpath,"wb");`) before falling through to the
+existing `if (f)` write. Ported below as a second Sys_FileOpenWrite attempt
+after Sys_mkdir, only when qw.active and the first attempt threw.
 */
 
 import { COM_FClose, COM_FOpenFile, COM_FRead, COM_StripExtension, com_gamedir } from "../common/common";
@@ -67,7 +79,8 @@ import { TrivertxT } from "../common/modelgen";
 import type { ModelT } from "../common/model";
 import { Hunk_Alloc } from "../common/zone";
 import { Con_DPrintf, Con_Printf } from "../client/console";
-import { Sys_Error, Sys_FileClose, Sys_FileOpenWrite, Sys_FileWrite } from "../platform/sys";
+import { qw } from "../common/quakedef";
+import { Sys_Error, Sys_FileClose, Sys_FileOpenWrite, Sys_FileWrite, Sys_mkdir } from "../platform/sys";
 import type { AliashdrT } from "./gl_model_types";
 import { pheader, poseverts, stverts, triangles } from "./gl_model";
 
@@ -355,6 +368,16 @@ export function GL_MakeAliasModelDisplayLists(m: ModelT, hdr: AliashdrT): void {
       handle = Sys_FileOpenWrite(fullpath);
     } catch {
       handle = -1; // the C's fopen(fullpath, "wb") returning NULL
+    }
+    if (handle === -1 && qw.active) {
+      // QW/client/gl_mesh.c: create com_gamedir/glquake/ and retry once
+      // (see file header) instead of relying on VID_Init having done it.
+      Sys_mkdir(`${com_gamedir}/glquake`);
+      try {
+        handle = Sys_FileOpenWrite(fullpath);
+      } catch {
+        handle = -1;
+      }
     }
     if (handle !== -1) {
       const out = new Uint8Array(8 + (glMeshState.numcommands + glMeshState.numorder) * 4);

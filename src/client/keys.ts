@@ -67,6 +67,53 @@ Deviations from PORTING.md / the C source:
   `setKeyDestGame`, `keyWriteBindings`, `keyInit` (host.c's client seam) and
   `svUserHooks.keyDestIsGame` (sv_user.c's client seam) at module load, since
   this is the module that owns `key_dest`.
+
+QuakeWorld track (`qw.active` folds, `diff -w WinQuake/keys.c QW/client/keys.c`,
+both fully read; 158 changed lines per the unit brief, concentrated in a
+handful of functions -- see below for the exact ones):
+- `Key_Console`'s K_ENTER branch: QW distinguishes an explicit command from a
+  chat message (WinQuake's always runs the typed line as a command).
+  `CheckForCommand`/`CompleteCommand` (new QW-only helpers, module-private,
+  ported fresh) implement that: a line starting with `\` or `/` is always a
+  command (skip the marker); otherwise `CheckForCommand`'s exact-match test
+  against `Cmd_CompleteCommand`/`Cvar_CompleteVariable` decides; failing
+  both, the line becomes a `say` chat message (prefixed only when
+  `cls.state` is `ca_connected`/`ca_onserver`/`ca_active` -- QW's C reads
+  `cls.state >= ca_connected` against *its own* cactive_t numbering, which
+  is not this port's shared `CactiveT` numbering (see client.ts's own
+  header); ported as an explicit three-way member comparison instead of
+  `>=`, so it means the same three states QW's C means, not whatever the
+  shared enum's numeric order would compare true for.
+- `Key_Console`'s K_TAB branch: QW's `CompleteCommand` (distinct from
+  WinQuake's inline Tab-completion) skips a leading `\`/`/` in the search
+  text and always rewrites the line as `]/<cmd> ` (forcing an explicit
+  command marker), where WinQuake rewrites it as `]<cmd> ` with no marker.
+- `Key_Init`: QW additionally marks `K_HOME`/`K_END` as `consolekeys`.
+- `Key_Event`'s autorepeat exemption list gains `K_PGUP`/`K_PGDN` (QW does
+  not swallow repeated PageUp/PageDown, unlike WinQuake).
+- `Key_Event`'s `key_dest === key_game` routing condition: QW's is
+  `cls.state === ca_active || !consolekeys[key]`, not WinQuake's
+  `!conState.con_forcedup || !consolekeys[key]` (`con_forcedup` does not
+  exist in QW/client/console.c's simpler state machine).
+- `Key_WriteBindings`: QW writes a `bind` line for every key with any
+  binding at all (even an explicitly-unbound, empty-string one), where
+  WinQuake additionally requires the binding to be non-empty; QW also does
+  not quote the key name (`bind %s "%s"` vs `bind "%s" "%s"`).
+- `Key_Message`: QW's chat buffer cap is `MAXCMDLINE-1` (255), not
+  WinQuake's hardcoded 31 -- QW's `chat_buffer` is declared
+  `char chat_buffer[MAXCMDLINE]` (reusing the same 256-byte constant
+  `key_lines` uses), where WinQuake's is a separate, smaller
+  `char chat_buffer[32]`. `team_message` is named `chat_team` in QW's C;
+  same field, no export-name change (nothing outside this module reads it
+  by either name).
+- Not folded (checked, genuinely unchanged): `Key_StringToKeynum`,
+  `Key_KeynumToString`, `Key_SetBinding`, `Key_Unbind_f`/`Key_Unbindall_f`/
+  `Key_Bind_f`, `Key_ClearStates` (QW writes `key_repeats[i] = false` where
+  WinQuake writes `= 0`; both are 0 on a `boolean`-coerced `Int32Array`
+  write, no observable difference, not folded), `Key_Event`'s escape/menu
+  dispatch and button up/down command forwarding, `messagemode`/
+  `messagemode2` registration (grepped: neither exists in QW's keys.c --
+  they live elsewhere, not this file's concern).
 */
 
 import { Sys_Error } from "../platform/sys";
@@ -76,6 +123,7 @@ import { Cvar_CompleteVariable } from "../common/cvar";
 import { Q_strcasecmp } from "../common/common";
 import { cls, CactiveT } from "./client";
 import { hostClientHooks } from "../common/host";
+import { qw } from "../common/quakedef";
 import { vid } from "./vid";
 // console.ts (U047, not yet landed with this shape) -- see file header.
 import { conState } from "./console";
@@ -318,9 +366,54 @@ Key_Console
 Interactive line editing and console scrollback
 ====================
 */
+// QW/client/keys.c's CheckForCommand/CompleteCommand (~153-197): new helpers,
+// no WinQuake counterpart. Module-private -- see file header.
+function CheckForCommand(): boolean {
+  const s = key_lines[keyState.edit_line].slice(1);
+  let command = "";
+  for (let i = 0; i < 127 && i < s.length; i++) {
+    if (s.charCodeAt(i) <= 32) break;
+    command += s[i];
+  }
+
+  let cmd = Cmd_CompleteCommand(command);
+  if (!cmd || cmd !== command) cmd = Cvar_CompleteVariable(command);
+  if (!cmd || cmd !== command) return false;
+  return true;
+}
+
+function CompleteCommand(): void {
+  let s = key_lines[keyState.edit_line].slice(1);
+  if (s[0] === "\\" || s[0] === "/") s = s.slice(1);
+
+  let cmd = Cmd_CompleteCommand(s);
+  if (!cmd) cmd = Cvar_CompleteVariable(s);
+  if (cmd) {
+    key_lines[keyState.edit_line] = "]/" + cmd + " ";
+    keyState.key_linepos = key_lines[keyState.edit_line].length;
+  }
+}
+
 function Key_Console(key: number): void {
   if (key === K_ENTER) {
-    Cbuf_AddText(key_lines[keyState.edit_line].slice(1)); // skip the >
+    if (qw.active) {
+      // QW/client/keys.c's Key_Console K_ENTER branch (~216-233): distinguish
+      // an explicit command from a chat message -- see file header.
+      const line = key_lines[keyState.edit_line];
+      if (line[1] === "\\" || line[1] === "/") {
+        Cbuf_AddText(line.slice(2)); // skip the ]\ or ]/
+      } else if (CheckForCommand()) {
+        Cbuf_AddText(line.slice(1)); // valid command
+      } else {
+        // convert to a chat message
+        if (cls.state === CactiveT.ca_connected || cls.state === CactiveT.ca_onserver || cls.state === CactiveT.ca_active) {
+          Cbuf_AddText("say ");
+        }
+        Cbuf_AddText(line.slice(1)); // skip the >
+      }
+    } else {
+      Cbuf_AddText(key_lines[keyState.edit_line].slice(1)); // skip the >
+    }
     Cbuf_AddText("\n");
     Con_Printf("%s\n", key_lines[keyState.edit_line]);
     keyState.edit_line = (keyState.edit_line + 1) & 31;
@@ -336,6 +429,13 @@ function Key_Console(key: number): void {
   }
 
   if (key === K_TAB) {
+    if (qw.active) {
+      // QW/client/keys.c's Key_Console K_TAB branch calls CompleteCommand()
+      // (see file header for how it differs from WinQuake's inline version
+      // below).
+      CompleteCommand();
+      return;
+    }
     // command completion
     let cmd = Cmd_CompleteCommand(key_lines[keyState.edit_line].slice(1));
     if (!cmd) cmd = Cvar_CompleteVariable(key_lines[keyState.edit_line].slice(1));
@@ -442,7 +542,9 @@ function Key_Message(key: number): void {
     return;
   }
 
-  if (chat_bufferlen === 31) return; // all full
+  // QW: chat_buffer[MAXCMDLINE] (255-char cap), not WinQuake's fixed 32-byte
+  // chat_buffer[32] (31-char cap) -- see file header.
+  if (chat_bufferlen === (qw.active ? MAXCMDLINE - 1 : 31)) return; // all full
 
   keyState.chat_buffer += String.fromCharCode(key);
   chat_bufferlen++;
@@ -578,7 +680,14 @@ Writes lines containing "bind key value"
 export function Key_WriteBindings(f: { write(s: string): void }): void {
   for (let i = 0; i < 256; i++) {
     const binding = keybindings[i];
-    if (binding !== null) if (binding.length > 0) f.write(`bind "${Key_KeynumToString(i)}" "${binding}"\n`);
+    if (binding === null) continue;
+    if (qw.active) {
+      // QW writes a line for any binding at all (even ""), and does not
+      // quote the key name -- see file header.
+      f.write(`bind ${Key_KeynumToString(i)} "${binding}"\n`);
+    } else if (binding.length > 0) {
+      f.write(`bind "${Key_KeynumToString(i)}" "${binding}"\n`);
+    }
   }
 }
 
@@ -604,6 +713,11 @@ export function Key_Init(): void {
   consolekeys[K_UPARROW] = true;
   consolekeys[K_DOWNARROW] = true;
   consolekeys[K_BACKSPACE] = true;
+  // QW/client/keys.c's Key_Init additionally marks Home/End as console keys.
+  if (qw.active) {
+    consolekeys[K_HOME] = true;
+    consolekeys[K_END] = true;
+  }
   consolekeys[K_PGUP] = true;
   consolekeys[K_PGDN] = true;
   consolekeys[K_SHIFT] = true;
@@ -669,7 +783,10 @@ export function Key_Event(key: number, down: boolean): void {
   // update auto-repeat status
   if (down) {
     key_repeats[key]++;
-    if (key !== K_BACKSPACE && key !== K_PAUSE && key_repeats[key] > 1) {
+    // QW additionally exempts K_PGUP/K_PGDN from autorepeat suppression --
+    // see file header.
+    const autorepeatExempt = qw.active ? key !== K_BACKSPACE && key !== K_PAUSE && key !== K_PGUP && key !== K_PGDN : key !== K_BACKSPACE && key !== K_PAUSE;
+    if (autorepeatExempt && key_repeats[key] > 1) {
       return; // ignore most autorepeats
     }
 
@@ -738,7 +855,10 @@ export function Key_Event(key: number, down: boolean): void {
   if (
     (keyState.key_dest === KeydestT.key_menu && menubound[key]) ||
     (keyState.key_dest === KeydestT.key_console && !consolekeys[key]) ||
-    (keyState.key_dest === KeydestT.key_game && (!conState.con_forcedup || !consolekeys[key]))
+    // QW's key_game routing gate is `cls.state === ca_active || !consolekeys[key]`,
+    // not WinQuake's `con_forcedup`-based one (QW/client/console.c has no
+    // `con_forcedup` at all) -- see file header.
+    (keyState.key_dest === KeydestT.key_game && ((qw.active ? cls.state === CactiveT.ca_active : !conState.con_forcedup) || !consolekeys[key]))
   ) {
     const kb = keybindings[key];
     if (kb !== null) {

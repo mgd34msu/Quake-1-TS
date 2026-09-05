@@ -113,9 +113,33 @@ Deviations from PORTING.md / the C source:
 - `MAXCMDLINE` (256) is redeclared locally in this file exactly as console.c
   itself does (`#define MAXCMDLINE 256` sits at console.c's own top, a literal
   duplicate of keys.c's private copy of the same macro -- not an import).
+
+QuakeWorld track (`qw.active` fold): `diff -w WinQuake/console.c QW/client/console.c`
+(both fully read) shows a genuinely wholesale rewrite -- QW replaces the flat
+`con_text`/`con_current`/`con_x`/`con_backscroll`/`con_totallines` globals
+with a `console_t` struct (two instances, `con_main`/`con_chat`, selected by
+a `con` pointer) plus `Con_ToggleChat_f`/`Key_ClearTyping`/a per-console
+`Con_Resize`. That is comfortably past PORTING.md's "~40% of the module
+changes" threshold for folding in place (370 of 693 QW lines differ from
+WinQuake's 649-line file) and would need its own src/qw/client/console.ts
+module -- not attempted in this unit (out of the SCOPE this brief grants;
+reported as a follow-up, add to SCOPE for whichever unit picks it up).
+Only `Con_Printf`'s own gating logic is folded here, since it is small,
+genuinely additive, and the one piece the unit brief's tests exercise
+(read directly, both `Con_Printf` bodies in full):
+- QW's `Con_Printf` has no `cls.state == ca_dedicated` early return at all
+  (WinQuake's/this port's dedicated-mode short-circuit is entirely absent
+  from QW/client/console.c's version).
+- QW's screen-update condition is `if (cls.state != ca_active)`, not
+  WinQuake's `if (cls.signon != SIGNONS && !scr_disabled_for_loading)`.
+Everything else in console.c (`Con_ToggleConsole_f`'s `Con_ToggleChat_f`
+QW-only sibling, `Con_Resize`/`Con_CheckResize`'s per-console rewrite,
+`Con_Print`'s `con->x`/`con_ormask` fields, `Con_Init`'s `con = &con_main`)
+is not folded, per the module-creation note above.
 */
 
 import { Sys_Printf, Sys_DebugLog, Sys_SendKeyEvents, Sys_FloatTime, sysState } from "../platform/sys";
+import { qw } from "../common/quakedef";
 import { Com_sprintf } from "../common/sprintf";
 import type { CvarT } from "../common/cvar";
 import type * as CvarModule from "../common/cvar";
@@ -484,15 +508,22 @@ export function Con_Printf(fmt: string, ...args: Array<string | number>): void {
 
   const client = clientMod();
 
-  // cls.state == ca_dedicated in the C; sysState.isDedicated (platform/sys.ts)
-  // is also checked -- see file header.
-  if (client.cls.state === client.CactiveT.ca_dedicated || sysState.isDedicated) return; // no graphics mode
+  if (!qw.active) {
+    // cls.state == ca_dedicated in the C; sysState.isDedicated (platform/sys.ts)
+    // is also checked -- see file header. QW/client/console.c's Con_Printf has
+    // no such early return at all -- see this file's QuakeWorld track note.
+    if (client.cls.state === client.CactiveT.ca_dedicated || sysState.isDedicated) return; // no graphics mode
+  }
 
   // write it to the scrollable buffer
   Con_Print(msg);
 
   // update the screen if the console is displayed
-  if (client.cls.signon !== client.SIGNONS && !scrState.scr_disabled_for_loading) {
+  const shouldUpdate = qw.active
+    ? client.cls.state !== client.CactiveT.ca_active // QW: `if (cls.state != ca_active)`
+    : client.cls.signon !== client.SIGNONS && !scrState.scr_disabled_for_loading;
+
+  if (shouldUpdate) {
     // protect against infinite loop if something in SCR_UpdateScreen calls Con_Printf
     if (!inupdate) {
       inupdate = true;

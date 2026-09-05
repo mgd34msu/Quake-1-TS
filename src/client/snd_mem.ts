@@ -44,6 +44,13 @@ Deviations from PORTING.md / the C source:
   content with a trailing NUL per common.ts's COM_LoadFile; GetWavinfo never
   reads that last byte as WAV data, so the extra byte is harmless, exactly
   as it is in the C where com_filesize also includes it).
+
+QuakeWorld fold: ../qsrc/quake/QW/client/snd_mem.c's only difference is
+wrapping `DumpChunks` in `#if 0` (never compiled under QW). WinQuake compiles
+it but nothing calls it (this file's own commented-out call site is the only
+reference in either tree) -- an unused function either way, so there is no
+runtime-observable difference between the two trees. No-op, not folded;
+`DumpChunks` stays exported unconditionally.
 */
 
 import { Cache_Alloc, Cache_Check } from "../common/zone";

@@ -162,9 +162,16 @@ beforeAll/afterAll, glState/glDrawState/qglHolder fields restored.
 
 import { Sys_Error } from "../platform/sys";
 import { Com_sprintf } from "../common/sprintf";
-import { GLQUAKE_VERSION, LINUX_VERSION, VERSION } from "../common/quakedef";
+import { GLQUAKE_VERSION, LINUX_VERSION, VERSION, qw } from "../common/quakedef";
 import { QpicT, SwapPic, W_GetLumpName, W_GetQpic } from "../common/wad";
-import { COM_LoadTempFile, Q_strcasecmp, Q_strncasecmp } from "../common/common";
+import { COM_LoadHunkFile, COM_LoadTempFile, Q_strcasecmp, Q_strncasecmp } from "../common/common";
+import { cls } from "../client/client";
+import { scr_vrect } from "../client/screen_types";
+// QW/client/gl_draw.c:27 `extern cvar_t crosshair, cl_crossx, cl_crossy, crosshaircolor;`
+// -- crosshair/cl_crossx/cl_crossy already exported by view.ts; crosshaircolor
+// is QW-only and NOT YET exported there (polled, still absent as of this
+// writing) -- imported by name anyway, matching draw.ts's identical note.
+import { cl_crossx, cl_crossy, crosshair, crosshaircolor } from "../client/view";
 import { Hunk_FreeToLowMark, Hunk_LowMark } from "../common/zone";
 import { CvarT, Cvar_RegisterVariable, Cvar_Set } from "../common/cvar";
 import { Cmd_AddCommand, Cmd_Argc, Cmd_Argv } from "../common/cmd";
@@ -190,9 +197,13 @@ import {
   GL_NEAREST_MIPMAP_NEAREST,
   GL_LINEAR_MIPMAP_LINEAR,
   GL_PROJECTION,
+  GL_MODULATE,
   GL_QUADS,
+  GL_REPLACE,
   GL_RGBA,
   GL_TEXTURE_2D,
+  GL_TEXTURE_ENV,
+  GL_TEXTURE_ENV_MODE,
   GL_TEXTURE_MAG_FILTER,
   GL_TEXTURE_MIN_FILTER,
   GL_UNSIGNED_BYTE,
@@ -205,12 +216,25 @@ export const gl_nobind = new CvarT("gl_nobind", "0");
 export const gl_max_size = new CvarT("gl_max_size", "1024");
 export const gl_picmip = new CvarT("gl_picmip", "0");
 
-let draw_chars: Uint8Array | null = null; // 8*8 graphic characters
+// QW/client/gl_ngraph.c (new file, not in this unit's SCOPE) declares
+// `extern byte *draw_chars;` itself to read the loaded charset for
+// Draw_CharToNetGraph -- exported for that cross-file need even though this
+// file's own header (above) predates gl_ngraph.c and calls it module-private.
+export let draw_chars: Uint8Array | null = null; // 8*8 graphic characters
 export let draw_disc: QpicT | null = null; // also used on sbar
 let draw_backtile: QpicT | null = null;
 
 let translate_texture = 0;
 let char_texture = 0;
+// QW/client/gl_draw.c addition -- crosshair dot texture (crosshair.value==2),
+// no WinQuake counterpart. Only loaded/used under qw.active.
+let cs_texture = 0;
+const cs_data: Uint8Array = Uint8Array.from([
+  0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xfe, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+]);
 
 // see file header RULING on GlpicT/picGl
 class GlpicT {
@@ -279,7 +303,9 @@ let scrap_texnum = 0;
 
 // returns a texture number and the position inside it
 export function Scrap_AllocBlock(w: number, h: number): { texnum: number; x: number; y: number } {
-  for (let texnum = 0; texnum < MAX_SCRAPS; texnum++) {
+  // see Scrap_Upload's note: QW only ever uploads/binds scrap texture 0.
+  const scraps = qw.active ? 1 : MAX_SCRAPS;
+  for (let texnum = 0; texnum < scraps; texnum++) {
     let best = BLOCK_HEIGHT;
     let x = 0;
 
@@ -312,7 +338,13 @@ let scrap_uploads = 0;
 export function Scrap_Upload(): void {
   scrap_uploads++;
 
-  for (let texnum = 0; texnum < MAX_SCRAPS; texnum++) {
+  // QW/client/gl_draw.c redefines MAX_SCRAPS to 1 (one status-bar scrap
+  // texture instead of two); this port keeps MAX_SCRAPS==2 (both blocks
+  // still allocated, harmless) and only narrows the upload/alloc loop bound
+  // under qw.active, since qw.active cannot gate a module-load-time const
+  // (see this unit's report).
+  const scraps = qw.active ? 1 : MAX_SCRAPS;
+  for (let texnum = 0; texnum < scraps; texnum++) {
     GL_Bind(scrap_texnum + texnum);
     GL_Upload8(scrap_texels[texnum], BLOCK_WIDTH, BLOCK_HEIGHT, false, true);
   }
@@ -491,8 +523,12 @@ export function Draw_Init(): void {
   Cvar_RegisterVariable(gl_max_size);
   Cvar_RegisterVariable(gl_picmip);
 
-  // 3dfx can only handle 256 wide textures
-  if (Q_strncasecmp(glState.gl_renderer, "3dfx", 4) === 0 || glState.gl_renderer.includes("Glide")) {
+  // 3dfx can only handle 256 wide textures -- QW/client/gl_draw.c checks for
+  // "Mesa" instead of the WinQuake "Glide" substring match.
+  if (
+    Q_strncasecmp(glState.gl_renderer, "3dfx", 4) === 0 ||
+    (qw.active ? Q_strncasecmp(glState.gl_renderer, "Mesa", 4) === 0 : glState.gl_renderer.includes("Glide"))
+  ) {
     Cvar_Set("gl_max_size", "256");
   }
 
@@ -511,16 +547,27 @@ export function Draw_Init(): void {
   // now turn them into textures
   char_texture = GL_LoadTexture("charset", 128, 128, draw_chars, false, true);
 
+  // QW/client/gl_draw.c addition: a second small texture for the
+  // crosshair.value==2 colored-dot crosshair; no WinQuake counterpart.
+  if (qw.active) {
+    cs_texture = GL_LoadTexture("crosshair", 8, 8, cs_data, false, true);
+  }
+
   const start = Hunk_LowMark();
 
-  const cbRaw = COM_LoadTempFile("gfx/conback.lmp");
+  // QW/client/gl_draw.c reads gfx/conback.lmp with COM_LoadHunkFile instead
+  // of WinQuake's COM_LoadTempFile (both then Hunk_FreeToLowMark it a few
+  // lines below either way, so this is not observable).
+  const cbRaw = qw.active ? COM_LoadHunkFile("gfx/conback.lmp") : COM_LoadTempFile("gfx/conback.lmp");
   if (!cbRaw) return Sys_Error("Couldn't load gfx/conback.lmp");
   const cb = SwapPic(cbRaw);
 
-  // hack the version number directly into the pic -- #if defined(__linux__)
-  // branch (RULING; see draw.ts's precedent for the same choice)
-  const ver = Com_sprintf("(Linux %2.2f, gl %4.2f) %4.2f", LINUX_VERSION, GLQUAKE_VERSION, VERSION);
-  const verDestBase = 320 * 186 + 320 - 11 - 8 * ver.length;
+  // hack the version number directly into the pic
+  const ver = qw.active
+    ? Com_sprintf("%4.2f", VERSION)
+    : // #if defined(__linux__) branch (RULING; see draw.ts's precedent for the same choice)
+      Com_sprintf("(Linux %2.2f, gl %4.2f) %4.2f", LINUX_VERSION, GLQUAKE_VERSION, VERSION);
+  const verDestBase = qw.active ? 320 + 320 * 186 - 11 - 8 * ver.length : 320 * 186 + 320 - 11 - 8 * ver.length;
   for (let x = 0; x < ver.length; x++) {
     Draw_CharToConback(ver.charCodeAt(x), cb.data, verDestBase + (x << 3));
   }
@@ -540,8 +587,10 @@ export function Draw_Init(): void {
   gl.tl = 0;
   gl.th = 1;
   picGl.set(conback, gl);
-  conback.width = vid.width;
-  conback.height = vid.height;
+  // QW/client/gl_draw.c uses vid.conwidth/conheight here instead of
+  // WinQuake's vid.width/height.
+  conback.width = qw.active ? vid.conwidth : vid.width;
+  conback.height = qw.active ? vid.conheight : vid.height;
 
   // free loaded console
   Hunk_FreeToLowMark(start);
@@ -619,6 +668,110 @@ export function Draw_String(x: number, y: number, str: string): void {
 
 /*
 ================
+Draw_Alt_String
+
+QW/client/gl_draw.c addition (also draw.c) -- high-bit-set variant of
+Draw_String, not in WinQuake's gl_draw.c/draw.h.
+================
+*/
+export function Draw_Alt_String(x: number, y: number, str: string): void {
+  let cx = x | 0;
+  const cy = y | 0;
+
+  for (let i = 0; i < str.length; i++) {
+    Draw_Character(cx, cy, str.charCodeAt(i) | 0x80);
+    cx += 8;
+  }
+}
+
+/*
+================
+Draw_Crosshair
+
+QW/client/gl_draw.c addition. WinQuake draws its crosshair inline at gl_screen.c's
+SCR_UpdateScreen else-branch (ref_gl.ts's SCR_DrawCrosshair, out of this unit's
+SCOPE); QW factors it out into this shared function instead, still called from
+the same place. Ported here so ref_gl.ts's SCR_DrawCrosshair can call it under
+qw.active -- see this unit's report for the exact one-line wiring that file
+(out of SCOPE) still needs.
+================
+*/
+export function Draw_Crosshair(): void {
+  if (crosshair.value === 2) {
+    const x = scr_vrect.x + ((scr_vrect.width / 2) | 0) - 3 + cl_crossx.value;
+    const y = scr_vrect.y + ((scr_vrect.height / 2) | 0) - 3 + cl_crossy.value;
+
+    const q = qgl();
+    q.qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    // `pColor = (unsigned char *) &d_8to24table[(byte) crosshaircolor.value];
+    // glColor4ubv(pColor);` in the C -- qgl.ts has no qglColor4ub/qglColor4ubv
+    // binding (out of this unit's SCOPE to add), so the same RGBA palette
+    // entry is set via qglColor4f with its four bytes normalized to [0,1]:
+    // numerically identical GL color state.
+    const packed = d_8to24table[crosshaircolor.value & 255] >>> 0;
+    q.qglColor4f(((packed >>> 0) & 0xff) / 255, ((packed >>> 8) & 0xff) / 255, ((packed >>> 16) & 0xff) / 255, ((packed >>> 24) & 0xff) / 255);
+    GL_Bind(cs_texture);
+
+    q.qglBegin(GL_QUADS);
+    q.qglTexCoord2f(0, 0);
+    q.qglVertex2f(x - 4, y - 4);
+    q.qglTexCoord2f(1, 0);
+    q.qglVertex2f(x + 12, y - 4);
+    q.qglTexCoord2f(1, 1);
+    q.qglVertex2f(x + 12, y + 12);
+    q.qglTexCoord2f(0, 1);
+    q.qglVertex2f(x - 4, y + 12);
+    q.qglEnd();
+
+    q.qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+  } else if (crosshair.value) {
+    Draw_Character(
+      scr_vrect.x + ((scr_vrect.width / 2) | 0) - 4 + cl_crossx.value,
+      scr_vrect.y + ((scr_vrect.height / 2) | 0) - 4 + cl_crossy.value,
+      "+".charCodeAt(0),
+    );
+  }
+}
+
+/*
+================
+Draw_SubPic
+
+QW/client/gl_draw.c addition -- blits a sub-rectangle of a scrap-backed pic
+(glpic_t's sl/tl/sh/th remapped to the requested sub-rectangle).
+================
+*/
+export function Draw_SubPic(x: number, y: number, pic: QpicT, srcx: number, srcy: number, width: number, height: number): void {
+  if (scrap_dirty) Scrap_Upload();
+  const gl = picGl.get(pic);
+  if (!gl) return; // Draw_PicFromWad/Draw_CachePic/Draw_Init not yet run for this pic
+
+  const oldglwidth = gl.sh - gl.sl;
+  const oldglheight = gl.th - gl.tl;
+
+  const newsl = gl.sl + (srcx * oldglwidth) / pic.width;
+  const newsh = newsl + (width * oldglwidth) / pic.width;
+
+  const newtl = gl.tl + (srcy * oldglheight) / pic.height;
+  const newth = newtl + (height * oldglheight) / pic.height;
+
+  const q = qgl();
+  q.qglColor4f(1, 1, 1, 1);
+  GL_Bind(gl.texnum);
+  q.qglBegin(GL_QUADS);
+  q.qglTexCoord2f(newsl, newtl);
+  q.qglVertex2f(x, y);
+  q.qglTexCoord2f(newsh, newtl);
+  q.qglVertex2f(x + width, y);
+  q.qglTexCoord2f(newsh, newth);
+  q.qglVertex2f(x + width, y + height);
+  q.qglTexCoord2f(newsl, newth);
+  q.qglVertex2f(x, y + height);
+  q.qglEnd();
+}
+
+/*
+================
 Draw_DebugChar
 
 Draws a single character directly to the upper right corner of the screen.
@@ -641,6 +794,8 @@ export function Draw_AlphaPic(x: number, y: number, pic: QpicT, alpha: number): 
   const q = qgl();
   q.qglDisable(GL_ALPHA_TEST);
   q.qglEnable(GL_BLEND);
+  // QW/client/gl_draw.c addition: `glCullFace(GL_FRONT);` (WinQuake has none here).
+  if (qw.active) q.qglCullFace(GL_FRONT);
   q.qglColor4f(1, 1, 1, alpha);
   GL_Bind(gl.texnum);
   q.qglBegin(GL_QUADS);
@@ -758,6 +913,18 @@ export function Draw_ConsoleBackground(lines: number): void {
 
   if (lines > y) Draw_Pic(0, lines - vid.height, conback);
   else Draw_AlphaPic(0, lines - vid.height, conback, (1.2 * lines) / y);
+
+  // QW/client/gl_draw.c addition: hack the version number directly onto the
+  // screen (not into the pic, unlike draw.ts's soft path) when not
+  // downloading. No WinQuake counterpart.
+  if (qw.active && !cls.qw.download) {
+    const ver = Com_sprintf("Linux (%4.2f) QuakeWorld", LINUX_VERSION); // #ifdef __linux__ branch, RULING per this unit's precedent
+    const overlayY = lines - 14;
+    const x = vid.conwidth - (ver.length * 8 + 11) - (((vid.conwidth * 8) / 320) | 0) * 7;
+    for (let i = 0; i < ver.length; i++) {
+      Draw_Character(x + i * 8, overlayY, ver.charCodeAt(i) | 0x80);
+    }
+  }
 }
 
 /*
@@ -1207,11 +1374,17 @@ export function GL_LoadTexture(identifier: string, width: number, height: number
         return gltextures[i].texnum;
       }
     }
-    // BUG, preserved verbatim from the C -- see file header: on a miss the
-    // loop above leaves i === numgltextures, and this branch reuses that
-    // slot WITHOUT incrementing numgltextures (only the identifier === ""
-    // branch below does).
+    // BUG, preserved verbatim from the C for WinQuake -- see file header: on
+    // a miss the loop above leaves i === numgltextures, and this branch
+    // reuses that slot WITHOUT incrementing numgltextures (only the
+    // identifier === "" branch below does). QW/client/gl_draw.c FIXES this:
+    // its GL_LoadTexture increments numgltextures unconditionally right
+    // after the if/else, for both branches -- folded here as the one extra
+    // increment the named-miss branch needs under qw.active; the
+    // identifier === "" branch below already increments unconditionally in
+    // both trees, so it is unchanged.
     glt = gltextures[i];
+    if (qw.active) numgltextures++;
   } else {
     glt = gltextures[numgltextures];
     numgltextures++;
@@ -1245,7 +1418,11 @@ export function GL_LoadPicTexture(pic: QpicT): number {
 
 export function GL_SelectTexture(target: number): void {
   if (!glState.gl_mtexable) return;
-  qgl().qglSelectTextureSGIS?.(target);
+  // QW/client/gl_draw.c wraps this call in `#ifndef __linux__ // no
+  // multitexture under Linux yet` -- this port targets Linux only (PORTING.md:
+  // "take the portable, non-asm path"), so under qw.active that call is
+  // compiled out entirely, exactly as it would be for a real QW Linux build.
+  if (!qw.active) qgl().qglSelectTextureSGIS?.(target);
   if (target === glState.oldtarget) return;
   cnttextures[glState.oldtarget - TEXTURE0_SGIS] = glState.currenttexture;
   glState.currenttexture = cnttextures[target - TEXTURE0_SGIS];

@@ -65,8 +65,10 @@ Deviations from PORTING.md / the C source:
 import { type Vec3, vec3 } from "../../common/mathlib";
 import type { FileHandle } from "../../common/common";
 import { VID_GRADES } from "../../client/vid";
-import { MAX_CLIENTS, PacketEntitiesT, QwUsercmdT, UPDATE_BACKUP } from "../protocol";
-import { MAX_MODELS, MAX_SOUNDS } from "../bothdefs";
+import { MAX_CLIENTS, PacketEntitiesT, QwEntityStateT, QwUsercmdT, UPDATE_BACKUP } from "../protocol";
+import { MAX_EDICTS, MAX_MODELS, MAX_SOUNDS } from "../bothdefs";
+import { NetchanT } from "../net_chan";
+import { CacheUser } from "../../common/zone";
 
 // QW/client/client.h: `#define MAX_SCOREBOARDNAME 16`, local to this header --
 // see file header for why this is not exported.
@@ -106,7 +108,7 @@ export class PlayerStateT {
 export class SkinT {
   name = ""; // char name[16]
   failedload = false; // the name isn't a valid skin
-  cache: unknown = null; // cache_user_t; zone.ts's CacheUser is out of this unit's scope
+  cache: CacheUser<Uint8Array> = new CacheUser<Uint8Array>(); // cache_user_t; the 320*200 skin bitmap Skin_Cache decodes
 }
 
 export class PlayerInfoT {
@@ -160,7 +162,7 @@ export enum DownloadTypeT {
 //
 export class QwClientStaticExtT {
   // network stuff
-  netchan: unknown = null; // netchan_t; src/qw/net_chan.ts (Q003) has not landed
+  netchan: NetchanT = new NetchanT(); // netchan_t (src/qw/net_chan.ts); see file header
 
   // private userinfo for sending to masterless servers
   userinfo = ""; // char userinfo[MAX_INFO_STRING]
@@ -218,10 +220,110 @@ export class QwClientStateExtT {
 
   // all player information
   players: PlayerInfoT[] = makeArray(MAX_CLIENTS, () => new PlayerInfoT());
+
+  // `float punchangle;` -- QW/client/client.h line 262, "temporar yview kick
+  // from weapon firing" (sic). WinQuake's ClientStateT.punchangle is a
+  // vec3_t, a different quantity with the same name, so QW's scalar lives
+  // here rather than colliding with it. svc_smallkick/svc_bigkick
+  // (cl_parse.ts) write it; QW's view.c reads it.
+  punchangle = 0;
+
+  // `memset (&cl, 0, sizeof(cl))` in QW/client/cl_main.c's CL_ClearState wipes
+  // the whole client_state_t, this extension object's fields included;
+  // ClientStateT.clear() (src/client/client.ts) deliberately leaves `qw`
+  // alone, so this is the other half of that memset.
+  clear(): void {
+    this.servercount = 0;
+    this.serverinfo = "";
+    this.parsecount = 0;
+    this.validsequence = 0;
+    this.spectator = 0;
+    this.last_ping_request = 0;
+    this.last_servermessage = 0;
+    for (const f of this.frames) {
+      f.cmd = new QwUsercmdT();
+      f.senttime = 0;
+      f.delta_sequence = 0;
+      f.receivedtime = 0;
+      for (let i = 0; i < f.playerstate.length; i++) f.playerstate[i] = new PlayerStateT();
+      f.packet_entities = new PacketEntitiesT();
+      f.invalid = false;
+    }
+    this.simorg[0] = this.simorg[1] = this.simorg[2] = 0;
+    this.simvel[0] = this.simvel[1] = this.simvel[2] = 0;
+    this.simangles[0] = this.simangles[1] = this.simangles[2] = 0;
+    this.model_name.fill("");
+    this.sound_name.fill("");
+    this.playernum = 0;
+    this.punchangle = 0;
+    for (let i = 0; i < this.players.length; i++) this.players[i] = new PlayerInfoT();
+  }
 }
 
 function makeArray<T>(n: number, make: () => T): T[] {
   const a: T[] = new Array<T>(n);
   for (let i = 0; i < n; i++) a[i] = make();
   return a;
+}
+
+// QW/client/client.h's net-timing ring, filled by CL_CalcNet (cl_parse.ts) and
+// read by the net graph (r_misc.c / gl_ngraph.c) and cl_input.c.
+export const NET_TIMINGS = 256;
+export const NET_TIMINGSMASK = 255;
+
+// entity_state_t cl_baselines[MAX_EDICTS]; -- QW/client/client.h's extern,
+// defined in cl_main.c. QW's entity_state_t is src/qw/protocol.ts's
+// QwEntityStateT, not the WinQuake one src/client/client.ts's arrays use, so
+// this array lives here rather than alongside cl_efrags/cl_static_entities.
+export const cl_baselines: QwEntityStateT[] = makeArray(MAX_EDICTS, () => new QwEntityStateT());
+
+// #define CAM_NONE 0 / #define CAM_TRACK 1 (QW/client/client.h). Appended
+// here (not previously ported) because src/qw/client/cl_cam.ts already
+// imports both from this module and src/qw/client/sbar.ts (Sbar_Draw's
+// spectator-camera branch) needs CAM_TRACK too.
+export const CAM_NONE = 0;
+export const CAM_TRACK = 1;
+
+// pcx_t (QW/client/client.h, under the skin.c section). PORTING.md's rule for
+// on-disk binary formats: a DataView read at the C's own offsets. `data` is
+// the first byte of the RLE stream, at PCX_DATA_OFS.
+export const PCX_DATA_OFS = 128;
+
+export class PcxT {
+  manufacturer = 0;
+  version = 0;
+  encoding = 0;
+  bits_per_pixel = 0;
+  xmin = 0;
+  ymin = 0;
+  xmax = 0;
+  ymax = 0;
+  hres = 0;
+  vres = 0;
+  palette: Uint8Array = new Uint8Array(48);
+  reserved = 0;
+  color_planes = 0;
+  bytes_per_line = 0;
+  palette_type = 0;
+}
+
+export function readPcx(buf: Uint8Array): PcxT {
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const pcx = new PcxT();
+  pcx.manufacturer = view.getInt8(0);
+  pcx.version = view.getInt8(1);
+  pcx.encoding = view.getInt8(2);
+  pcx.bits_per_pixel = view.getInt8(3);
+  pcx.xmin = view.getUint16(4, true);
+  pcx.ymin = view.getUint16(6, true);
+  pcx.xmax = view.getUint16(8, true);
+  pcx.ymax = view.getUint16(10, true);
+  pcx.hres = view.getUint16(12, true);
+  pcx.vres = view.getUint16(14, true);
+  pcx.palette.set(buf.subarray(16, 64));
+  pcx.reserved = view.getInt8(64);
+  pcx.color_planes = view.getInt8(65);
+  pcx.bytes_per_line = view.getUint16(66, true);
+  pcx.palette_type = view.getUint16(68, true);
+  return pcx;
 }

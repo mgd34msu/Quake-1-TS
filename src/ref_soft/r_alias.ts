@@ -597,6 +597,36 @@ export function R_AliasSetupSkin(): void {
   r_affinetridesc.skinwidth = rState.a_skinwidth;
   r_affinetridesc.seamfixupX16 = (rState.a_skinwidth >> 1) << 16;
   r_affinetridesc.skinheight = pmdl.skinheight;
+
+  // QuakeWorld fold (qw.active), BLOCKED -- not implemented.
+  // ../qsrc/quake/QW/client/r_alias.c appends, right here at the end of
+  // R_AliasSetupSkin:
+  //   if (currententity->scoreboard) {
+  //     byte *base;
+  //     if (!currententity->scoreboard->skin) Skin_Find(currententity->scoreboard);
+  //     base = Skin_Cache(currententity->scoreboard->skin);
+  //     if (base) {
+  //       r_affinetridesc.pskin = base;
+  //       r_affinetridesc.skinwidth = 320;
+  //       r_affinetridesc.skinheight = 200;
+  //     }
+  //   }
+  // This overrides the skin above with a player's live scoreboard skin
+  // (Overrides the model's own skin with the connected player's downloaded
+  // one, so player models don't all wear the pak0 default skin). Two pieces
+  // this unit's SCOPE cannot supply are missing:
+  //   1. `EntityT.scoreboard` (render.ts's EntityT -- out of SCOPE for this
+  //      unit; render.ts is listed only for "add a renderer-interface member
+  //      if gl_ngraph needs one", not for extending EntityT, which belongs to
+  //      whichever unit owns the renderer seam).
+  //   2. `Skin_Find`/`Skin_Cache` (QW skin.c -> src/qw/client/skin.ts, not
+  //      landed as of this fold -- only src/qw/client/client.ts exists under
+  //      src/qw/client/).
+  // Do not stub either locally (rule 12's spirit: a shadow EntityT.scoreboard
+  // or a local Skin_Cache would diverge from whatever the owning units land).
+  // Follow-up: once both exist, add
+  //   `if (qw.active && ent.scoreboard) { ... }`
+  // here, narrowing `ent.scoreboard.skin` before calling Skin_Find/Skin_Cache.
 }
 
 /*

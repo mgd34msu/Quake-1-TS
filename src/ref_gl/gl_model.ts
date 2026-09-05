@@ -234,6 +234,7 @@ import {
   SURF_DRAWSKY,
   SURF_DRAWTILED,
   SURF_DRAWTURB,
+  SURF_DONTWARP,
   SURF_PLANEBACK,
   SURF_UNDERWATER,
   TextureT,
@@ -264,6 +265,14 @@ import {
 import { GL_LoadTexture } from "./gl_draw";
 import { GL_SubdivideSurface, R_InitSky } from "./gl_warp";
 import { GL_MakeAliasModelDisplayLists } from "./gl_mesh";
+// QuakeWorld track: gl_model.c's player.mdl/eyes.mdl CRC -> cls.qw.userinfo fold.
+import { qw } from "../common/quakedef";
+import { cl, cls, CactiveT } from "../client/client";
+import { CRC_Block } from "../common/crc";
+import { Info_SetValueForKey, Info_ValueForKey, MAX_INFO_STRING } from "../qw/common";
+import { modelNames } from "../qw/client/cl_main";
+import { MSG_WriteByte, SZ_Print } from "../common/sizebuf";
+import { ClcOpsT } from "../qw/protocol";
 
 /*
 ==============================================================================
@@ -492,10 +501,20 @@ part: mark every marksurface of a non-CONTENTS_EMPTY leaf SURF_UNDERWATER.
 =================
 */
 export function afterBrushLoad(mod: ModelT): void {
+  // QW/client/gl_model.c: brush models that are not the current map (per
+  // cl.qw.serverinfo's "map" key) get every marksurface flagged
+  // SURF_DONTWARP, so gl_rsurf.c's underwater-warp gating below skips them.
+  const isnotmap = qw.active && `maps/${Info_ValueForKey(cl.qw.serverinfo, "map")}.bsp` !== mod.name;
+
   for (const leaf of mod.leafs) {
     if (leaf.contents !== CONTENTS_EMPTY) {
       for (let j = 0; j < leaf.nummarksurfaces; j++) {
         leaf.marksurfaces[leaf.firstmarksurface + j].flags |= SURF_UNDERWATER;
+      }
+    }
+    if (isnotmap) {
+      for (let j = 0; j < leaf.nummarksurfaces; j++) {
+        leaf.marksurfaces[leaf.firstmarksurface + j].flags |= SURF_DONTWARP;
       }
     }
   }
@@ -568,6 +587,11 @@ export let triangles: MtriangleT[] = [];
 // this file's header).
 export let poseverts: TrivertxT[][] = [];
 let posenum = 0;
+
+// QW/client/gl_model.c file-scope static (not in WinQuake's gl_model.c):
+// `byte player_8bit_texels[320*200]`, the fixed-size replacement for
+// AliashdrT.texels[] when qw.active -- see Mod_LoadAllSkins below.
+export const player_8bit_texels: Uint8Array = new Uint8Array(320 * 200);
 
 /*
 =================
@@ -759,9 +783,18 @@ export function Mod_LoadAllSkins(mod: ModelT, hdr: AliashdrT, buffer: Uint8Array
 
       // save 8 bit texels for the player model to remap
       const pixelsStart = pskintype + DALIASSKINTYPE_T_SIZE;
-      const texels = Hunk_AllocName(s, loadState.loadname);
-      texels.set(buffer.subarray(pixelsStart, pixelsStart + s));
-      hdr.texels[i] = texels;
+      if (qw.active) {
+        // QW/client/gl_model.c: only player.mdl's texels are kept, into the
+        // fixed-size player_8bit_texels global -- hdr.texels[i] is not set.
+        if (mod.name === "progs/player.mdl") {
+          if (s > player_8bit_texels.length) Sys_Error("Player skin too large");
+          player_8bit_texels.set(buffer.subarray(pixelsStart, pixelsStart + s));
+        }
+      } else {
+        const texels = Hunk_AllocName(s, loadState.loadname);
+        texels.set(buffer.subarray(pixelsStart, pixelsStart + s));
+        hdr.texels[i] = texels;
+      }
 
       const name = `${mod.name}_${i}`;
       const texnum = GL_LoadTexture(name, hdr.skinwidth, hdr.skinheight, buffer.subarray(pixelsStart, pixelsStart + s), true, false);
@@ -783,7 +816,8 @@ export function Mod_LoadAllSkins(mod: ModelT, hdr: AliashdrT, buffer: Uint8Array
       let j = 0;
       for (; j < groupskins; j++) {
         Mod_FloodFillSkin(skin, hdr.skinwidth, hdr.skinheight);
-        if (j === 0) {
+        // QW/client/gl_model.c drops this group-skin texel save entirely.
+        if (!qw.active && j === 0) {
           const texels = Hunk_AllocName(s, loadState.loadname);
           texels.set(buffer.subarray(pskintype, pskintype + s));
           hdr.texels[i] = texels;
@@ -818,6 +852,20 @@ Mod_LoadAliasModel
 */
 export function Mod_LoadAliasModel(mod: ModelT, buffer: Uint8Array): void {
   const start = Hunk_LowMark();
+
+  // QW/client/gl_model.c: player.mdl/eyes.mdl CRC -> cls.userinfo "pmodel"/"emodel",
+  // so the server can verify the skin the client says it is using.
+  if (qw.active && (mod.name === "progs/player.mdl" || mod.name === "progs/eyes.mdl")) {
+    const crc = CRC_Block(buffer);
+    const key = mod.name === "progs/player.mdl" ? modelNames.pmodel_name : modelNames.emodel_name;
+    const value = String(crc);
+    cls.qw.userinfo = Info_SetValueForKey(cls.qw.userinfo, key, value, MAX_INFO_STRING);
+
+    if (cls.state >= CactiveT.ca_connected) {
+      MSG_WriteByte(cls.qw.netchan.message, ClcOpsT.clc_stringcmd);
+      SZ_Print(cls.qw.netchan.message, `setinfo ${key} ${crc}`);
+    }
+  }
 
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   const pinmodel = readMdl(view, 0);

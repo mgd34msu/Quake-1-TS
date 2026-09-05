@@ -51,6 +51,44 @@ Deviations from PORTING.md / the C source:
   viewangles. Its neighbouring commented-out lines inside R_TimeGraph are
   kept, since they are `//` comments in the C rather than a preprocessor
   branch.
+
+QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
+../qsrc/quake/QW/client/r_misc.c against WinQuake/r_misc.c):
+- `R_CheckVariables`'s whole body is `#if 0`'d out in QW: under qw.active the
+  function is a no-op (no surface-cache flush on an r_fullbright change).
+- `R_LineGraph` drops the vrect-relative x/y offset under qw.active (QW's
+  R_NetGraph/R_ZGraph callers already pass absolute screen coordinates), and
+  gains a 4-color sentinel scheme (10000/9999/9998/else) used by the new
+  R_NetGraph, replacing the WinQuake two-tone (0xff foreground / 0x30 shadow)
+  bar with a single solid color per column.
+- `R_TimeGraph` gains `a = graphval;` after the same commented-out debug
+  expressions WinQuake has -- `graphval` is a QW file-scope `int`, exported
+  here, never assigned by any QW v2.33 client file (dead debug hook, kept
+  bug-for-bug, always reads 0).
+- `R_NetGraph`/`R_ZGraph` are QW-only additions (no WinQuake counterpart in
+  this file). Call site and `r_netgraph`/`r_zgraph` cvar registration are in
+  r_main.ts's R_Init/R_RenderView_, matching where QW's r_main.c puts them.
+  `R_NetGraph` needs `CL_CalcNet()`/`packet_latency[]` from QW's cl_parse.c;
+  src/client/cl_parse.ts does not export them yet (checked at fold time) --
+  the import below names them directly rather than stubbing a local copy.
+  `cls.qw.netchan` is `unknown` (client.ts's own forward-declaration, stale:
+  src/qw/net_chan.ts has since landed with a real `NetchanT`); narrowed here
+  with `instanceof NetchanT` rather than `as`.
+- `R_SetupFrame`'s multiplayer cheat-guard (`cl.maxclients > 1`) writes the
+  four cvars' `.value` fields directly under qw.active instead of going
+  through `Cvar_Set` (WinQuake's path, kept when the flag is off).
+- `R_SetupFrame`'s `if (!sv.active) r_draworder.value = 0` is commented out
+  entirely in QW (there is no local `sv` to be active in a QW client) --
+  folded so the check only fires when `qw.active` is false.
+- `R_SetupFrame`'s dowarp-changed condition drops the `|| lcd_x.value` half
+  under qw.active.
+- `Sys_FloatTime` -> `Sys_DoubleTime` (R_TimeRefresh_f, R_TimeGraph,
+  R_PrintTimes, R_PrintDSpeeds): a QW rename with no TS-observable delta --
+  both read "current time in seconds" and this port's `Sys_FloatTime` already
+  returns a JS number (float64/double precision), so no second import was
+  threaded through (`src/platform/sys.ts` is out of this unit's SCOPE and
+  gains nothing from a same-value alias). Kept as `Sys_FloatTime` on both
+  branches.
 */
 
 import { Con_Printf } from "../client/console";
@@ -59,12 +97,21 @@ import { Sys_FloatTime } from "../platform/sys";
 import { AngleVectors, DotProduct, MplaneT, type Vec3, VectorCopy, vec3 } from "../common/mathlib";
 import { Mod_PointInLeaf } from "../common/model";
 import { CONTENTS_WATER } from "../common/bspfile";
-import { cl } from "../client/client";
+import { cl, cls } from "../client/client";
 import { sv } from "../server/server";
 import { host_basepal } from "../common/host";
 import { vid, vidBackend, VrectT } from "../client/vid";
 import { scrState } from "../client/screen_types";
 import { lcd_x } from "../client/view";
+import { qw } from "../common/quakedef";
+import { NetchanT } from "../qw/net_chan";
+// QW cl_parse.c: CL_CalcNet/packet_latency (R_NetGraph's packet-loss source).
+// cl_parse.c is one of the wholesale-different QW client files (client-side
+// prediction/download logic with no WinQuake counterpart worth folding), so
+// it lives at src/qw/client/cl_parse.ts, not folded into src/client/cl_parse.ts.
+import { CL_CalcNet, packet_latency } from "../qw/client/cl_parse";
+import { M_DrawTextBox } from "../client/menu";
+import { Draw_String } from "./draw";
 import {
   base_modelorg,
   base_vpn,
@@ -87,6 +134,7 @@ import {
   R_ViewChanged,
   r_ambient,
   r_draworder,
+  r_drawflat,
   r_fullbright,
   r_graphheight,
   r_numedges,
@@ -100,6 +148,9 @@ import { D_FlushCaches } from "./d_surf";
 import { R_AnimateLight } from "./r_light";
 import { R_SetSkyFrame } from "./r_sky";
 
+export const NET_TIMINGS = 256;
+export const NET_TIMINGSMASK = 255;
+
 /*
 ===============
 R_CheckVariables
@@ -108,6 +159,9 @@ R_CheckVariables
 let oldbright = 0; // static float oldbright
 
 export function R_CheckVariables(): void {
+  // QW r_misc.c: R_CheckVariables's whole body is #if 0'd out -- QW never
+  // flushes the surface cache on an r_fullbright change.
+  if (qw.active) return;
   if (r_fullbright.value !== oldbright) {
     oldbright = r_fullbright.value;
     D_FlushCaches(); // so all lighting changes
@@ -183,28 +237,121 @@ export function R_LineGraph(x: number, y: number, h: number): void {
   let i: number;
   let dest: number;
   let s: number;
+  let color: number;
 
   // FIXME: should be disabled on no-buffer adapters, or should be in the driver
 
   const buffer = vid.buffer;
   if (!buffer) return;
 
-  x += r_refdef.vrect.x;
-  y += r_refdef.vrect.y;
+  // QW r_misc.c: the vrect offset is commented out (netgraph/zgraph pass
+  // already-absolute screen coordinates); WinQuake's R_TimeGraph still wants
+  // the vrect-relative offset.
+  if (!qw.active) {
+    x += r_refdef.vrect.x;
+    y += r_refdef.vrect.y;
+  }
 
   dest = vid.rowbytes * y + x;
 
   s = r_graphheight.value | 0;
 
+  // QW r_misc.c: R_NetGraph/R_ZGraph pass special sentinel heights (dropped
+  // packet, choked packet, invalid delta) that pick a fixed color instead of
+  // drawing the WinQuake two-tone (0xff/0x30) bar.
+  if (qw.active) {
+    if (h === 10000) color = 0x6f; // yellow
+    else if (h === 9999) color = 0x4f; // red
+    else if (h === 9998) color = 0xd0; // blue
+    else color = 0xff; // pink
+  } else {
+    color = 0xff;
+  }
+
   if (h > s) h = s;
 
-  for (i = 0; i < h; i++, dest -= vid.rowbytes * 2) {
-    buffer[dest] = 0xff;
-    buffer[dest - vid.rowbytes] = 0x30;
+  if (qw.active) {
+    for (i = 0; i < h; i++, dest -= vid.rowbytes * 2) {
+      buffer[dest] = color;
+    }
+    for (; i < s; i++, dest -= vid.rowbytes * 2) {
+      buffer[dest] = color;
+    }
+  } else {
+    for (i = 0; i < h; i++, dest -= vid.rowbytes * 2) {
+      buffer[dest] = 0xff;
+      buffer[dest - vid.rowbytes] = 0x30;
+    }
+    for (; i < s; i++, dest -= vid.rowbytes * 2) {
+      buffer[dest] = 0x30;
+      buffer[dest - vid.rowbytes] = 0x30;
+    }
   }
-  for (; i < s; i++, dest -= vid.rowbytes * 2) {
-    buffer[dest] = 0x30;
-    buffer[dest - vid.rowbytes] = 0x30;
+}
+
+/*
+==============
+R_NetGraph
+
+QW r_misc.c (new). Software counterpart of gl_ngraph.c's R_NetGraph: draws
+packet_latency[] as a strip of R_LineGraph bars plus a packet-loss percentage,
+above the status bar.
+==============
+*/
+export function R_NetGraph(): void {
+  let a: number;
+  let x: number;
+  let y: number;
+  let y2: number;
+  let w: number;
+  let i: number;
+
+  if (vid.width - 16 <= NET_TIMINGS) w = vid.width - 16;
+  else w = NET_TIMINGS;
+
+  x = -((vid.width - 320) >> 1);
+  y = vid.height - scrState.sb_lines - 24 - (r_graphheight.value | 0) * 2 - 2;
+
+  M_DrawTextBox(x, y, ((w + 7) / 8) | 0, (((r_graphheight.value | 0) * 2 + 7) / 8 + 1) | 0);
+  y2 = y + 8;
+  y = vid.height - scrState.sb_lines - 8 - 2;
+
+  x = 8;
+  const lost = CL_CalcNet();
+  const netchan = cls.qw.netchan;
+  const outgoing_sequence = netchan instanceof NetchanT ? netchan.outgoing_sequence : 0;
+  for (a = NET_TIMINGS - w; a < w; a++) {
+    i = (outgoing_sequence - a) & NET_TIMINGSMASK;
+    R_LineGraph(x + w - 1 - a, y, packet_latency[i]);
+  }
+  Draw_String(8, y2, `${lost}% packet loss`);
+}
+
+/*
+==============
+R_ZGraph
+
+QW r_misc.c (new). Plots r_origin[2] (view Z) history as a graph, one sample
+per rendered frame.
+==============
+*/
+const zgraphHeight = new Int32Array(256); // static int height[256]
+
+export function R_ZGraph(): void {
+  let a: number;
+  let x: number;
+  let w: number;
+  let i: number;
+
+  if (r_refdef.vrect.width <= 256) w = r_refdef.vrect.width;
+  else w = 256;
+
+  zgraphHeight[rState.r_framecount & 255] = (r_origin[2] | 0) & 31;
+
+  x = 0;
+  for (a = 0; a < w; a++) {
+    i = (rState.r_framecount - a) & 255;
+    R_LineGraph(x + w - 1 - a, r_refdef.vrect.height - 2, zgraphHeight[i]);
   }
 }
 
@@ -219,6 +366,10 @@ const MAX_TIMINGS = 100;
 
 let timex = 0; // static int timex
 const r_timings = new Uint8Array(MAX_TIMINGS); // static byte r_timings[MAX_TIMINGS]
+// QW r_misc.c: `int graphval;`, file-scope, never assigned anywhere in QW
+// v2.33's client tree -- dead debug hook (a = graphval; always reads 0), kept
+// bug-for-bug since PORTING.md doesn't let a worker "improve" a C oddity.
+export let graphval = 0;
 
 export function R_TimeGraph(): void {
   let a: number;
@@ -233,6 +384,10 @@ export function R_TimeGraph(): void {
   //a = fabs(velocity[0])/20;
   //a = ((int)fabs(origin[0])/8)%20;
   //a = (cl.idealpitch + 30)/5;
+  // QW r_misc.c adds `a = graphval;` after the same commented-out debug
+  // expressions WinQuake has, unconditionally overwriting the elapsed-time
+  // sample above.
+  if (qw.active) a = graphval;
   r_timings[timex] = a;
   a = timex;
 
@@ -420,10 +575,20 @@ export function R_SetupFrame(): void {
 
   // don't allow cheats in multiplayer
   if (cl.maxclients > 1) {
-    Cvar_Set("r_draworder", "0");
-    Cvar_Set("r_fullbright", "0");
-    Cvar_Set("r_ambient", "0");
-    Cvar_Set("r_drawflat", "0");
+    // QW r_misc.c writes the cvars' numeric fields directly, bypassing
+    // Cvar_Set (and whatever userinfo-propagation side effect Cvar_Set
+    // carries under qw.active -- see src/common/cvar.ts's qw fold).
+    if (qw.active) {
+      r_draworder.value = 0;
+      r_fullbright.value = 0;
+      r_ambient.value = 0;
+      r_drawflat.value = 0;
+    } else {
+      Cvar_Set("r_draworder", "0");
+      Cvar_Set("r_fullbright", "0");
+      Cvar_Set("r_ambient", "0");
+      Cvar_Set("r_drawflat", "0");
+    }
   }
 
   if (r_numsurfs.value) {
@@ -444,7 +609,9 @@ export function R_SetupFrame(): void {
 
   if (r_refdef.ambientlight < 0) r_refdef.ambientlight = 0;
 
-  if (!sv.active) r_draworder.value = 0; // don't let cheaters look behind walls
+  // QW r_misc.c: this whole check is commented out -- qwcl never zeroes
+  // r_draworder here (there is no local sv to be active in a QW client).
+  if (!qw.active && !sv.active) r_draworder.value = 0; // don't let cheaters look behind walls
 
   R_CheckVariables();
 
@@ -467,7 +634,8 @@ export function R_SetupFrame(): void {
   rState.r_dowarpold = rState.r_dowarp;
   rState.r_dowarp = r_waterwarp.value !== 0 && rState.r_viewleaf.contents <= CONTENTS_WATER;
 
-  if (rState.r_dowarp !== rState.r_dowarpold || rState.r_viewchanged || lcd_x.value) {
+  // QW r_misc.c drops the `|| lcd_x.value` disjunct entirely.
+  if (rState.r_dowarp !== rState.r_dowarpold || rState.r_viewchanged || (!qw.active && lcd_x.value)) {
     if (rState.r_dowarp) {
       if (vid.width <= vid.maxwarpwidth && vid.height <= vid.maxwarpheight) {
         vrect.x = 0;

@@ -183,6 +183,14 @@ import {
 } from "./model_types";
 // r_sky.c, U064, concurrent with this unit: see the header note above.
 import { R_InitSky } from "./r_sky";
+// QuakeWorld track: model.c's player.mdl/eyes.mdl CRC -> cls.qw.userinfo fold.
+import { qw } from "../common/quakedef";
+import { cls, CactiveT } from "../client/client";
+import { CRC_Block } from "../common/crc";
+import { Info_SetValueForKey, MAX_INFO_STRING } from "../qw/common";
+import { modelNames } from "../qw/client/cl_main";
+import { MSG_WriteByte, SZ_Print } from "../common/sizebuf";
+import { ClcOpsT } from "../qw/protocol";
 
 /*
 ==============================================================================
@@ -508,6 +516,20 @@ Mod_LoadAliasModel
 */
 export function Mod_LoadAliasModel(mod: ModelT, buffer: Uint8Array): void {
   const start = Hunk_LowMark();
+
+  // QW/client/model.c: player.mdl/eyes.mdl CRC -> cls.userinfo "pmodel"/"emodel",
+  // so the server can verify the skin the client says it is using.
+  if (qw.active && (mod.name === "progs/player.mdl" || mod.name === "progs/eyes.mdl")) {
+    const crc = CRC_Block(buffer);
+    const key = mod.name === "progs/player.mdl" ? modelNames.pmodel_name : modelNames.emodel_name;
+    const value = String(crc);
+    cls.qw.userinfo = Info_SetValueForKey(cls.qw.userinfo, key, value, MAX_INFO_STRING);
+
+    if (cls.state >= CactiveT.ca_connected) {
+      MSG_WriteByte(cls.qw.netchan.message, ClcOpsT.clc_stringcmd);
+      SZ_Print(cls.qw.netchan.message, `setinfo ${key} ${crc}`);
+    }
+  }
 
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   const pinmodel = readMdl(view, 0);

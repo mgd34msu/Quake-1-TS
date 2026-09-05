@@ -63,6 +63,37 @@ Deviations from PORTING.md / the C source:
 - `viewmodname` and `modcount` are defined by r_main.c and read by nothing in
   v1.09; they are kept on the documented `rMainDeadState` holder below so this
   module still exports everything the C file defined.
+
+QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
+../qsrc/quake/QW/client/r_main.c against WinQuake/r_main.c):
+- `r_worldentity` (new, QW-only in the SOFTWARE r_main.c -- distinct from
+  gl_rmain.c's own r_worldentity, which both WinQuake and QW's GL renderer
+  already share unchanged): cleared and pointed at `cl.worldmodel` in
+  R_NewMap; R_RenderView_'s NULL-worldmodel guard reads it instead of
+  `cl_entities[0].model` under qw.active.
+- `r_netgraph`/`r_zgraph` cvars (new) and their R_Init registration, and the
+  R_RenderView_ call sites for R_NetGraph/R_ZGraph (r_misc.ts), are gated
+  qw.active-only, matching WinQuake's R_Init having no such registration.
+  `r_graphheight`'s default is 15 under qw.active (10 otherwise); both trees
+  register the one shared cvar object, only the post-registration
+  Cvar_SetValue differs.
+- `R_SetVrect` gains QW's `full`-viewport logic (viewsize>=100 or
+  intermission fills the screen; `cl_sbar.value`, src/qw/client/cl_main.ts,
+  changes whether the statusbar height is subtracted) and drops the
+  `lcd_x.value` halving block entirely.
+- `R_DrawViewModel` adds `|| !Cam_DrawViewModel()` (src/qw/client/cl_cam.ts)
+  to the suppression check, and reads the invisibility bit from
+  `cl.stats[STAT_ITEMS]` (src/qw/bothdefs.ts) instead of `cl.items`.
+- `R_InitTurb`'s loop bound is the literal 1280 under qw.active instead of
+  `SIN_BUFFER_SIZE` (1408 in this tree) -- a QW bug, kept bug-for-bug: see the
+  comment at the call site.
+- `currententity = cl_visedicts[i]` vs `&cl_visedicts[i]`: a C
+  pointer-vs-value representation detail with no TS-observable difference
+  (`cl_visedicts[i]` is already a reference either way) -- no-op, verified,
+  not folded.
+- `Sys_FloatTime` -> `Sys_DoubleTime` renames in R_EdgeDrawing/R_RenderView_'s
+  r_dspeeds timers: see r_misc.ts's header for why this is a no-op in this
+  port (both read a double-precision "current time in seconds").
 */
 
 import { Cmd_AddCommand } from "../common/cmd";
@@ -72,7 +103,7 @@ import { Con_Printf } from "../client/console";
 // block); imported, not redefined, so a Cvar_Set reaches both renderers'
 // objects because there is only one object. Re-exported below so existing
 // `from "./r_main"` imports (r_surf.ts) keep working.
-import { r_drawentities, r_drawviewmodel, r_fullbright, r_speeds } from "../client/render";
+import { r_drawentities, r_drawviewmodel, r_fullbright, r_speeds, EntityT } from "../client/render";
 export { r_drawentities, r_drawviewmodel, r_fullbright, r_speeds };
 import { Sys_Error, Sys_FloatTime, Sys_HighFPPrecision, Sys_LowFPPrecision } from "../platform/sys";
 import { DotProduct, Length, M_PI, PLANE_ANYZ, type Vec3, VectorCopy, VectorInverse, VectorNormalize, VectorSubtract, vec3 } from "../common/mathlib";
@@ -81,6 +112,10 @@ import type { MleafT, MnodeBaseT, MnodeT, ModelT } from "../common/model";
 import { ModtypeT } from "../common/model";
 import { MAX_DLIGHTS, cl, cl_dlights, cl_entities, cl_visedicts, clState } from "../client/client";
 import { IT_INVISIBILITY, STAT_HEALTH } from "../common/quakedef";
+import { qw } from "../common/quakedef";
+import { STAT_ITEMS } from "../qw/bothdefs";
+import { Cam_DrawViewModel } from "../qw/client/cl_cam";
+import { cl_sbar } from "../qw/client/cl_main";
 import { vidBackend, VrectT } from "../client/vid";
 import { scr_fov, scr_viewsize } from "../client/screen";
 import { lcd_x, V_SetContentsColor } from "../client/view";
@@ -134,7 +169,7 @@ import { R_SplitEntityOnNode2 } from "./r_efrag";
 import { R_LightPoint, R_MarkLights } from "./r_light";
 import { R_DrawSprite } from "./r_sprite";
 import { R_AliasCheckBBox, R_AliasDrawModel } from "./r_alias";
-import { R_PrintAliasStats, R_PrintDSpeeds, R_PrintTimes, R_SetupFrame, R_TimeGraph, R_TimeRefresh_f, R_TransformFrustum } from "./r_misc";
+import { R_NetGraph, R_PrintAliasStats, R_PrintDSpeeds, R_PrintTimes, R_SetupFrame, R_TimeGraph, R_TimeRefresh_f, R_TransformFrustum, R_ZGraph } from "./r_misc";
 
 //define	PASSAGES
 
@@ -173,6 +208,17 @@ export const r_numedges = new CvarT("r_numedges", "0");
 export const r_aliastransbase = new CvarT("r_aliastransbase", "200");
 export const r_aliastransadj = new CvarT("r_aliastransadj", "100");
 
+// QW r_main.c (new): registered/used only under qw.active; see R_Init/R_NewMap/
+// R_RenderView_ below.
+export const r_netgraph = new CvarT("r_netgraph", "0");
+export const r_zgraph = new CvarT("r_zgraph", "0");
+
+// QW r_main.c (new): `entity_t r_worldentity;`, distinct from gl_rmain.c's own
+// r_worldentity (this file's header explains why the two renderers each own
+// their own copy). Set from R_NewMap, read from R_RenderView_, both under
+// qw.active.
+export const r_worldentity = new EntityT();
+
 /*
 ===============
 R_Init
@@ -206,6 +252,18 @@ export function R_Init(): void {
   Cvar_RegisterVariable(r_aliastransbase);
   Cvar_RegisterVariable(r_aliastransadj);
 
+  // QW r_main.c registers these two unconditionally; WinQuake's R_Init has no
+  // such call, so the registration itself is gated to keep WinQuake behavior
+  // byte-identical when the flag is off.
+  if (qw.active) {
+    Cvar_RegisterVariable(r_netgraph);
+    Cvar_RegisterVariable(r_zgraph);
+    // QW r_main.c: `cvar_t r_graphheight = {"r_graphheight","15"};` (WinQuake:
+    // "10"). r_graphheight itself is registered once, above, by both trees;
+    // only the default differs.
+    Cvar_SetValue("r_graphheight", 15);
+  }
+
   Cvar_SetValue("r_maxedges", NUMSTACKEDGES);
   Cvar_SetValue("r_maxsurfs", NUMSTACKSURFACES);
 
@@ -232,6 +290,13 @@ export function R_NewMap(): void {
 
   const worldmodel = cl.worldmodel;
   if (!worldmodel) Sys_Error("R_NewMap: NULL worldmodel");
+
+  // QW r_main.c (new): `memset(&r_worldentity, 0, sizeof(r_worldentity));
+  // r_worldentity.model = cl.worldmodel;`
+  if (qw.active) {
+    r_worldentity.clear();
+    r_worldentity.model = worldmodel;
+  }
 
   // clear out efrags in case the level hasn't been reloaded
   // FIXME: is this one short?
@@ -281,30 +346,68 @@ R_SetVrect
 export function R_SetVrect(pvrectin: VrectT, pvrect: VrectT, lineadj: number): void {
   let h: number;
   let size: number;
+  // QW r_main.c: `qboolean full`, tracks whether the view fills the screen
+  // (viewsize>=100 or intermission) so the statusbar-visible height/position
+  // rules below can special-case it. WinQuake has no such flag.
+  let full = false;
 
-  size = scr_viewsize.value > 100 ? 100 : scr_viewsize.value;
+  if (qw.active) {
+    if (scr_viewsize.value >= 100.0) {
+      size = 100.0;
+      full = true;
+    } else {
+      size = scr_viewsize.value;
+    }
+  } else {
+    size = scr_viewsize.value > 100 ? 100 : scr_viewsize.value;
+  }
+
   if (cl.intermission) {
+    if (qw.active) full = true;
     size = 100;
     lineadj = 0;
   }
   size /= 100;
 
-  h = pvrectin.height - lineadj;
-  pvrect.width = (pvrectin.width * size) | 0;
+  if (qw.active) {
+    h = !cl_sbar.value && full ? pvrectin.height : pvrectin.height - lineadj;
+  } else {
+    h = pvrectin.height - lineadj;
+  }
+
+  if (qw.active && full) {
+    pvrect.width = pvrectin.width;
+  } else {
+    pvrect.width = (pvrectin.width * size) | 0;
+  }
   if (pvrect.width < 96) {
     size = 96.0 / pvrectin.width;
     pvrect.width = 96; // min for icons
   }
   pvrect.width &= ~7;
   pvrect.height = (pvrectin.height * size) | 0;
-  if (pvrect.height > pvrectin.height - lineadj) pvrect.height = pvrectin.height - lineadj;
+  if (qw.active) {
+    if (cl_sbar.value || !full) {
+      if (pvrect.height > pvrectin.height - lineadj) pvrect.height = pvrectin.height - lineadj;
+    } else if (pvrect.height > pvrectin.height) {
+      pvrect.height = pvrectin.height;
+    }
+  } else {
+    if (pvrect.height > pvrectin.height - lineadj) pvrect.height = pvrectin.height - lineadj;
+  }
 
   pvrect.height &= ~1;
 
   pvrect.x = ((pvrectin.width - pvrect.width) / 2) | 0;
-  pvrect.y = ((h - pvrect.height) / 2) | 0;
+  if (qw.active && full) {
+    pvrect.y = 0;
+  } else {
+    pvrect.y = ((h - pvrect.height) / 2) | 0;
+  }
 
-  {
+  // QW r_main.c drops this `lcd_x` block entirely (it never existed in that
+  // file's R_SetVrect).
+  if (!qw.active) {
     if (lcd_x.value) {
       pvrect.y >>= 1;
       pvrect.height >>= 1;
@@ -535,9 +638,13 @@ export function R_DrawViewModel(): void {
   const dist: Vec3 = vec3();
   let add: number;
 
-  if (!r_drawviewmodel.value || rState.r_fov_greater_than_90) return;
+  // QW r_main.c adds `|| !Cam_DrawViewModel()` (spectator/chase-cam suppresses
+  // the view model; src/qw/client/cl_cam.ts).
+  if (!r_drawviewmodel.value || rState.r_fov_greater_than_90 || (qw.active && !Cam_DrawViewModel())) return;
 
-  if (cl.items & IT_INVISIBILITY) return;
+  // QW reads the invisibility bit from the stats array (`cl.stats[STAT_ITEMS]`,
+  // how QW's cl_parse.c delivers item flags) instead of WinQuake's `cl.items`.
+  if (qw.active ? cl.stats[STAT_ITEMS] & IT_INVISIBILITY : cl.items & IT_INVISIBILITY) return;
 
   if (cl.stats[STAT_HEALTH] <= 0) return;
 
@@ -852,7 +959,9 @@ export function R_RenderView_(): void {
   // done in screen.c
   Sys_LowFPPrecision();
 
-  if (!cl_entities[0].model || !cl.worldmodel) Sys_Error("R_RenderView: NULL worldmodel");
+  // QW r_main.c checks `r_worldentity.model` (this file's own, set in
+  // R_NewMap) instead of `cl_entities[0].model`.
+  if ((qw.active ? !r_worldentity.model : !cl_entities[0].model) || !cl.worldmodel) Sys_Error("R_RenderView: NULL worldmodel");
 
   if (!r_dspeeds.value) {
     vidBackend.current?.VID_UnlockBuffer();
@@ -908,6 +1017,10 @@ export function R_RenderView_(): void {
 
   if (r_reportedgeout.value && rState.r_outofedges) Con_Printf("Short roughly %d edges\n", ((rState.r_outofedges * 2) / 3) | 0);
 
+  // QW r_main.c (new): the r_netgraph/r_zgraph debug overlays.
+  if (qw.active && r_netgraph.value) R_NetGraph();
+  if (qw.active && r_zgraph.value) R_ZGraph();
+
   // back to high floating-point precision
   Sys_HighFPPrecision();
 }
@@ -924,7 +1037,13 @@ R_InitTurb
 export function R_InitTurb(): void {
   let i: number;
 
-  for (i = 0; i < SIN_BUFFER_SIZE; i++) {
+  // QW r_main.c hardcodes the loop bound to the literal 1280 instead of
+  // SIN_BUFFER_SIZE (1280 + CYCLE = 1408 in this tree's r_shared.h/.ts, which
+  // is unchanged between WinQuake and QW): a genuine QW bug that leaves
+  // sintable/intsintable[1280..1407] at their zero-initialized value. Kept
+  // bug-for-bug per PORTING.md.
+  const bound = qw.active ? 1280 : SIN_BUFFER_SIZE;
+  for (i = 0; i < bound; i++) {
     sintable[i] = (AMP + Math.sin((i * 3.14159 * 2) / CYCLE) * AMP) | 0;
     intsintable[i] = (AMP2 + Math.sin((i * 3.14159 * 2) / CYCLE) * AMP2) | 0; // AMP2, not 20
   }

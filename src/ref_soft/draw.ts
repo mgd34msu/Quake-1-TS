@@ -122,13 +122,24 @@ Deviations from PORTING.md / the C source:
 
 import { Sys_Error } from "../platform/sys";
 import { Com_sprintf } from "../common/sprintf";
-import { LINUX_VERSION, VERSION } from "../common/quakedef";
+import { LINUX_VERSION, VERSION, qw } from "../common/quakedef";
 import { QpicT, W_GetLumpName, W_GetQpic, SwapPic } from "../common/wad";
 import { CacheUser, Cache_Check } from "../common/zone";
 import { COM_LoadCacheFile } from "../common/common";
 import { vid, vidBackend, VrectT } from "../client/vid";
 import { hostClientHooks } from "../common/host";
 import { TRANSPARENT_COLOR } from "./d_iface";
+import { cls } from "../client/client";
+import { scr_vrect } from "../client/screen_types";
+// QW/client/draw.c:274 `extern cvar_t crosshair, cl_crossx, cl_crossy, crosshaircolor;`
+// -- crosshair/cl_crossx/cl_crossy are already exported by view.ts (WinQuake's
+// own crosshair cvars, read by ref_soft.ts's V_DrawCrosshair). crosshaircolor
+// is QW-only and NOT YET exported by view.ts as of this writing (polled
+// `timeout 300 sleep 60` x3, still absent) -- imported by name anyway per
+// PORTING.md's cross-unit-dependency idiom; this import will type-error until
+// view.ts (Q023b) adds `export const crosshaircolor = new CvarT(...)`.
+import { cl_crossx, cl_crossy, crosshair, crosshaircolor } from "../client/view";
+import { Con_Printf } from "../client/console";
 
 //=============================================================================
 /* Support Routines */
@@ -285,6 +296,102 @@ export function Draw_String(x: number, y: number, str: string): void {
 
 /*
 ================
+Draw_Alt_String
+
+QW/client/draw.c addition (also gl_draw.c) -- high-bit-set variant of
+Draw_String, not in WinQuake's draw.c/draw.h.
+================
+*/
+export function Draw_Alt_String(x: number, y: number, str: string): void {
+  let cx = x | 0;
+  const cy = y | 0;
+
+  for (let i = 0; i < str.length; i++) {
+    Draw_Character(cx, cy, str.charCodeAt(i) | 0x80);
+    cx += 8;
+  }
+}
+
+/*
+================
+Draw_Pixel
+
+QW/client/draw.c addition, module-private (not in draw.h) -- Draw_Crosshair's
+crosshair.value==2 dot renderer. r_pixbytes == 1 only, see file header.
+================
+*/
+function Draw_Pixel(x: number, y: number, color: number): void {
+  const conbuffer = vid.conbuffer;
+  if (!conbuffer) return;
+  conbuffer[y * vid.conrowbytes + x] = color;
+}
+
+/*
+================
+Draw_Crosshair
+
+QW/client/draw.c addition. WinQuake draws its crosshair inline at the end of
+view.c's V_RenderView (ref_soft.ts's V_DrawCrosshair, out of this unit's
+SCOPE); QW factors it out into this shared function instead, still called
+from the same place. Ported here so ref_soft.ts's V_DrawCrosshair can call it
+under qw.active -- see this unit's report for the exact one-line wiring that
+file (out of SCOPE) still needs.
+================
+*/
+export function Draw_Crosshair(): void {
+  const c = crosshaircolor.value | 0;
+
+  if (crosshair.value === 2) {
+    const x = (scr_vrect.x + ((scr_vrect.width / 2) | 0) + cl_crossx.value) | 0;
+    const y = (scr_vrect.y + ((scr_vrect.height / 2) | 0) + cl_crossy.value) | 0;
+    Draw_Pixel(x - 1, y, c);
+    Draw_Pixel(x - 3, y, c);
+    Draw_Pixel(x + 1, y, c);
+    Draw_Pixel(x + 3, y, c);
+    Draw_Pixel(x, y - 1, c);
+    Draw_Pixel(x, y - 3, c);
+    Draw_Pixel(x, y + 1, c);
+    Draw_Pixel(x, y + 3, c);
+  } else if (crosshair.value) {
+    Draw_Character(
+      (scr_vrect.x + ((scr_vrect.width / 2) | 0) - 4 + cl_crossx.value) | 0,
+      (scr_vrect.y + ((scr_vrect.height / 2) | 0) - 4 + cl_crossy.value) | 0,
+      "+".charCodeAt(0),
+    );
+  }
+}
+
+/*
+================
+Draw_SubPic
+
+QW/client/draw.c addition -- blits a sub-rectangle of a pic without going
+through the scrap. r_pixbytes == 1 only, see file header.
+================
+*/
+export function Draw_SubPic(x: number, y: number, pic: QpicT, srcx: number, srcy: number, width: number, height: number): void {
+  x = x | 0;
+  y = y | 0;
+
+  if (x < 0 || x + width > vid.width || y < 0 || y + height > vid.height) {
+    return Sys_Error("Draw_Pic: bad coordinates");
+  }
+
+  const buffer = vid.buffer;
+  if (!buffer) return;
+
+  let destOfs = y * vid.rowbytes + x;
+  let sourceOfs = srcy * pic.width + srcx;
+
+  for (let v = 0; v < height; v++) {
+    buffer.set(pic.data.subarray(sourceOfs, sourceOfs + width), destOfs);
+    destOfs += vid.rowbytes;
+    sourceOfs += pic.width;
+  }
+}
+
+/*
+================
 Draw_DebugChar
 
 Draws a single character directly to the upper right corner of the screen.
@@ -420,14 +527,39 @@ Draw_ConsoleBackground
 
 ================
 */
+// QW/client/draw.c: `static char saveback[320*8]` -- Draw_ConsoleBackground's
+// own scratch buffer, see below.
+const conback_saveback = new Uint8Array(320 * 8);
+
 export function Draw_ConsoleBackground(lines: number): void {
   const conback = Draw_CachePic("gfx/conback.lmp");
   if (!conback) return; // Draw_CachePic Sys_Errors on failure in the C; guards TS's nullable return
 
-  // hack the version number directly into the pic -- #ifdef __linux__ branch
-  // (RULING; see file header)
-  const ver = Com_sprintf("(Linux Quake %2.2f) %4.2f", LINUX_VERSION, VERSION);
-  const verDestBase = 320 * 186 + 320 - 11 - 8 * ver.length;
+  let ver: string;
+  let verDestBase: number;
+
+  if (qw.active) {
+    // QW/client/draw.c:661-671 -- the version-string hack branches on
+    // cls.download, and (unlike WinQuake's Draw_Init, which bakes the string
+    // into the pic once at load time) writes it into the shared conback
+    // cache bytes on EVERY call, so it saves and restores the row range it
+    // overwrites (`saveback`) to avoid stacking garbage from a differently
+    // sized string next call.
+    if (cls.qw.download) {
+      ver = Com_sprintf("%4.2f", VERSION);
+      verDestBase = 320 + 320 * 186 - 11 - 8 * ver.length;
+    } else {
+      // #if defined(__linux__) branch (RULING; see file header's precedent)
+      ver = Com_sprintf("Linux (%4.2f) QuakeWorld %4.2f", LINUX_VERSION, VERSION);
+      verDestBase = 320 - (ver.length * 8 + 11) + 320 * 186;
+    }
+    conback_saveback.set(conback.data.subarray(320 * 186, 320 * 186 + conback_saveback.length));
+  } else {
+    // hack the version number directly into the pic -- #ifdef __linux__ branch
+    // (RULING; see file header)
+    ver = Com_sprintf("(Linux Quake %2.2f) %4.2f", LINUX_VERSION, VERSION);
+    verDestBase = 320 * 186 + 320 - 11 - 8 * ver.length;
+  }
 
   for (let x = 0; x < ver.length; x++) {
     Draw_CharToConback(ver.charCodeAt(x), conback.data, verDestBase + (x << 3));
@@ -458,6 +590,13 @@ export function Draw_ConsoleBackground(lines: number): void {
         f += fstep;
       }
     }
+  }
+
+  // QW/client/draw.c: `memcpy(conback->data + 320*186, saveback, 320*8);` --
+  // put the pre-hack bytes back so the shared cache data isn't left mutated
+  // for the next Draw_CachePic caller.
+  if (qw.active) {
+    conback.data.set(conback_saveback, 320 * 186);
   }
 }
 
@@ -571,6 +710,13 @@ export function Draw_Fill(x: number, y: number, w: number, h: number, c: number)
   w = w | 0;
   h = h | 0;
   c = c | 0;
+
+  // QW/client/draw.c adds this bounds check (WinQuake's Draw_Fill has none);
+  // dropped silently when qw.active is false, matching WinQuake exactly.
+  if (qw.active && (x < 0 || x + w > vid.width || y < 0 || y + h > vid.height)) {
+    Con_Printf("Bad Draw_Fill(%d, %d, %d, %d, %c)\n", x, y, w, h, c);
+    return;
+  }
 
   const buffer = vid.buffer;
   if (!buffer) return;

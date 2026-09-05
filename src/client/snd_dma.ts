@@ -82,6 +82,21 @@ Deviations from PORTING.md / the C source:
   reproduced exactly with a `while` loop that increments `j`/`combineIdx` in
   lockstep the same way, preserving the C's `j === total_channels` check
   bug-for-bug rather than "fixing" it to `j === i`.
+
+QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
+../qsrc/quake/QW/client/snd_dma.c against WinQuake/snd_dma.c):
+- `#define viewentity playernum+1`: a file-scope textual rename, so every
+  bare `viewentity` (including `cl.viewentity`) becomes `cl.playernum+1` --
+  `cl.qw.playernum + 1` in this port. Folded through the `sndViewentity()`
+  helper below, used at S_PickChannel's "don't let monster sounds override
+  player sounds" check, SND_Spatialize's view-entity full-volume check, and
+  S_LocalSound's S_StartSound call -- the same three C call sites.
+- S_Init's sound-init banner and S_Startup's sample-rate print are both
+  commented out under qw.active.
+- The unused `ldist`/`rdist` locals SND_Spatialize's C drops, and the
+  `#ifdef __sun__` branch around `soundtime = SNDDMA_GetSamples()`, are
+  already excluded from this port (not our platform, no unused locals here)
+  -- no-op, verified.
 */
 
 import { Cache_Check, Hunk_AllocName } from "../common/zone";
@@ -91,7 +106,7 @@ import { COM_CheckParm, Q_atof } from "../common/common";
 import { Con_Printf } from "./console";
 import { host, host_parms, hostClientHooks } from "../common/host";
 import { DotProduct, VectorCopy, VectorNormalize, VectorSubtract, vec3, vec3_origin, type Vec3 } from "../common/mathlib";
-import { MAX_QPATH } from "../common/quakedef";
+import { MAX_QPATH, qw } from "../common/quakedef";
 import { AMBIENT_SKY, AMBIENT_WATER } from "../common/bspfile";
 import { Mod_PointInLeaf } from "../common/model";
 import { Sys_Error } from "../platform/sys";
@@ -200,13 +215,23 @@ export function S_Startup(): void {
   sound_started = 1;
 }
 
+// QW snd_dma.c: `// QuakeWorld hack... #define viewentity playernum+1` --
+// every bare `viewentity` token in this file (including as `cl.viewentity`)
+// is textually replaced, so `cl.viewentity` becomes `cl.playernum+1`, i.e.
+// `cl.qw.playernum + 1`. WinQuake's own `cl.viewentity` field is read
+// otherwise.
+function sndViewentity(): number {
+  return qw.active ? cl.qw.playernum + 1 : cl.viewentity;
+}
+
 /*
 ================
 S_Init
 ================
 */
 export function S_Init(): void {
-  Con_Printf("\nSound Initialization\n");
+  // QW snd_dma.c comments out this banner print.
+  if (!qw.active) Con_Printf("\nSound Initialization\n");
 
   if (COM_CheckParm("-nosound")) return;
 
@@ -261,7 +286,9 @@ export function S_Init(): void {
     setShm(fake);
   }
 
-  if (shm) Con_Printf("Sound sampling rate: %i\n", shm.speed); // see file header: guarded against a null shm
+  // QW snd_dma.c comments out this print (see file header: also guarded
+  // against a null shm, this port's own addition).
+  if (!qw.active && shm) Con_Printf("Sound sampling rate: %i\n", shm.speed);
 
   // provides a tick sound until washed clean
 
@@ -369,7 +396,7 @@ export function SND_PickChannel(entnum: number, entchannel: number): ChannelT | 
     }
 
     // don't let monster sounds override player sounds
-    if (c.entnum === cl.viewentity && entnum !== cl.viewentity && c.sfx) continue;
+    if (c.entnum === sndViewentity() && entnum !== sndViewentity() && c.sfx) continue;
 
     if (c.end - paintedtime < life_left) {
       life_left = c.end - paintedtime;
@@ -392,7 +419,7 @@ SND_Spatialize
 */
 export function SND_Spatialize(ch: ChannelT): void {
   // anything coming from the view entity will allways be full volume
-  if (ch.entnum === cl.viewentity) {
+  if (ch.entnum === sndViewentity()) {
     ch.leftvol = ch.master_vol;
     ch.rightvol = ch.master_vol;
     return;
@@ -793,7 +820,7 @@ export function S_LocalSound(sound: string): void {
     Con_Printf("S_LocalSound: can't cache %s\n", sound);
     return;
   }
-  S_StartSound(cl.viewentity, -1, sfx, vec3_origin, 1, 1);
+  S_StartSound(sndViewentity(), -1, sfx, vec3_origin, 1, 1);
 }
 
 export function S_ClearPrecache(): void {}

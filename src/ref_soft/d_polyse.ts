@@ -55,6 +55,22 @@ Deviations from PORTING.md / the C source:
   forms are the ones here.
 - Dropped `#if 0` blocks: InitGel/gelmap, D_PolysetRecursiveDrawLine and
   D_PolysetRecursiveTriangle2.
+
+QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
+../qsrc/quake/QW/client/d_polyse.c against WinQuake/d_polyse.c): QW's
+D_PolysetDrawSpans8 caller removes the `initialleftheight == 1` /
+`height == 1` fast-path branches (both call sites), always calling
+D_PolysetSetUpForLineScan + D_PolysetScanLeftEdge instead of hand-filling one
+spanpackage entry. Traced through D_PolysetScanLeftEdge above: for
+height === 1 the do/while body runs exactly once, before any
+errorterm-driven step, filling the package from the same initial
+d_pdest/d_pz/d_aspancount/d_ptex/d_sfrac/d_tfrac/d_light/d_zi values the fast
+path copies by hand. The two paths are provably output-identical (WinQuake's
+fast path is a pure micro-optimization, not a behavior change), so this is a
+no-op for this port -- verified, not folded; both trees keep the existing
+`=== 1` shortcut here. The InitGel `#if 0` block's exact brace position also
+differs between the two C files, but the block is dead code (never compiled)
+in both trees -- also a no-op, already excluded above.
 */
 
 import { Sys_Error } from "../platform/sys";

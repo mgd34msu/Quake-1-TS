@@ -56,6 +56,12 @@ Deviations from PORTING.md / the C source:
   subtractive-light variant, per PORTING.md.
 - Dropped `#if id386` alternates: R_DrawSurfaceBlock8_mip0..3 and
   R_DrawSurfaceBlock16 have asm versions; the `!id386` C bodies are ported.
+
+QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
+../qsrc/quake/QW/client/r_surf.c against WinQuake/r_surf.c): the diff is a
+comment-out of the `r_fullbright.value ||` half of R_BuildLightMap's guard
+(the removed `#ifdef QUAKE2` block above is the same dropped-both-trees
+no-op noted above, not a QW delta) -- folded at the guard in R_BuildLightMap.
 */
 
 import { DotProduct, type Vec3, vec3 } from "../common/mathlib";
@@ -67,6 +73,7 @@ import { Sys_Error } from "../platform/sys";
 import { CYCLE, TILE_SIZE, r_drawsurf } from "./d_iface";
 import { SPEED, r_refdef, rState, sintable } from "./r_local";
 import { r_fullbright } from "./r_main";
+import { qw } from "../common/quakedef";
 import { R_GenSkyTile } from "./r_sky";
 
 export { r_drawsurf };
@@ -188,7 +195,10 @@ export function R_BuildLightMap(): void {
   let lightmapofs = 0;
 
   const worldmodel = cl.worldmodel;
-  if (r_fullbright.value || worldmodel === null || worldmodel.lightdata === null) {
+  // QW r_surf.c comments out the `r_fullbright.value ||` half of this guard:
+  // under qw.active the lightmap always rebuilds from lightdata (or clears
+  // to black if there is none), regardless of r_fullbright.
+  if ((!qw.active && r_fullbright.value) || worldmodel === null || worldmodel.lightdata === null) {
     for (let i = 0; i < size; i++) blocklights[i] = 0;
     return;
   }

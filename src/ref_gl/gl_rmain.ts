@@ -76,6 +76,74 @@ Deviations from PORTING.md / the C source:
   commented-out "Experimental silly looking fog" block; the block stays a
   comment and the local is dropped with it.
 - Dropped `#ifdef GLTEST`: R_RenderScene's `Test_Draw ()`.
+
+QuakeWorld deltas (QW/client/gl_rmain.c vs WinQuake/gl_rmain.c), folded under
+qw.active:
+- `r_netgraph` cvar: declared here (below, next to the other renderer
+  cvars this file already shares with gl_rmisc.ts's R_Init), registered by
+  gl_rmisc.ts's R_Init. gl_rmain.c itself never calls R_NetGraph -- QW's own
+  call site is gl_screen.c:1145's SCR_UpdateScreen (`if (r_netgraph.value)
+  R_NetGraph();`), a file outside this unit's SCOPE (owned by the screen.ts
+  unit). Not wired here; reported as a required follow-up: that unit needs
+  `if (qw.active && r_netgraph.value) R_NetGraph();` importing R_NetGraph
+  from "../ref_gl/gl_ngraph".
+- `gl_keeptjunctions`'s default is "1" in QW vs "0" in WinQuake (gl_rmain.c
+  cvar_t initializer). The override is applied in gl_rmisc.ts's R_Init (this
+  file only declares the cvar), see that file's header.
+- `gl_doubleeyes` (this port's `gl_doubleeys`, a shipped typo already kept
+  bug-for-bug) is dropped from QW entirely -- both its declaration and its
+  read at R_DrawAliasModel's eyes.mdl special case
+  (`if (!strcmp(clmodel->name,"progs/eyes.mdl"))`, no cvar guard). Folded at
+  the read site below; the cvar itself stays declared and registered (QW
+  simply never reads it, same observable effect as ignoring its value).
+- R_DrawAliasModel's "never allow players to go totally black" / torch
+  full-light special cases: WinQuake uses two independent `if`s (an
+  entity-index-range check the C's own live code already narrows to
+  `i>=1 && i<=cl.maxclients`, string-compare commented out; then a separate
+  flame-name check). QW replaces both with one if/else-if keyed entirely on
+  `clmodel->name`: `"progs/player.mdl"` for the never-black case, else
+  `"progs/flame2.mdl"`/`"progs/flame.mdl"` for full light -- mutually
+  exclusive in QW where WinQuake's two ifs are not. Folded below.
+- The player-skin recolor block right after (`currententity->colormap !=
+  vid.colormap` -> `GL_Bind(playertextures-1+i)`) becomes, in QW,
+  `currententity->scoreboard` (a `player_info_t *` field QW's entity_t
+  gains) driving `Skin_Find`/`R_TranslatePlayerSkin`/
+  `GL_Bind(playertextures+i)`. BLOCKED: `EntityT` (src/client/render.ts) has
+  no `scoreboard` field, and this unit's SCOPE only allows touching
+  render.ts to add a Renderer-interface member, not a data field on EntityT
+  -- that edit belongs to whichever unit owns render.ts's EntityT/client.ts.
+  `Skin_Find` (src/qw/client/skin.ts) is also unlanded (polled during this
+  run, see report). Left unchanged under both branches; reported as a
+  deviation.
+- R_SetupFrame: WinQuake's `if (cl.maxclients>1) Cvar_Set("r_fullbright","0")`
+  becomes QW's unconditional `r_fullbright.value=0; r_lightmap.value=0; if
+  (!atoi(Info_ValueForKey(cl.serverinfo,"watervis"))) r_wateralpha.value=1;`.
+  `cl.serverinfo` is QW-only (`cl.qw.serverinfo`, QwClientStateExtT).
+  `atoi`/`Info_ValueForKey` are Q_atoi (src/common/common.ts) and
+  Info_ValueForKey (src/qw/common.ts, landed).
+- R_RenderView: QW's own gl_rmain.c wraps its entire R_Mirror function body
+  in `#if 0 //!!! FIXME, Zoid, mirror is disabled for now` (dead code, never
+  compiled) and comments out the `R_Mirror();` call site. Folded as skipping
+  the call when qw.active; R_Mirror's body itself is untouched (unreachable
+  either way once the call is skipped, so no second implementation needed).
+  `Sys_DoubleTime` (R_RenderView/R_TimeRefresh_f's timing calls) is this
+  port's `Sys_FloatTime` (src/qw/client/cl_main.ts's header note already
+  rules this); no change needed at the call sites.
+- R_DrawViewModel: WinQuake's separate `!r_drawviewmodel.value` and
+  `chase_active.value` early-returns become one QW check,
+  `!r_drawviewmodel.value || !Cam_DrawViewModel()` (src/qw/client/cl_cam.ts,
+  landed). Its invisibility check also switches from `cl.items` to
+  `cl.stats[STAT_ITEMS]` (src/qw/bothdefs.ts's STAT_ITEMS=15, QW-only --
+  WinQuake has no STAT_ITEMS at all).
+- R_DrawSpriteModel: QW's gl_rmain.c has `glEnable(GL_ALPHA_TEST);
+  glBegin(GL_QUADS);` twice in a row (a shipped duplicate-statement bug, not
+  a functional QW feature). Kept bug-for-bug under qw.active per PORTING.md
+  rule 4 (faithful, bug-for-bug) -- the redundant pair is harmless GL state
+  (re-entering an already-enabled cap, re-beginning inside no other GL call).
+- `R_Init`'s `playertextures` reservation: WinQuake reserves a fixed 16
+  texture slots (`texture_extension_number += 16`); QW reserves
+  `MAX_CLIENTS` (32, src/qw/protocol.ts). Folded in gl_rmisc.ts's R_Init
+  (this file only declares/uses the cvars/globals R_Init touches).
 */
 
 import { CvarT, Cvar_Set } from "../common/cvar";
@@ -101,7 +169,11 @@ import {
 import { MplaneT } from "../common/mathlib";
 import { Mod_Extradata, Mod_PointInLeaf, ModtypeT } from "../common/model";
 import { SPR_ORIENTED, SpriteframetypeT } from "../common/spritegn";
-import { IT_INVISIBILITY, STAT_HEALTH } from "../common/quakedef";
+import { IT_INVISIBILITY, STAT_HEALTH, qw } from "../common/quakedef";
+import { Q_atoi } from "../common/common";
+import { Info_ValueForKey } from "../qw/common";
+import { STAT_ITEMS } from "../qw/bothdefs";
+import { Cam_DrawViewModel } from "../qw/client/cl_cam";
 import { MAX_DLIGHTS, MAX_VISEDICTS, NUM_CSHIFTS, cl, cl_dlights, cl_entities, cl_visedicts, clState } from "../client/client";
 import type { EntityT, ParticleT } from "../client/render";
 // r_drawentities/r_drawviewmodel/r_fullbright/r_speeds: r_main.c also
@@ -174,6 +246,9 @@ export const r_mirroralpha = new CvarT("r_mirroralpha", "1");
 export const r_wateralpha = new CvarT("r_wateralpha", "1");
 export const r_dynamic = new CvarT("r_dynamic", "1");
 export const r_novis = new CvarT("r_novis", "0");
+// QW/client/gl_rmain.c / QW/client/r_main.c -- registered by gl_rmisc.ts's
+// R_Init under qw.active (see this file's header note).
+export const r_netgraph = new CvarT("r_netgraph", "0");
 
 export const gl_finish = new CvarT("gl_finish", "0");
 export const gl_clear = new CvarT("gl_clear", "0");
@@ -309,6 +384,12 @@ export function R_DrawSpriteModel(e: EntityT): void {
 
   qgl().qglEnable(GL_ALPHA_TEST);
   qgl().qglBegin(GL_QUADS);
+  if (qw.active) {
+    // QW/client/gl_rmain.c has this pair twice in a row -- a shipped
+    // duplicate-statement bug (see file header), kept bug-for-bug.
+    qgl().qglEnable(GL_ALPHA_TEST);
+    qgl().qglBegin(GL_QUADS);
+  }
 
   qgl().qglTexCoord2f(0, 1);
   VectorMA(e.origin, frame.down, up, spritePoint);
@@ -531,11 +612,23 @@ export function R_DrawAliasModel(e: EntityT): void {
 
   // ZOID: never allow players to go totally black
   let i = cl_entities.indexOf(currententity);
-  if (i >= 1 && i <= cl.maxclients /* && !strcmp (currententity->model->name, "progs/player.mdl") */)
-    if (rmainState.ambientlight < 8) rmainState.ambientlight = rmainState.shadelight = 8;
+  if (qw.active) {
+    // QW/client/gl_rmain.c: one if/else-if keyed on the model name (see file
+    // header) instead of WinQuake's index-range + separate flame check.
+    if (clmodel.name === "progs/player.mdl") {
+      if (rmainState.ambientlight < 8) rmainState.ambientlight = rmainState.shadelight = 8;
+    } else if (clmodel.name === "progs/flame2.mdl" || clmodel.name === "progs/flame.mdl") {
+      // HACK HACK HACK -- no fullbright colors, so make torches full light
+      rmainState.ambientlight = rmainState.shadelight = 256;
+    }
+  } else {
+    if (i >= 1 && i <= cl.maxclients /* && !strcmp (currententity->model->name, "progs/player.mdl") */) {
+      if (rmainState.ambientlight < 8) rmainState.ambientlight = rmainState.shadelight = 8;
+    }
 
-  // HACK HACK HACK -- no fullbright colors, so make torches full light
-  if (clmodel.name === "progs/flame2.mdl" || clmodel.name === "progs/flame.mdl") rmainState.ambientlight = rmainState.shadelight = 256;
+    // HACK HACK HACK -- no fullbright colors, so make torches full light
+    if (clmodel.name === "progs/flame2.mdl" || clmodel.name === "progs/flame.mdl") rmainState.ambientlight = rmainState.shadelight = 256;
+  }
 
   const shaderow = ((e.angles[1] * (SHADEDOT_QUANT / 360.0)) | 0) & (SHADEDOT_QUANT - 1);
   rmainState.shadedots = r_avertexnormal_dots.subarray(shaderow * ANORM_DOTS_ROW, (shaderow + 1) * ANORM_DOTS_ROW);
@@ -567,7 +660,9 @@ export function R_DrawAliasModel(e: EntityT): void {
   qgl().qglPushMatrix();
   R_RotateForEntity(e);
 
-  if (clmodel.name === "progs/eyes.mdl" && gl_doubleeyes.value) {
+  // QW/client/gl_rmain.c drops the gl_doubleeyes guard entirely (see file
+  // header) -- the eyes.mdl special case always applies when qw.active.
+  if (clmodel.name === "progs/eyes.mdl" && (qw.active || gl_doubleeyes.value)) {
     qgl().qglTranslatef(paliashdr.scale_origin[0], paliashdr.scale_origin[1], paliashdr.scale_origin[2] - (22 + 8));
     // double size of eyes, since they are really hard to see in gl
     qgl().qglScalef(paliashdr.scale[0] * 2, paliashdr.scale[1] * 2, paliashdr.scale[2] * 2);
@@ -581,6 +676,10 @@ export function R_DrawAliasModel(e: EntityT): void {
 
   // we can't dynamically colormap textures, so they are cached
   // seperately for the players.  Heads are just uncolored.
+  // QW/client/gl_rmain.c replaces this whole block's condition/body with
+  // `currententity->scoreboard` driving Skin_Find/R_TranslatePlayerSkin --
+  // BLOCKED on EntityT.scoreboard and skin.ts, see file header. WinQuake's
+  // index-based texture rebinding runs unconditionally until those land.
   if (currententity.colormap !== vid.colormap && !gl_nocolors.value) {
     i = cl_entities.indexOf(currententity);
     if (i >= 1 && i <= cl.maxclients /* && !strcmp (currententity->model->name, "progs/player.mdl") */)
@@ -673,15 +772,25 @@ export function R_DrawViewModel(): void {
   const ambient: Float32Array = new Float32Array(4);
   const diffuse: Float32Array = new Float32Array(4);
 
-  if (!r_drawviewmodel.value) return;
+  // QW/client/gl_rmain.c folds the chase_active check into
+  // `!Cam_DrawViewModel()` (cl_cam.c, spectator/chase camera logic) instead
+  // of reading chase_active directly.
+  if (qw.active) {
+    if (!r_drawviewmodel.value || !Cam_DrawViewModel()) return;
+  } else {
+    if (!r_drawviewmodel.value) return;
 
-  if (chase_active.value) return;
+    if (chase_active.value) return;
+  }
 
   if (glState.envmap) return;
 
   if (!r_drawentities.value) return;
 
-  if (cl.items & IT_INVISIBILITY) return;
+  // QW/client/gl_rmain.c reads cl.stats[STAT_ITEMS] instead of cl.items
+  // (cl.items is not maintained under QW; STAT_ITEMS mirrors the server's
+  // stat array both ways, see src/qw/bothdefs.ts).
+  if (qw.active ? cl.stats[STAT_ITEMS] & IT_INVISIBILITY : cl.items & IT_INVISIBILITY) return;
 
   if (cl.stats[STAT_HEALTH] <= 0) return;
 
@@ -795,8 +904,16 @@ R_SetupFrame
 ===============
 */
 export function R_SetupFrame(): void {
-  // don't allow cheats in multiplayer
-  if (cl.maxclients > 1) Cvar_Set("r_fullbright", "0");
+  if (qw.active) {
+    // QW/client/gl_rmain.c: unconditional, plus r_lightmap and a
+    // serverinfo-driven r_wateralpha default (see file header).
+    r_fullbright.value = 0;
+    r_lightmap.value = 0;
+    if (!Q_atoi(Info_ValueForKey(cl.qw.serverinfo, "watervis"))) r_wateralpha.value = 1;
+  } else {
+    // don't allow cheats in multiplayer
+    if (cl.maxclients > 1) Cvar_Set("r_fullbright", "0");
+  }
 
   R_AnimateLight();
 
@@ -1071,7 +1188,9 @@ export function R_RenderView(): void {
   //  End of all fog code...
 
   // render mirror view
-  R_Mirror();
+  // QW/client/gl_rmain.c: R_Mirror's whole body is #if 0'd out and this call
+  // is commented out (see file header) -- mirrors are disabled under QW.
+  if (!qw.active) R_Mirror();
 
   R_PolyBlend();
 

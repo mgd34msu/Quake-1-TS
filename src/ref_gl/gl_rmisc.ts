@@ -42,17 +42,61 @@ Deviations from PORTING.md / the C source:
   R_NewMap's `R_LoadSkys ()`. Dropped the `#if 0` block in
   R_TranslatePlayerSkin (the `byte translated[320*200]` + GL_Upload8 path the
   `#else` replaces).
+
+QuakeWorld deltas (QW/client/gl_rmisc.c vs WinQuake/gl_rmisc.c), folded
+under qw.active:
+- R_Init registers `r_netgraph` (gl_rmain.ts, see that file's header) and
+  calls `R_InitBubble()` (gl_rlight.ts). `netgraphtexture` (gl_ngraph.ts) is
+  assigned a fresh texture id the same way `char_texture`/`translate_texture`
+  are in gl_draw.ts (`texture_extension_number++`), one call after
+  R_InitParticleTexture, matching gl_rmisc.c:216's placement.
+- `playertextures` reserves `MAX_CLIENTS` (32, src/qw/protocol.ts) texture
+  slots instead of WinQuake's fixed 16 (gl_rmain.c's R_Init, see that file's
+  header).
+- `gl_keeptjunctions`'s default is "1" under QW vs "0" under WinQuake (the
+  cvar_t static initializer differs at compile time in the C; this port's
+  CvarT is constructed once at module load before qw.active is necessarily
+  set, so -- following the established idiom in src/common/cvar.ts/cmd.ts,
+  which never bake qw.active into a top-level initializer -- the QW default
+  is applied here as a runtime override right after registration, which is
+  itself after Host_Init has set qw.active).
+- R_TranslatePlayerSkin is QW's `cl.players[]`/`player_info_t` rewrite (skin
+  files via Info_ValueForKey(userinfo,"skin"), Skin_Find/Skin_Cache, a
+  296x194 `tinwidth`/`tinheight` real-model size vs a 320x200 skin-data size,
+  and a `player_8bit_texels` fallback bitmap when no skin is cached) in place
+  of WinQuake's `cl.scores[]`/paliashdr-texels translation. `Skin_Find`/
+  `Skin_Cache` (src/qw/client/skin.ts) landed during this unit's run and are
+  imported directly; `player_8bit_texels` is imported from ./gl_model (the
+  model-loading unit's file, per QW/client/gl_model.c:1270's definition site)
+  -- unverified against that unit's final export shape, since it is a
+  concurrent unit's file this unit does not own. `player.userinfo`/color
+  fields come from `cl.qw.players[playernum]` (`PlayerInfoT`, already
+  landed). Skin_Cache's landed signature takes a non-null SkinT, so the
+  qw.active branch below only calls it when `player.skin` is non-null after
+  Skin_Find, falling back to `player_8bit_texels` otherwise -- the same
+  observable branch the C's `Skin_Cache(...) != NULL` check produces.
+- R_TimeRefresh_f's Sys_DoubleTime calls are this port's Sys_FloatTime
+  (src/qw/client/cl_main.ts's header note already rules this); no change.
+- No other functional delta found in R_NewMap; the `r_viewleaf` handling the
+  unit brief flagged is byte-identical between the two trees.
 */
 
 import { Cmd_AddCommand } from "../common/cmd";
 import { Cvar_RegisterVariable, Cvar_SetValue } from "../common/cvar";
-import { COM_WriteFile } from "../common/common";
+import { COM_StripExtension, COM_WriteFile, Q_atoi } from "../common/common";
 import { Con_Printf } from "../client/console";
 import { Sys_Error, Sys_FloatTime } from "../platform/sys";
 import { Mod_Extradata, ModtypeT } from "../common/model";
 import { cl, cl_entities } from "../client/client";
 import { BOTTOM_RANGE, TOP_RANGE, r_refdef } from "../client/render";
 import { d_8to24table } from "../client/vid";
+import { qw } from "../common/quakedef";
+import { MAX_CLIENTS } from "../qw/protocol";
+import { Info_ValueForKey } from "../qw/common";
+import { Skin_Cache, Skin_Find } from "../qw/client/skin";
+import { player_8bit_texels } from "./gl_model";
+import { R_InitBubble } from "./gl_rlight";
+import { ngraphState } from "./gl_ngraph";
 import { R_ClearParticles, R_InitParticles, R_ReadPointFile_f } from "../client/r_part";
 import { d_lightstylevalue, glState, r_worldentity } from "./glquake";
 import { AliashdrT } from "./gl_model_types";
@@ -128,6 +172,7 @@ import {
   r_fullbright,
   r_lightmap,
   r_mirroralpha,
+  r_netgraph,
   r_norefresh,
   r_novis,
   r_shadows,
@@ -258,6 +303,8 @@ export function R_Init(): void {
   Cvar_RegisterVariable(r_dynamic);
   Cvar_RegisterVariable(r_novis);
   Cvar_RegisterVariable(r_speeds);
+  // QW/client/gl_rmisc.c / r_misc.c: r_netgraph (see gl_rmain.ts's header).
+  if (qw.active) Cvar_RegisterVariable(r_netgraph);
 
   Cvar_RegisterVariable(gl_finish);
   Cvar_RegisterVariable(gl_clear);
@@ -274,6 +321,10 @@ export function R_Init(): void {
   Cvar_RegisterVariable(gl_nocolors);
 
   Cvar_RegisterVariable(gl_keeptjunctions);
+  // QW/client/gl_rmain.c: gl_keeptjunctions defaults to 1, not 0 (see
+  // gl_rmain.ts's header note on why this is a post-registration override
+  // rather than a different construction-time default).
+  if (qw.active) gl_keeptjunctions.value = 1;
   Cvar_RegisterVariable(gl_reporttjunctions);
 
   Cvar_RegisterVariable(gl_doubleeyes);
@@ -281,8 +332,19 @@ export function R_Init(): void {
   R_InitParticles();
   R_InitParticleTexture();
 
+  if (qw.active) {
+    // QW/client/gl_rmisc.c:207 (see gl_rlight.ts's header note).
+    R_InitBubble();
+    // QW/client/gl_rmisc.c:216-218: netgraphtexture gets its own slot before
+    // the playertextures reservation.
+    ngraphState.texture = glState.texture_extension_number;
+    glState.texture_extension_number++;
+  }
+
   glState.playertextures = glState.texture_extension_number;
-  glState.texture_extension_number += 16;
+  // QW reserves MAX_CLIENTS (32) player-skin texture slots; WinQuake reserves
+  // a fixed 16 (gl_rmain.c's R_Init, see gl_rmain.ts's header note).
+  glState.texture_extension_number += qw.active ? MAX_CLIENTS : 16;
 }
 
 /*
@@ -300,6 +362,125 @@ export function R_TranslatePlayerSkin(playernum: number): void {
   let j: number;
 
   GL_DisableMultitexture();
+
+  if (qw.active) {
+    // QW/client/gl_rmisc.c's full rewrite (see file header): cl.players[]
+    // instead of cl.scores[], Skin_Find/Skin_Cache instead of the alias
+    // model's own texels, a 296x194 real-model size distinct from the
+    // 320x200 skin-data size, and a player_8bit_texels fallback bitmap.
+    const player = cl.qw.players[playernum];
+    if (!player.name) return;
+
+    const skinKey = Info_ValueForKey(player.userinfo, "skin");
+    const s = COM_StripExtension(skinKey);
+    if (player.skin !== null && s.toLowerCase() === player.skin.name.toLowerCase()) player.skin = null;
+
+    if (player.topcolor !== player._topcolor || player.bottomcolor !== player._bottomcolor || !player.skin) {
+      player._topcolor = player.topcolor;
+      player._bottomcolor = player.bottomcolor;
+
+      let top = player.topcolor;
+      let bottom = player.bottomcolor;
+      top = top < 0 ? 0 : top > 13 ? 13 : top;
+      bottom = bottom < 0 ? 0 : bottom > 13 ? 13 : bottom;
+      top *= 16;
+      bottom *= 16;
+
+      for (i = 0; i < 256; i++) translate[i] = i;
+      for (i = 0; i < 16; i++) {
+        if (top < 128) translate[TOP_RANGE + i] = top + i;
+        else translate[TOP_RANGE + i] = top + 15 - i;
+
+        if (bottom < 128) translate[BOTTOM_RANGE + i] = bottom + i;
+        else translate[BOTTOM_RANGE + i] = bottom + 15 - i;
+      }
+
+      //
+      // locate the original skin pixels
+      //
+      const tinwidth = 296; // real model width
+      const tinheight = 194;
+
+      if (!player.skin) Skin_Find(player);
+      let original: Uint8Array | null = player.skin !== null ? Skin_Cache(player.skin) : null;
+      let inwidth: number;
+      let inheight: number;
+      if (original !== null) {
+        // skin data width
+        inwidth = 320;
+        inheight = 200;
+      } else {
+        original = player_8bit_texels;
+        inwidth = 296;
+        inheight = 194;
+      }
+
+      // because this happens during gameplay, do it fast
+      // instead of sending it through gl_upload 8
+      GL_Bind(glState.playertextures + playernum);
+
+      let scaled_width = (gl_max_size.value < 512 ? gl_max_size.value : 512) | 0;
+      let scaled_height = (gl_max_size.value < 256 ? gl_max_size.value : 256) | 0;
+      // allow users to crunch sizes down even more if they want
+      scaled_width >>= gl_playermip.value | 0;
+      scaled_height >>= gl_playermip.value | 0;
+
+      let frac: number;
+      let fracstep: number;
+      let inrow: number;
+
+      if (VID_Is8bit()) {
+        // 8bit texture upload
+        const out2 = new Uint8Array(pixels.buffer);
+        pixels.fill(0);
+        fracstep = ((tinwidth * 0x10000) / scaled_width) | 0;
+        let out2Ofs = 0;
+        for (i = 0; i < scaled_height; i++, out2Ofs += scaled_width) {
+          inrow = inwidth * (((i * tinheight) / scaled_height) | 0);
+          frac = fracstep >> 1;
+          for (j = 0; j < scaled_width; j += 4) {
+            out2[out2Ofs + j] = translate[original[inrow + (frac >>> 16)]];
+            frac += fracstep;
+            out2[out2Ofs + j + 1] = translate[original[inrow + (frac >>> 16)]];
+            frac += fracstep;
+            out2[out2Ofs + j + 2] = translate[original[inrow + (frac >>> 16)]];
+            frac += fracstep;
+            out2[out2Ofs + j + 3] = translate[original[inrow + (frac >>> 16)]];
+            frac += fracstep;
+          }
+        }
+
+        GL_Upload8_EXT(out2, scaled_width, scaled_height, false, false);
+        return;
+      }
+
+      for (i = 0; i < 256; i++) translate32[i] = d_8to24table[translate[i]];
+
+      let outOfs = 0;
+      pixels.fill(0);
+      fracstep = ((tinwidth * 0x10000) / scaled_width) | 0;
+      for (i = 0; i < scaled_height; i++, outOfs += scaled_width) {
+        inrow = inwidth * (((i * tinheight) / scaled_height) | 0);
+        frac = fracstep >> 1;
+        for (j = 0; j < scaled_width; j += 4) {
+          pixels[outOfs + j] = translate32[original[inrow + (frac >>> 16)]];
+          frac += fracstep;
+          pixels[outOfs + j + 1] = translate32[original[inrow + (frac >>> 16)]];
+          frac += fracstep;
+          pixels[outOfs + j + 2] = translate32[original[inrow + (frac >>> 16)]];
+          frac += fracstep;
+          pixels[outOfs + j + 3] = translate32[original[inrow + (frac >>> 16)]];
+          frac += fracstep;
+        }
+      }
+      qgl().qglTexImage2D(GL_TEXTURE_2D, 0, gl_solid_format, scaled_width, scaled_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+
+      qgl().qglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+      qgl().qglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      qgl().qglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
+    return;
+  }
 
   const top = cl.scores[playernum].colors & 0xf0;
   const bottom = (cl.scores[playernum].colors & 15) << 4;

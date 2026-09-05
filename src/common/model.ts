@@ -170,6 +170,7 @@ import { Cache_Check, Cache_Free, CacheUser, Hunk_AllocName } from "./zone";
 import { Sys_Error } from "../platform/sys";
 import { Con_Printf } from "../client/console";
 import type { EfragT } from "../client/render";
+import { qw } from "./quakedef";
 
 /*
 
@@ -200,6 +201,7 @@ export const SURF_DRAWTURB = 0x10;
 export const SURF_DRAWTILED = 0x20;
 export const SURF_DRAWBACKGROUND = 0x40;
 export const SURF_UNDERWATER = 0x80; // gl_model.h only
+export const SURF_DONTWARP = 0x100; // QW/client/gl_model.h only
 
 export class MedgeT {
   v: Uint16Array = new Uint16Array(2);
@@ -612,9 +614,16 @@ Mod_ClearAll
 export function Mod_ClearAll(): void {
   for (let i = 0; i < mod_numknown; i++) {
     const mod = mod_known[i];
-    mod.needload = NL_UNREFERENCED;
-    //FIX FOR CACHE_ALLOC ERRORS:
-    if (mod.type === ModtypeT.mod_sprite) mod.cache.data = null;
+    if (qw.active) {
+      // QW/client/model.c: only non-alias models are marked stale here;
+      // alias models are left to cache_user_t eviction (no avail-slot reuse
+      // and no sprite cache.data fix -- both dropped, see Mod_FindName below).
+      if (mod.type !== ModtypeT.mod_alias) mod.needload = NL_NEEDS_LOADED;
+    } else {
+      mod.needload = NL_UNREFERENCED;
+      //FIX FOR CACHE_ALLOC ERRORS:
+      if (mod.type === ModtypeT.mod_sprite) mod.cache.data = null;
+    }
   }
 }
 
@@ -625,8 +634,6 @@ Mod_FindName
 ==================
 */
 export function Mod_FindName(name: string): ModelT {
-  let avail: ModelT | null = null;
-
   if (name.length === 0) Sys_Error("Mod_ForName: NULL name");
 
   //
@@ -634,6 +641,26 @@ export function Mod_FindName(name: string): ModelT {
   //
   let mod: ModelT = modKnownAt(0);
   let i = 0;
+
+  if (qw.active) {
+    // QW/client/model.c: no avail-slot reuse -- mod_known only ever grows.
+    for (i = 0; i < mod_numknown; i++) {
+      mod = mod_known[i];
+      if (mod.name === name) break;
+    }
+
+    if (i === mod_numknown) {
+      if (mod_numknown === MAX_MOD_KNOWN) Sys_Error("mod_numknown == MAX_MOD_KNOWN");
+      mod = modKnownAt(mod_numknown);
+      mod.name = name;
+      mod.needload = NL_NEEDS_LOADED;
+      mod_numknown++;
+    }
+
+    return mod;
+  }
+
+  let avail: ModelT | null = null;
   for (i = 0; i < mod_numknown; i++) {
     mod = mod_known[i];
     if (mod.name === name) break;
@@ -1460,7 +1487,10 @@ export function Mod_LoadBrushModel(mod: ModelT, buffer: Uint8Array): void {
   Mod_MakeHull0();
 
   model.numframes = 2; // regular and alternate animation
-  model.flags = 0;
+  // QW/client/model.c drops this clear (matching gl_model.c's WinQuake
+  // behavior, already the case here without qw.active -- see this file's
+  // header note on Mod_LoadBrushModel's soft-vs-gl flags disagreement).
+  if (!qw.active) model.flags = 0;
 
   //
   // set up the submodels (FIXME: this is confusing)
@@ -1477,9 +1507,18 @@ export function Mod_LoadBrushModel(mod: ModelT, buffer: Uint8Array): void {
     model.firstmodelsurface = bm.firstface;
     model.nummodelsurfaces = bm.numfaces;
 
-    VectorCopy(bm.maxs, model.maxs);
-    VectorCopy(bm.mins, model.mins);
-    model.radius = RadiusFromBounds(model.mins, model.maxs);
+    if (qw.active) {
+      // QW/client/model.c reorders this ahead of the VectorCopy calls below,
+      // so it reads the PREVIOUS submodel's mins/maxs (or the zeroed initial
+      // values on the first submodel) rather than this one's -- bug-for-bug.
+      model.radius = RadiusFromBounds(model.mins, model.maxs);
+      VectorCopy(bm.maxs, model.maxs);
+      VectorCopy(bm.mins, model.mins);
+    } else {
+      VectorCopy(bm.maxs, model.maxs);
+      VectorCopy(bm.mins, model.mins);
+      model.radius = RadiusFromBounds(model.mins, model.maxs);
+    }
 
     model.numleafs = bm.visleafs;
 
@@ -1576,7 +1615,8 @@ export function Mod_LoadSpriteModel(mod: ModelT, buffer: Uint8Array): void {
   if (numframes < 1) Sys_Error("Mod_LoadSpriteModel: Invalid # of frames: %d\n", numframes);
 
   mod.numframes = numframes;
-  mod.flags = 0;
+  // QW/client/model.c drops this clear, same as Mod_LoadBrushModel above.
+  if (!qw.active) mod.flags = 0;
 
   mod.cache.data = null;
 
@@ -1595,8 +1635,11 @@ export function Mod_Print(): void {
   for (let i = 0; i < mod_numknown; i++) {
     const mod = mod_known[i];
     Con_Printf("%8s : %s", mod.cache.data === null ? "(null)" : "(cached)", mod.name);
-    if (mod.needload & NL_UNREFERENCED) Con_Printf(" (!R)");
-    if (mod.needload & NL_NEEDS_LOADED) Con_Printf(" (!P)");
+    // QW/client/model.c drops the needload annotations below.
+    if (!qw.active) {
+      if (mod.needload & NL_UNREFERENCED) Con_Printf(" (!R)");
+      if (mod.needload & NL_NEEDS_LOADED) Con_Printf(" (!P)");
+    }
     Con_Printf("\n");
   }
 }

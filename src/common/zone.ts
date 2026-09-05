@@ -158,6 +158,7 @@ import { Con_Printf, Con_DPrintf } from "../client/console";
 import { Com_sprintf } from "./sprintf";
 import { Cmd_AddCommand } from "./cmd";
 import { COM_CheckParm, com_argv } from "./common";
+import { qw } from "./quakedef";
 
 //==============================================================================
 //
@@ -172,7 +173,11 @@ import { COM_CheckParm, com_argv } from "./common";
 // all big things are allocated on the hunk.
 //==============================================================================
 
-const DYNAMIC_SIZE = 0xc000;
+// QW zone.c: `#define DYNAMIC_SIZE 0x20000` (WinQuake: 0xc000). Read at
+// Memory_Init call time (after the qwcl/qwsv entry point sets qw.active),
+// not at module load.
+const DYNAMIC_SIZE_WINQUAKE = 0xc000;
+const DYNAMIC_SIZE_QW = 0x20000;
 
 // Set by Memory_Init from the -zone parm; reported by Z_Print. There is no
 // memzone_t to size in this port, so this is the only trace of it left.
@@ -271,6 +276,13 @@ export function Hunk_Print(_all: boolean): void {
 Hunk_AllocName
 ===================
 */
+// QuakeWorld fold note: WinQuake's Hunk_AllocName has an out-of-memory branch
+// (`Sys_Error("Hunk_Alloc: failed on %i bytes", size)`) that QW replaces with
+// a `-mem 16`-flavored message (non-_WIN32 branch, the one PORTING.md's ifdef
+// rule takes). This port's Hunk_AllocName never runs out of memory -- it is
+// an allocation-free wrapper per PORTING.md's "Memory (zone.c)" section, one
+// `new Uint8Array(size)` per call -- so neither C message is reachable here;
+// this is a no-op, not folded, same as the un-ported OOM check itself.
 export function Hunk_AllocName(size: number, _name: string): Uint8Array {
   if (size < 0) Sys_Error("Hunk_Alloc: bad size: %i", size);
 
@@ -454,7 +466,7 @@ export function Memory_Init(size: number): void {
 
   Cache_Init();
 
-  let zonesize = DYNAMIC_SIZE;
+  let zonesize = qw.active ? DYNAMIC_SIZE_QW : DYNAMIC_SIZE_WINQUAKE;
   const p = COM_CheckParm("-zone");
   if (p) {
     if (p < com_argv.length - 1) {

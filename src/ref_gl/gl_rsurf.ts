@@ -94,7 +94,7 @@ Dropped:
 */
 
 import { COM_CheckParm } from "../common/common";
-import { CONTENTS_SOLID, MAXLIGHTMAPS } from "../common/bspfile";
+import { CONTENTS_EMPTY, CONTENTS_SOLID, MAXLIGHTMAPS } from "../common/bspfile";
 import { AngleVectors, DotProduct, PLANE_X, PLANE_Y, PLANE_Z, type Vec3, vec3, VectorAdd, VectorCopy, VectorNormalize, VectorSubtract } from "../common/mathlib";
 import {
   isMleaf,
@@ -108,12 +108,14 @@ import {
   SURF_DRAWSKY,
   SURF_DRAWTURB,
   SURF_PLANEBACK,
+  SURF_DONTWARP,
   SURF_UNDERWATER,
 } from "../common/model";
 import { MAX_MODELS } from "../common/quakedef";
 import { cl, cl_dlights, MAX_DLIGHTS } from "../client/client";
 import { Sys_Error } from "../platform/sys";
 import { host } from "../common/host";
+import { qw } from "../common/quakedef";
 import {
   BACKFACE_EPSILON,
   BLOCK_HEIGHT,
@@ -272,8 +274,9 @@ export function R_BuildLightMap(surf: MsurfaceT, dest: Uint8Array, destOfs: numb
 
   const worldmodel = cl.worldmodel;
 
-  // set to full bright if no light data
-  if (r_fullbright.value || worldmodel === null || !worldmodel.lightdata) {
+  // set to full bright if no light data. QW/client/gl_rsurf.c comments out
+  // the r_fullbright.value check (dynamic lightmaps always rebuild).
+  if ((!qw.active && r_fullbright.value) || worldmodel === null || !worldmodel.lightdata) {
     for (let i = 0; i < size; i++) blocklights[i] = 255 * 256;
   } else {
     // clear to no light
@@ -327,6 +330,18 @@ export function R_BuildLightMap(surf: MsurfaceT, dest: Uint8Array, destOfs: numb
     default:
       Sys_Error("Bad lightmap format");
   }
+}
+
+// QW/client/gl_rsurf.c: three call sites (R_BlendLightmaps, R_RenderBrushPoly,
+// R_RecursiveWorldNode) replace a plain `flags & SURF_UNDERWATER` check with
+// this r_viewleaf.contents-based test, ANDed with !SURF_DONTWARP (set by
+// src/ref_gl/gl_model.ts's afterBrushLoad for non-map brush models). A null
+// r_viewleaf cannot happen once rendering starts in the C; treated as
+// CONTENTS_EMPTY here so the expression stays total.
+function qwShouldWarp(flags: number): boolean {
+  const emptyLeaf = glState.r_viewleaf === null || glState.r_viewleaf.contents === CONTENTS_EMPTY;
+  const underwaterMatch = emptyLeaf ? (flags & SURF_UNDERWATER) !== 0 : (flags & SURF_UNDERWATER) === 0;
+  return underwaterMatch && (flags & SURF_DONTWARP) === 0;
 }
 
 /*
@@ -421,6 +436,58 @@ export function R_DrawSequentialPoly(s: MsurfaceT): void {
 
   const texinfo = s.texinfo;
   if (texinfo === null || texinfo.texture === null) return Sys_Error("R_DrawSequentialPoly: surface has no texture");
+
+  // QW/client/gl_rsurf.c compiles a DIFFERENT, non-multitexture body of this
+  // function on non-_WIN32 (WinQuake wraps that same body in `#if 0`, always
+  // dead, and always compiles the multitexture-aware body below instead).
+  // QW's replacement body also comments out the normal-lightmapped-poly
+  // condition and compiles `if (0)` in its place, so that whole fast path is
+  // dead code there too (never implemented here -- it cannot run) and every
+  // non-SURF_DRAWTURB surface, including plain opaque walls, falls all the
+  // way through the SURF_DRAWSKY check into the underwater-warp-with-lightmap
+  // tail unconditionally. Bug-for-bug.
+  if (qw.active) {
+    if (s.flags & SURF_DRAWTURB) {
+      GL_Bind(texinfo.texture.gl_texturenum);
+      EmitWaterPolys(s);
+      return;
+    }
+
+    if (s.flags & SURF_DRAWSKY) {
+      GL_Bind(glWarpState.solidskytexture);
+      glWarpState.speedscale = host.realtime * 8;
+      glWarpState.speedscale -= (glWarpState.speedscale | 0) & ~127;
+
+      EmitSkyPolys(s);
+
+      gl.qglEnable(GL_BLEND);
+      gl.qglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      GL_Bind(glWarpState.alphaskytexture);
+      glWarpState.speedscale = host.realtime * 16;
+      glWarpState.speedscale -= (glWarpState.speedscale | 0) & ~127;
+      EmitSkyPolys(s);
+      if (glDrawState.gl_lightmap_format === GL_LUMINANCE) gl.qglBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR);
+
+      gl.qglDisable(GL_BLEND);
+      // no return: falls through to the underwater-warp tail below, as the C does.
+    }
+
+    //
+    // underwater warped with lightmap
+    //
+    const p = surfPolys(s);
+    if (p === null) return Sys_Error("R_DrawSequentialPoly: surface has no polys");
+
+    const t = R_TextureAnimation(texinfo.texture);
+    GL_Bind(t.gl_texturenum);
+    DrawGLWaterPoly(p);
+
+    GL_Bind(glState.lightmap_textures + s.lightmaptexturenum);
+    gl.qglEnable(GL_BLEND);
+    DrawGLWaterPolyLightmap(p);
+    gl.qglDisable(GL_BLEND);
+    return;
+  }
 
   //
   // normal lightmaped poly
@@ -623,7 +690,8 @@ R_BlendLightmaps
 export function R_BlendLightmaps(): void {
   const gl = qgl();
 
-  if (r_fullbright.value) return;
+  // QW/client/gl_rsurf.c wraps this check in `#if 0` (always dead there).
+  if (!qw.active && r_fullbright.value) return;
   if (!gl_texsort.value) return;
 
   gl.qglDepthMask(false); // don't bother writing Z
@@ -663,7 +731,7 @@ export function R_BlendLightmaps(): void {
       theRect.w = 0;
     }
     for (; p; p = p.chain) {
-      if (p.flags & SURF_UNDERWATER) DrawGLWaterPolyLightmap(p);
+      if (qw.active ? qwShouldWarp(p.flags) : (p.flags & SURF_UNDERWATER) !== 0) DrawGLWaterPolyLightmap(p);
       else {
         gl.qglBegin(GL_POLYGON);
         for (let j = 0, v = 0; j < p.numverts; j++, v += VERTEXSIZE) {
@@ -752,7 +820,7 @@ export function R_RenderBrushPoly(fa: MsurfaceT): void {
   const polys = surfPolys(fa);
   if (polys === null) return Sys_Error("R_RenderBrushPoly: surface has no polys");
 
-  if (fa.flags & SURF_UNDERWATER) DrawGLWaterPoly(polys);
+  if (qw.active ? qwShouldWarp(fa.flags) : (fa.flags & SURF_UNDERWATER) !== 0) DrawGLWaterPoly(polys);
   else DrawGLPoly(polys);
 
   // add the poly to the proper lightmap chain
@@ -1072,7 +1140,11 @@ export function R_RecursiveWorldNode(node: MnodeT | MleafT): void {
         if (surf.visframe !== glState.r_framecount) continue;
 
         // don't backface underwater surfaces, because they warp
-        if (!(surf.flags & SURF_UNDERWATER) && ((dot < 0 ? 1 : 0) ^ (surf.flags & SURF_PLANEBACK ? 1 : 0))) continue; // wrong side
+        if (
+          !(qw.active ? qwShouldWarp(surf.flags) : (surf.flags & SURF_UNDERWATER) !== 0) &&
+          ((dot < 0 ? 1 : 0) ^ (surf.flags & SURF_PLANEBACK ? 1 : 0))
+        )
+          continue; // wrong side
 
         // if sorting by texture, just store it out
         if (gl_texsort.value) {
@@ -1346,8 +1418,8 @@ export function GL_BuildLightmaps(): void {
   }
 
   glDrawState.gl_lightmap_format = GL_LUMINANCE;
-  // default differently on the Permedia
-  if (isPermedia) glDrawState.gl_lightmap_format = GL_RGBA;
+  // default differently on the Permedia -- QW/client/gl_rsurf.c drops this.
+  if (!qw.active && isPermedia) glDrawState.gl_lightmap_format = GL_RGBA;
 
   if (COM_CheckParm("-lm_1")) glDrawState.gl_lightmap_format = GL_LUMINANCE;
   if (COM_CheckParm("-lm_a")) glDrawState.gl_lightmap_format = GL_ALPHA;

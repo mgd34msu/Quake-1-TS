@@ -50,6 +50,12 @@ Deviations from PORTING.md / the C source:
   practice this file is only ever reached through
   `hostClientHooks.cdaudioInit`, which host.ts already gates the same way, so
   this is interface-parity, not a load-bearing guard.
+
+QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
+../qsrc/quake/QW/client/cd_linux.c against WinQuake/cd_linux.c): the
+dedicated-state early return is `#if 0`'d out under QW -- folded onto the
+`sysState.isDedicated` check above. The GNU.txt license-comment wording
+change is not functional.
 */
 
 import { dlopen, ptr, read as ffiRead, type Library, type Pointer } from "bun:ffi";
@@ -61,6 +67,7 @@ import { bgmvolume } from "../client/sound";
 import { cdAudio, type CdAudio } from "../client/cdaudio";
 import { hostClientHooks } from "../common/host";
 import { sysState } from "./sys";
+import { qw } from "../common/quakedef";
 import { SDLCD_Active, SDLCD_Close, SDLCD_Open, SDLCD_Queue, SDLCD_QueuedBytes } from "./sdl";
 
 const vorbisSymbols = {
@@ -414,7 +421,10 @@ cd_linux.c:369.
 ====================
 */
 export function CDAudio_Init(): number {
-  if (sysState.isDedicated) return -1;
+  // QW cd_linux.c wraps this check in `#if 0` -- qwcl's CDAudio_Init never
+  // early-returns for a dedicated state (already non-load-bearing here per
+  // this file's header: host.ts gates the call before it happens).
+  if (!qw.active && sysState.isDedicated) return -1;
 
   if (COM_CheckParm("-nocdaudio")) return -1;
 
