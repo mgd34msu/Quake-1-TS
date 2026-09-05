@@ -7,6 +7,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { net_message } from "../src/common/sizebuf";
+import { SysError, setHostShutdown } from "../src/platform/sys";
 import {
   NetadrT,
   net_local_adr,
@@ -149,5 +150,68 @@ describe("NET_Init / NET_Ready / real loopback UDP", () => {
 describe("PORT_ANY", () => {
   test("is -1, matching net.h's #define PORT_ANY -1", () => {
     expect(PORT_ANY).toBe(-1);
+  });
+});
+
+/*
+Q026: QW/client/net_udp.c's UDP_OpenSocket calls Sys_Error("UDP_OpenSocket:
+bind: %s") from inside a synchronous NET_Init, so a second qwcl on a busy
+port dies inside main() and exits 1. Bun's bind is asynchronous, so the
+SysError cannot propagate out of NET_Init; it is delivered by rejecting the
+NET_Ready() promise, which src/qw/main_cl.ts's and main_sv.ts's
+`await NET_Ready()` sit inside main()'s try/catch for. Before this, the
+Sys_Error was thrown inside a `.catch` and became an unhandled rejection
+while NET_Ready() resolved as if the bind had succeeded.
+
+Rule 15: this block shuts the suite's own socket down first (so the failure
+comes from the blocker it opens, not from this module's own still-bound
+socket), closes the blocker, and leaves the module with no socket -- the
+file's top-level afterAll's NET_Shutdown is a no-op on a null socket.
+setHostShutdown(null) is saved/restored around the Sys_Error call, which
+would otherwise run whatever Host_Shutdown another suite in this process
+left registered.
+*/
+describe("NET_Init bind failure reaches the caller through NET_Ready", () => {
+  const BUSY_PORT = 27961;
+
+  beforeAll(() => {
+    NET_Shutdown();
+  });
+
+  afterAll(() => {
+    NET_Shutdown();
+  });
+
+  test("a second bind on a port already in use rejects NET_Ready with SysError", async () => {
+    const blocker = await Bun.udpSocket({
+      hostname: "0.0.0.0",
+      port: BUSY_PORT,
+      socket: {
+        data(): void {},
+      },
+    });
+
+    setHostShutdown(null);
+    try {
+      NET_Init(BUSY_PORT);
+
+      let caught: unknown = null;
+      try {
+        await NET_Ready();
+      } catch (err: unknown) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(SysError);
+      const message = caught instanceof Error ? caught.message : String(caught);
+      // the C's own two Sys_Error texts: "UDP_OpenSocket: socket: %s" and
+      // "UDP_OpenSocket: bind: %s"; Bun reports the failing syscall first
+      // ("bind EADDRINUSE ..."), so this is the bind one
+      expect(message).toContain("UDP_OpenSocket: bind:");
+      expect(message).toContain("EADDRINUSE");
+    } finally {
+      blocker.close();
+      setHostShutdown(null);
+    }
   });
 });

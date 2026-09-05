@@ -106,12 +106,20 @@ handful of functions -- see below for the exact ones):
   `char chat_buffer[32]`. `team_message` is named `chat_team` in QW's C;
   same field, no export-name change (nothing outside this module reads it
   by either name).
+- `M_Keydown`/`M_ToggleMenu_f`: the call sites are character-for-character
+  identical in the two keys.c files (QW keys.c:728/732/772/812 against
+  WinQuake's), but the menu.c they link is not -- WinQuake's menu.c and
+  QW/client/menu.c differ wholesale, so src/qw/client/menu.ts is a module of
+  its own rather than a fold of ./menu. `menuKeydown`/`menuToggleMenu_f`
+  below are what makes those four call sites reach the right one at run
+  time; see the comment on `qwMenuMod`.
 - Not folded (checked, genuinely unchanged): `Key_StringToKeynum`,
   `Key_KeynumToString`, `Key_SetBinding`, `Key_Unbind_f`/`Key_Unbindall_f`/
   `Key_Bind_f`, `Key_ClearStates` (QW writes `key_repeats[i] = false` where
   WinQuake writes `= 0`; both are 0 on a `boolean`-coerced `Int32Array`
   write, no observable difference, not folded), `Key_Event`'s escape/menu
-  dispatch and button up/down command forwarding, `messagemode`/
+  dispatch and button up/down command forwarding (only the menu module they
+  reach differs, see above), `messagemode`/
   `messagemode2` registration (grepped: neither exists in QW's keys.c --
   they live elsewhere, not this file's concern).
 */
@@ -129,7 +137,31 @@ import { vid } from "./vid";
 import { conState } from "./console";
 // menu.ts (U049, not yet landed) -- see file header.
 import { M_Keydown, M_ToggleMenu_f } from "./menu";
+import type * as QwMenuModule from "../qw/client/menu";
 import { svUserHooks } from "../server/sv_user";
+
+// keys.c is one of the files both trees share, but the menu.c it calls
+// M_Keydown/M_ToggleMenu_f in is not: WinQuake's menu.c and QW/client/menu.c
+// differ wholesale (src/qw/client/menu.ts is its own module, not a fold), so
+// which one these two entry points reach is decided at run time here the way
+// the C decides it at link time. A static import of the QW module would pull
+// the whole QuakeWorld client into the WinQuake binary, so it is resolved
+// lazily with Bun's synchronous require(), the same mechanism
+// src/common/host.ts and src/ref_soft/r_alias.ts use; only reached with
+// qw.active, so the WinQuake binary never loads it.
+function qwMenuMod(): typeof QwMenuModule {
+  return require("../qw/client/menu");
+}
+
+function menuKeydown(key: number): void {
+  if (qw.active) qwMenuMod().M_Keydown(key);
+  else M_Keydown(key);
+}
+
+function menuToggleMenu_f(): void {
+  if (qw.active) qwMenuMod().M_ToggleMenu_f();
+  else M_ToggleMenu_f();
+}
 
 //
 // these are the key numbers that should be passed to Key_Event
@@ -808,11 +840,11 @@ export function Key_Event(key: number, down: boolean): void {
         Key_Message(key);
         break;
       case KeydestT.key_menu:
-        M_Keydown(key);
+        menuKeydown(key);
         break;
       case KeydestT.key_game:
       case KeydestT.key_console:
-        M_ToggleMenu_f();
+        menuToggleMenu_f();
         break;
       default:
         Sys_Error("Bad key_dest");
@@ -845,7 +877,7 @@ export function Key_Event(key: number, down: boolean): void {
   // during demo playback, most keys bring up the main menu
   //
   if (cls.demoplayback && down && consolekeys[key] && keyState.key_dest === KeydestT.key_game) {
-    M_ToggleMenu_f();
+    menuToggleMenu_f();
     return;
   }
 
@@ -885,7 +917,7 @@ export function Key_Event(key: number, down: boolean): void {
       Key_Message(dispatchKey);
       break;
     case KeydestT.key_menu:
-      M_Keydown(dispatchKey);
+      menuKeydown(dispatchKey);
       break;
 
     case KeydestT.key_game:

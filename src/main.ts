@@ -98,6 +98,17 @@ import "./client/screen";
 import "./client/view";
 import "./client/r_part";
 import "./client/snd_dma";
+// snd_linux.c and cd_linux.c, this port's src/platform/snd.ts and
+// src/platform/cd_ogg.ts: they install `sndDma.current` / `cdAudio.current`
+// at module load and nothing else in the tree imports them, so Host_Init's
+// S_Init and CDAudio_Init would find both holders empty without these two
+// lines (src/qw/main_cl.ts links the same two object files for the same
+// reason). vid_x.c / in_x.c -- src/platform/vid.ts's `vidBackend.current`
+// and src/platform/sdl.ts's `inputBackend.current` -- need no line of their
+// own here: both renderer modules below import platform/vid.ts for
+// registerRenderer, and platform/vid.ts imports platform/sdl.ts.
+import "./platform/snd";
+import "./platform/cd_ogg";
 // The renderers register themselves with src/platform/vid.ts's registry at
 // module load (the C links exactly one; this port links both and selects by
 // vid_ref).

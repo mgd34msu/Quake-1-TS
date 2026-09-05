@@ -126,9 +126,10 @@ import { qw } from "../common/quakedef";
 import { S_Init } from "../client/snd_dma";
 import { hostClientHooks, host_colormap } from "../common/host";
 import { COM_CheckParm, Q_atoi, com_argc, com_argv } from "../common/common";
-import { CvarT, Cvar_RegisterVariable } from "../common/cvar";
+import { CvarT, Cvar_RegisterVariable, Cvar_Set } from "../common/cvar";
 import { Cmd_AddCommand } from "../common/cmd";
 import { Con_Printf } from "../client/console";
+import { scrState } from "../client/screen_types";
 import { re, type Renderer } from "../client/render";
 import { setModelLoaderHooks } from "../common/model";
 import { inputBackend } from "../client/input";
@@ -340,6 +341,26 @@ Host_Init calls in sequence) -- if VID_Init's own call into this function
 also triggered R_Init, the very first boot would run it twice.
 */
 export function VID_CheckChanges(runRInit: boolean = true): void {
+  // Both screen.c's (WinQuake screen.c:SCR_UpdateScreen, QW screen.c/
+  // gl_screen.c likewise) return early while `scr_disabled_for_loading` is
+  // set, which is how the C keeps a Con_Printf issued mid-mode-change from
+  // recursing into a refresh that is not there. This function has exactly
+  // that window: `teardownActiveRenderer()` below drops `re.current`, and
+  // glimp.ts's GLimp_SetMode Con_Printf's the mode it is about to try before
+  // it can know whether the attempt fails -- with the console initialized and
+  // the client not signed on, console.ts's Con_Printf calls SCR_UpdateScreen,
+  // whose getRenderer() would throw "No renderer is loaded". Set for the whole
+  // switch and restored to whatever a real loading plaque had left it as.
+  const savedScrDisabled = scrState.scr_disabled_for_loading;
+  scrState.scr_disabled_for_loading = true;
+  try {
+    VID_CheckChanges_(runRInit);
+  } finally {
+    scrState.scr_disabled_for_loading = savedScrDisabled;
+  }
+}
+
+function VID_CheckChanges_(runRInit: boolean): void {
   const name = vid_ref.string;
   const factory = registry.get(name);
   if (!factory) {
@@ -366,14 +387,19 @@ export function VID_CheckChanges(runRInit: boolean = true): void {
       glimp.Shutdown();
       if (vid_ref.string === "soft") Sys_Error("Couldn't fall back to software refresh!");
       Con_Printf("vid_ref gl: mode set failed, falling back to soft\n");
-      // Cvar_Set (not used here) requires the cvar to already be linked
-      // into cvar_vars; VID_Init always registers vid_ref before any switch
-      // can happen in normal use, but mutating the fields directly is
-      // unconditionally safe and avoids a silent no-op turning this into an
-      // infinite VID_CheckChanges recursion if it is ever reached earlier.
-      vid_ref.string = "soft";
-      vid_ref.value = 0;
-      VID_CheckChanges(runRInit);
+      // quake-2-ts's VID_CheckChanges does the same thing on a failed
+      // refresh load: print, put the cvar back to "soft", keep running.
+      // Cvar_Set is a no-op with a "variable not found" print if vid_ref has
+      // not been linked into cvar_vars yet -- VID_Init always registers it
+      // before any switch can happen in normal use, but the direct field
+      // write covers that case anyway, so a silent no-op can never turn this
+      // into an infinite VID_CheckChanges recursion.
+      Cvar_Set("vid_ref", "soft");
+      if (vid_ref.string !== "soft") {
+        vid_ref.string = "soft";
+        vid_ref.value = 0;
+      }
+      VID_CheckChanges_(runRInit);
       return;
     }
     glimpHolder.current = glimp;
@@ -420,6 +446,21 @@ export function VID_Init(palette: Uint8Array): void {
   Cvar_RegisterVariable(vid_mode);
   Cvar_RegisterVariable(vid_fullscreen);
   Cmd_AddCommand("vid_restart", VID_Restart_f);
+
+  // `+vid_ref gl` on the command line cannot pick the renderer: the "+"
+  // arguments only run once something executes `stuffcmds`, which quake.rc
+  // does long after Host_Init has called VID_Init and a renderer has already
+  // been created. `-vid_ref <name>` is the pre-init parm form WinQuake uses
+  // for every option VID_Init/Host_Init must see before the console exists
+  // (`-dedicated`, `-mem`, and vid_x.c's own `-width`/`-height`/`-winsize`
+  // read below); vid_ref is this port's own added cvar, so the parm that
+  // seeds it is the port's own convention too. `vid_restart` after setting
+  // the cvar stays the runtime path.
+  const refParm = COM_CheckParm("-vid_ref");
+  if (refParm) {
+    if (refParm >= com_argc - 1) Sys_Error("VID: -vid_ref <name>\n");
+    Cvar_Set("vid_ref", com_argv[refParm + 1]);
+  }
 
   vid.maxwarpwidth = WARP_WIDTH;
   vid.maxwarpheight = WARP_HEIGHT;

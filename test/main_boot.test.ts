@@ -19,6 +19,10 @@ import { getNetHostHooks, net_activeconnections, setNetActiveConnections, setNet
 import { setHostShutdown, sysState } from "../src/platform/sys";
 import { sv, svState, svs } from "../src/server/server";
 import { Sys_Main_Init, runFrames } from "../src/main";
+import { sndDma } from "../src/client/sound";
+import { cdAudio } from "../src/client/cdaudio";
+import { S_Init } from "../src/client/snd_dma";
+import { COM_InitArgv, com_argc, com_argv } from "../src/common/common";
 import { buildDedicatedFixture, destroyDedicatedFixture, type DedicatedFixture } from "./support/dedicated_fixture";
 
 const savedNostdout = sysState.nostdout;
@@ -110,5 +114,62 @@ describe("Sys_Main_Init + runFrames -- a real dedicated boot", () => {
     expect(sysState.nostdout).toBe(1);
 
     expect(() => Host_Shutdown()).not.toThrow();
+  });
+});
+
+/*
+Q026: src/main.ts links snd_linux.c/cd_linux.c the way the C's Makefile does
+-- src/platform/snd.ts and src/platform/cd_ogg.ts install sndDma.current /
+cdAudio.current at module load and nothing else in the tree imports them, so
+without those two side-effect imports Host_Init's S_Init and CDAudio_Init
+would find both holders empty. The in-process assertion below can be
+satisfied by another suite in this process having imported either platform
+module first (bun shares one module registry), so the child process is what
+actually proves src/main.ts's own import graph installs them.
+*/
+describe("the sound and CD backends src/main.ts links", () => {
+  test("sndDma.current and cdAudio.current are installed once src/main.ts is loaded", () => {
+    const fixture = buildDedicatedFixture("main-boot-snd-");
+    builtFixtures.push(fixture);
+
+    bootDedicated(["q1ts", "-dedicated", "1", "-nosound", "-basedir", fixture.baseDir]);
+
+    expect(host.initialized).toBe(true);
+    expect(sndDma.current).not.toBeNull();
+    expect(cdAudio.current).not.toBeNull();
+
+    expect(() => Host_Shutdown()).not.toThrow();
+  });
+
+  test("importing src/main.ts in a fresh process installs both holders", () => {
+    const probe = [
+      'await import("' + import.meta.dir + '/../src/main.ts");',
+      'const { sndDma } = await import("' + import.meta.dir + '/../src/client/sound.ts");',
+      'const { cdAudio } = await import("' + import.meta.dir + '/../src/client/cdaudio.ts");',
+      'console.log(JSON.stringify({ snd: sndDma.current !== null, cd: cdAudio.current !== null }));',
+    ].join("\n");
+
+    const result = Bun.spawnSync({
+      cmd: [process.execPath, "-e", probe],
+      env: { ...process.env, SDL_VIDEODRIVER: "dummy", SDL_AUDIODRIVER: "dummy" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString().trim()).toBe(JSON.stringify({ snd: true, cd: true }));
+  });
+
+  // snd_dma.c's S_Init returns right after the banner when -nosound is on the
+  // command line, so it never reaches SNDDMA_Init/the SDL audio device.
+  test("S_Init with -nosound does not throw under the dummy audio driver", () => {
+    const savedArgv = com_argv.slice();
+    const savedArgc = com_argc;
+    try {
+      COM_InitArgv(["q1ts", "-nosound"]);
+      expect(() => S_Init()).not.toThrow();
+    } finally {
+      COM_InitArgv(["q1ts", ...savedArgv.slice(1, savedArgc)]);
+    }
   });
 });

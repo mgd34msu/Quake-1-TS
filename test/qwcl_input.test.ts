@@ -36,7 +36,9 @@ import * as modelMod from "../src/common/model";
 import { ModelT } from "../src/common/model";
 import * as snd_dma from "../src/client/snd_dma";
 
-import { keyState, KeydestT, Key_Event } from "../src/client/keys";
+import { keyState, KeydestT, Key_ClearStates, Key_Event } from "../src/client/keys";
+import * as winMenu from "../src/client/menu";
+import * as qwMenu from "../src/qw/client/menu";
 import { Con_Init, Con_Printf } from "../src/client/console";
 import { sysState } from "../src/platform/sys";
 
@@ -507,5 +509,97 @@ describe("Con_Printf gating under qw.active", () => {
     cls.state = CactiveT.ca_active;
     expect(() => Con_Printf("qw active\n")).not.toThrow();
     expect(called).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// keys.ts qw.active fold: which menu.c the two menu entry points reach
+// (QW/client/keys.c:728/812 M_Keydown, :732/772 M_ToggleMenu_f -- identical
+// call sites in both trees, but QW/client/keys.c links QW/client/menu.c)
+// ---------------------------------------------------------------------------
+
+describe("Key_Event menu dispatch under qw.active", () => {
+  // rule 15: mockImplementation spies, installed in beforeAll and restored in
+  // afterAll. Both menu modules are spied, so "the QW one ran" and "the
+  // WinQuake one did not" are both real assertions.
+  const qwKeydownSpy = spyOn(qwMenu, "M_Keydown");
+  const qwToggleSpy = spyOn(qwMenu, "M_ToggleMenu_f");
+  const winKeydownSpy = spyOn(winMenu, "M_Keydown");
+  const winToggleSpy = spyOn(winMenu, "M_ToggleMenu_f");
+
+  let savedKeyDest: KeydestT;
+  let savedKeyCount: number;
+
+  beforeAll(() => {
+    savedKeyDest = keyState.key_dest;
+    savedKeyCount = keyState.key_count;
+    qwKeydownSpy.mockImplementation(() => {});
+    qwToggleSpy.mockImplementation(() => {});
+    winKeydownSpy.mockImplementation(() => {});
+    winToggleSpy.mockImplementation(() => {});
+  });
+
+  afterAll(() => {
+    qwKeydownSpy.mockRestore();
+    qwToggleSpy.mockRestore();
+    winKeydownSpy.mockRestore();
+    winToggleSpy.mockRestore();
+    qw.active = false;
+    keyState.key_dest = savedKeyDest;
+    keyState.key_count = savedKeyCount;
+    Key_ClearStates(); // key_repeats/keydown are module-private singletons
+  });
+
+  beforeEach(() => {
+    qwKeydownSpy.mockClear();
+    qwToggleSpy.mockClear();
+    winKeydownSpy.mockClear();
+    winToggleSpy.mockClear();
+    Key_ClearStates();
+    keyState.key_count = 1; // > 0, past Key_Event's Con_NotifyBox guard
+    keyState.key_dest = KeydestT.key_menu;
+  });
+
+  afterEach(() => {
+    qw.active = false;
+    keyState.key_dest = KeydestT.key_game;
+  });
+
+  test("qw.active: a key in key_menu reaches QW's M_Keydown, not WinQuake's", () => {
+    qw.active = true;
+    Key_Event("a".charCodeAt(0), true);
+
+    expect(qwKeydownSpy).toHaveBeenCalledTimes(1);
+    expect(qwKeydownSpy.mock.calls[0][0]).toBe("a".charCodeAt(0));
+    expect(winKeydownSpy).not.toHaveBeenCalled();
+  });
+
+  test("qw.active: K_ESCAPE in key_menu reaches QW's M_Keydown too (keys.c's escape branch)", () => {
+    qw.active = true;
+    Key_Event(27 /* K_ESCAPE */, true);
+
+    expect(qwKeydownSpy).toHaveBeenCalledTimes(1);
+    expect(qwKeydownSpy.mock.calls[0][0]).toBe(27);
+    expect(winKeydownSpy).not.toHaveBeenCalled();
+  });
+
+  test("qw.active: K_ESCAPE in key_game reaches QW's M_ToggleMenu_f, not WinQuake's", () => {
+    qw.active = true;
+    keyState.key_dest = KeydestT.key_game;
+    Key_Event(27 /* K_ESCAPE */, true);
+
+    expect(qwToggleSpy).toHaveBeenCalledTimes(1);
+    expect(winToggleSpy).not.toHaveBeenCalled();
+  });
+
+  test("without qw.active the same events reach WinQuake's menu.c", () => {
+    Key_Event("a".charCodeAt(0), true);
+    keyState.key_dest = KeydestT.key_game;
+    Key_Event(27 /* K_ESCAPE */, true);
+
+    expect(winKeydownSpy).toHaveBeenCalledTimes(1);
+    expect(winToggleSpy).toHaveBeenCalledTimes(1);
+    expect(qwKeydownSpy).not.toHaveBeenCalled();
+    expect(qwToggleSpy).not.toHaveBeenCalled();
   });
 });

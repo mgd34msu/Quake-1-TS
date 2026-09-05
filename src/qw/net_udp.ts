@@ -35,7 +35,22 @@ Deviations from the brief / from Quake 2's net_udp.ts:
   immediately (matching the C's `void NET_Init(int port)` signature), with
   an exported `NET_Ready()` promise as the test/caller seam for "the socket
   has finished binding" -- NET_GetPacket/NET_SendPacket both silently no-op
-  (matching the C's EWOULDBLOCK-is-silent branches) until then.
+  (matching the C's EWOULDBLOCK-is-silent branches) until then. The same
+  asynchrony moves where a bind failure surfaces: the C's UDP_OpenSocket
+  calls Sys_Error("UDP_OpenSocket: bind: %s") from inside a synchronous
+  NET_Init, so a second qwcl on a busy port dies right there inside main().
+  The SysError this port's Sys_Error throws cannot propagate out of an async
+  callback, so it is delivered by REJECTING the NET_Ready() promise with it:
+  src/qw/main_cl.ts's and src/qw/main_sv.ts's `await NET_Ready()` sit inside
+  main()'s own try/catch, which is the same exit(1). (Rejecting is also why
+  a no-op `.catch` is attached to the promise as soon as it is created -- a
+  rejection nobody has attached a handler to yet is reported as an unhandled
+  rejection, and the real handler is only attached once Sys_Main_Loop runs.)
+  Bun.udpSocket does socket() and bind() in one call and names the failing
+  one at the front of its error message ("bind EADDRINUSE 127.0.0.1"), the
+  way node's errors do, so the message is routed to whichever of the C's two
+  Sys_Error calls -- "UDP_OpenSocket: socket: %s" or "UDP_OpenSocket: bind:
+  %s" -- the C would have made.
 - No "Oversize packet from %s" drop exists in the real C NET_GetPacket (that
   message belongs to a different id UDP driver) -- QW's recvfrom is bounded
   by `sizeof(net_message_buffer)` at the syscall itself. Bun's socket `data`
@@ -219,13 +234,25 @@ interface RxPacket {
 let socket: UdpSocket | null = null;
 const rxQueue: RxPacket[] = [];
 let readyResolve: (() => void) | null = null;
-let readyPromise: Promise<void> = new Promise((resolve) => {
-  readyResolve = resolve;
-});
+let readyReject: ((reason: unknown) => void) | null = null;
+
+// see the file header on the no-op catch
+function makeReadyPromise(): Promise<void> {
+  const p = new Promise<void>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  p.catch(() => {});
+  return p;
+}
+
+let readyPromise: Promise<void> = makeReadyPromise();
 
 // Test/caller seam: the C's UDP_OpenSocket/bind are synchronous, so by the
 // time NET_Init returns the socket is already usable. Bun's bind is
-// asynchronous; await this to reach the same point. Not part of net.h.
+// asynchronous; await this to reach the same point. Rejects with the
+// `SysError` the C's Sys_Error would have thrown out of NET_Init itself if
+// the socket could not be opened or bound. Not part of net.h.
 export function NET_Ready(): Promise<void> {
   return readyPromise;
 }
@@ -286,27 +313,35 @@ export function NET_Init(port: number): void {
   net_message.maxsize = net_message_buffer.length;
   net_message.cursize = 0;
 
-  readyPromise = new Promise((resolve) => {
-    readyResolve = resolve;
-  });
+  readyPromise = makeReadyPromise();
+  const resolveReady = readyResolve;
+  const rejectReady = readyReject;
 
   // open the single socket to be used for all communications
-  void UDP_OpenSocket(port)
-    .then((sock) => {
+  void UDP_OpenSocket(port).then(
+    (sock) => {
       socket = sock;
 
       // determine my name & address
       NET_GetLocalAddress();
 
       Con_Printf("UDP Initialized\n");
-    })
-    .catch((err: unknown) => {
+      resolveReady?.();
+    },
+    (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      Sys_Error("UDP_OpenSocket: socket: %s", message);
-    })
-    .finally(() => {
-      readyResolve?.();
-    });
+      // socket() and bind() are one call here; the C has a separate
+      // Sys_Error for each -- see the file header.
+      const syscall = message.startsWith("bind") ? "bind" : "socket";
+      try {
+        Sys_Error("UDP_OpenSocket: %s: %s", syscall, message);
+      } catch (sysErr: unknown) {
+        rejectReady?.(sysErr);
+        return;
+      }
+      rejectReady?.(new Error(message));
+    },
+  );
 }
 
 /*

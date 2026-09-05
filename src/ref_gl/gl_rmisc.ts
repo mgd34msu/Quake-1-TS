@@ -98,6 +98,7 @@ import { player_8bit_texels } from "./gl_model";
 import { R_InitBubble } from "./gl_rlight";
 import { ngraphState } from "./gl_ngraph";
 import { R_ClearParticles, R_InitParticles, R_ReadPointFile_f } from "../client/r_part";
+import type * as QwRPartModule from "../qw/client/r_part";
 import { d_lightstylevalue, glState, r_worldentity } from "./glquake";
 import { AliashdrT } from "./gl_model_types";
 import {
@@ -282,6 +283,20 @@ export function R_Envmap_f(): void {
   GL_EndRendering();
 }
 
+
+// QW/client/r_part.c is a wholesale-different file (see src/qw/client/r_part.ts's
+// own Q023b ruling): its own particle pool, `host_frametime` where WinQuake's
+// R_DrawParticles reads `cl.time - cl.oldtime`, and a literal 800 gravity.
+// gl_rmisc.c is compiled once per tree and linked against the r_part.c of its own
+// tree, so under qw.active the particle entry points below have to reach the QW
+// module -- the pool QW's cl_tent.c/cl_ents.c fill is otherwise not the pool
+// this renderer initializes, clears and draws. Resolved lazily with Bun's
+// synchronous require() rather than a static import, the same mechanism
+// src/ref_soft/r_alias.ts uses for src/qw/client/skin.ts.
+function qwRPartMod(): typeof QwRPartModule {
+  return require("../qw/client/r_part");
+}
+
 /*
 ===============
 R_Init
@@ -290,7 +305,7 @@ R_Init
 export function R_Init(): void {
   Cmd_AddCommand("timerefresh", R_TimeRefresh_f);
   Cmd_AddCommand("envmap", R_Envmap_f);
-  Cmd_AddCommand("pointfile", R_ReadPointFile_f);
+  Cmd_AddCommand("pointfile", qw.active ? qwRPartMod().R_ReadPointFile_f : R_ReadPointFile_f);
 
   Cvar_RegisterVariable(r_norefresh);
   Cvar_RegisterVariable(r_lightmap);
@@ -329,7 +344,8 @@ export function R_Init(): void {
 
   Cvar_RegisterVariable(gl_doubleeyes);
 
-  R_InitParticles();
+  if (qw.active) qwRPartMod().R_InitParticles();
+  else R_InitParticles();
   R_InitParticleTexture();
 
   if (qw.active) {
@@ -607,7 +623,8 @@ export function R_NewMap(): void {
   for (i = 0; i < worldmodel.numleafs; i++) worldmodel.leafs[i].efrags = null;
 
   glState.r_viewleaf = null;
-  R_ClearParticles();
+  if (qw.active) qwRPartMod().R_ClearParticles();
+  else R_ClearParticles();
 
   GL_BuildLightmaps();
 

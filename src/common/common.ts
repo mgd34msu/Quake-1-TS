@@ -31,15 +31,23 @@ Deviations from PORTING.md / the C source:
   this brief) that landed while this one was in flight; imported directly.
 - File I/O primitives the C reaches through sys.h (Sys_FileOpenRead/
   Sys_FileRead/Sys_FileWrite/Sys_FileOpenWrite/Sys_FileClose/Sys_FileSeek/
-  Sys_FileTime/Sys_mkdir) are not yet in src/platform/sys.ts (its own header
-  says U010 adds file I/O). PORTING.md explicitly allows node:fs sync calls
-  directly inside this file, so they are implemented privately here instead
-  of imported; COM_OpenFile/COM_FindFile keep an internal handle table
-  (fd + read cursor) rather than relying on the OS file position, so a pak's
-  shared fd (pack_t.handle) behaves exactly like the C's shared-descriptor
-  reads (including its "two simultaneous readers into the same pak clobber
-  each other's position" quirk). When U010 lands real Sys_File* entry
-  points, these private helpers should be replaced by calls to them.
+  Sys_FileTime/Sys_mkdir) are imported from src/platform/sys.ts, which is
+  where the C's own common.c reaches them: COM_FindFile's loose-file branch
+  is `com_filesize = Sys_FileOpenRead (netpath, &i)`, COM_LoadPackFile opens
+  its pak with Sys_FileOpenRead, COM_LoadFile reads with Sys_FileRead, and
+  COM_CloseFile ends in Sys_FileClose (common.c:1452, 1630, 1574, 1518).
+  There is therefore ONE handle table for `int` handles in this port, the
+  one src/platform/sys.ts owns (fd + read/write cursor, since node has no
+  bare lseek), and a pak's shared fd (pack_t.handle) behaves exactly like
+  the C's shared-descriptor reads -- including its "two simultaneous readers
+  into the same pak clobber each other's position" quirk. This file kept a
+  second, private table of its own until Q026, from before src/platform/sys.ts
+  had file I/O (its own header note said to replace it once that landed);
+  the two tables were both keyed by the real fd, so a handle opened by
+  src/qw/common.ts (which always used sys.ts's) landed in neither this
+  module's table nor its reads. `node:fs` is still used directly for the
+  handle-less paths the C also does by hand (COM_CopyFile, COM_WriteFile's
+  Sys_FileOpenWrite companion helpers, COM_FOpenFile's `FILE*` stand-in).
 - `host_parms` (host.c's quakeparms_t, populated from argv before
   COM_InitFilesystem runs) has no owner yet (host.ts is U035). A local
   `QuakeParmsT` instance is declared here as a placeholder default source for
@@ -107,7 +115,7 @@ Deviations from PORTING.md / the C source:
 import { GAMENAME, MAX_NUM_ARGVS, QuakeParmsT } from "./quakedef";
 import { CRC_Init, CRC_ProcessByte } from "./crc";
 import { Con_Printf } from "../client/console";
-import { Sys_Error, Sys_FileRead, Sys_FileSeek, Sys_Printf } from "../platform/sys";
+import { Sys_Error, Sys_FileClose, Sys_FileOpenRead, Sys_FileRead, Sys_FileSeek, Sys_Printf } from "../platform/sys";
 import { Com_sprintf } from "./sprintf";
 import type { CvarT } from "./cvar";
 import type * as CvarModule from "./cvar";
@@ -688,35 +696,6 @@ const pop: readonly number[] = [
 export { pop };
 
 //============================================================================
-// file handle table -- see file header ("File I/O primitives...").
-
-class HandleEntry {
-  fd: number;
-  pos: number;
-  isPack: boolean;
-  constructor(fd: number, pos: number, isPack: boolean) {
-    this.fd = fd;
-    this.pos = pos;
-    this.isPack = isPack;
-  }
-}
-
-const handleTable = new Map<number, HandleEntry>();
-
-function handleRead(handle: number, buf: Uint8Array, len: number): number {
-  const entry = handleTable.get(handle);
-  // A pack opened by src/qw/common.ts's COM_LoadPackFile (the qwcl/qwsv
-  // binaries' own filesystem) lives in src/platform/sys.ts's file table, not
-  // this one, and COM_FindFile below hands its `pack.handle` straight back
-  // for a pak hit -- both tables are keyed by the real fd, so a handle is in
-  // exactly one of them. Without this the read silently returns a zero-filled
-  // buffer for every pak-resident file the shared modules load (wad.ts's
-  // W_LoadWadFile, ref_soft/draw.ts's Draw_CachePic, model.ts, snd_mem.ts).
-  if (!entry) return Sys_FileRead(handle, buf, len);
-  const n = readSync(entry.fd, buf, 0, len, entry.pos);
-  entry.pos += n;
-  return n;
-}
 
 function sysFileTime(path: string): number {
   try {
@@ -874,9 +853,7 @@ export function COM_FindFile(
         com_filesize = pak.files[i].filelen;
 
         if (mode === "handle") {
-          const entry = handleTable.get(pak.handle); // Sys_FileSeek (pak->handle, filepos)
-          if (entry) entry.pos = pak.files[i].filepos;
-          else Sys_FileSeek(pak.handle, pak.files[i].filepos); // a src/qw/common.ts pack -- see handleRead
+          Sys_FileSeek(pak.handle, pak.files[i].filepos);
           return { handle: pak.handle, length: com_filesize };
         }
 
@@ -922,9 +899,13 @@ export function COM_FindFile(
       com_filesize = length;
 
       if (mode === "handle") {
-        const fd = openSync(finalPath, "r");
-        handleTable.set(fd, new HandleEntry(fd, 0, false));
-        return { handle: fd, length };
+        // `com_filesize = Sys_FileOpenRead (netpath, &i); ... *handle = i;`
+        // (the fstat'd size Sys_FileOpenRead returns is the same number the
+        // statSync above produced; the C reads com_filesize off this call,
+        // and -1 from it means "open failed" for both fields.)
+        const { handle, length: openLength } = Sys_FileOpenRead(finalPath);
+        com_filesize = openLength;
+        return { handle, length: openLength };
       }
 
       const fd = openSync(finalPath, "r");
@@ -975,11 +956,7 @@ export function COM_CloseFile(h: number): void {
     if (s.kind === "pack" && s.pack.handle === h) return;
   }
 
-  const entry = handleTable.get(h);
-  if (entry) {
-    closeSync(entry.fd);
-    handleTable.delete(h);
-  }
+  Sys_FileClose(h);
 }
 
 //============================================================
@@ -1008,7 +985,7 @@ function COM_LoadFile(path: string, usehunk: 0 | 1 | 2 | 3): Uint8Array | null {
 
   buf[len] = 0;
 
-  handleRead(h, buf, len);
+  Sys_FileRead(h, buf, len);
   COM_CloseFile(h);
 
   return buf;
@@ -1048,16 +1025,14 @@ export function COM_LoadStackFile(path: string): Uint8Array | null {
 //=================
 
 export function COM_LoadPackFile(packfile: string): PackT | null {
-  let fd: number;
-  try {
-    fd = openSync(packfile, "r");
-  } catch {
+  const { handle: fd } = Sys_FileOpenRead(packfile);
+  if (fd === -1) {
     //              Con_Printf ("Couldn't open %s\n", packfile);
     return null;
   }
 
   const headerBuf = new Uint8Array(DPACKHEADER_T_SIZE);
-  readSync(fd, headerBuf, 0, DPACKHEADER_T_SIZE, 0);
+  Sys_FileRead(fd, headerBuf, DPACKHEADER_T_SIZE);
   const header = readDpackheader(headerBuf);
 
   if (header.id !== "PACK") Sys_Error("%s is not a packfile", packfile);
@@ -1069,7 +1044,8 @@ export function COM_LoadPackFile(packfile: string): PackT | null {
   if (numpackfiles !== PAK0_COUNT) com_modified = true; // not the original file
 
   const info = new Uint8Array(header.dirlen);
-  readSync(fd, info, 0, header.dirlen, header.dirofs);
+  Sys_FileSeek(fd, header.dirofs);
+  Sys_FileRead(fd, info, header.dirlen);
 
   // crc the directory to check for modifications
   let crc = CRC_Init();
@@ -1082,8 +1058,6 @@ export function COM_LoadPackFile(packfile: string): PackT | null {
     const rec = readDpackfile(info, i * DPACKFILE_T_SIZE);
     files.push({ name: rec.name, filepos: rec.filepos, filelen: rec.filelen });
   }
-
-  handleTable.set(fd, new HandleEntry(fd, 0, true));
 
   const pack: PackT = { filename: packfile, handle: fd, numfiles: numpackfiles, files };
 
@@ -1204,7 +1178,7 @@ export function COM_CheckRegistered(): void {
   }
 
   const check = new Uint8Array(256); // unsigned short check[128]
-  handleRead(h, check, 256);
+  Sys_FileRead(h, check, 256);
   COM_CloseFile(h);
 
   const checkView = new DataView(check.buffer);

@@ -120,6 +120,7 @@ import { vidBackend, VrectT } from "../client/vid";
 import { scr_fov, scr_viewsize } from "../client/screen";
 import { lcd_x, V_SetContentsColor } from "../client/view";
 import { R_ClearParticles, R_DrawParticles, R_InitParticles, R_ReadPointFile_f } from "../client/r_part";
+import type * as QwRPartModule from "../qw/client/r_part";
 import { S_ExtraUpdate } from "../client/snd_dma";
 import {
   AlightT,
@@ -222,6 +223,19 @@ export const r_zgraph = new CvarT("r_zgraph", "0");
 // qw.active.
 export const r_worldentity = new EntityT();
 
+// QW/client/r_part.c is a wholesale-different file (see src/qw/client/r_part.ts's
+// own Q023b ruling): its own particle pool, `host_frametime` where WinQuake's
+// R_DrawParticles reads `cl.time - cl.oldtime`, and a literal 800 gravity.
+// r_main.c is compiled once per tree and linked against the r_part.c of its own
+// tree, so under qw.active every particle entry point below has to reach the QW
+// module -- the pool QW's cl_tent.c/cl_ents.c fill is otherwise not the pool
+// this renderer initializes, clears and draws. Resolved lazily with Bun's
+// synchronous require() rather than a static import, the same mechanism
+// src/ref_soft/r_alias.ts uses for src/qw/client/skin.ts.
+function qwRPartMod(): typeof QwRPartModule {
+  return require("../qw/client/r_part");
+}
+
 /*
 ===============
 R_Init
@@ -231,7 +245,7 @@ export function R_Init(): void {
   R_InitTurb();
 
   Cmd_AddCommand("timerefresh", R_TimeRefresh_f);
-  Cmd_AddCommand("pointfile", R_ReadPointFile_f);
+  Cmd_AddCommand("pointfile", qw.active ? qwRPartMod().R_ReadPointFile_f : R_ReadPointFile_f);
 
   Cvar_RegisterVariable(r_draworder);
   Cvar_RegisterVariable(r_speeds);
@@ -278,7 +292,8 @@ export function R_Init(): void {
   r_refdef.xOrigin = XCENTERING;
   r_refdef.yOrigin = YCENTERING;
 
-  R_InitParticles();
+  if (qw.active) qwRPartMod().R_InitParticles();
+  else R_InitParticles();
 
   D_Init();
 }
@@ -306,7 +321,8 @@ export function R_NewMap(): void {
   for (i = 0; i < worldmodel.numleafs; i++) worldmodel.leafs[i].efrags = null;
 
   rState.r_viewleaf = null;
-  R_ClearParticles();
+  if (qw.active) qwRPartMod().R_ClearParticles();
+  else R_ClearParticles();
 
   rState.r_cnumsurfs = r_maxsurfs.value | 0;
 
@@ -999,7 +1015,8 @@ export function R_RenderView_(): void {
     rState.dp_time1 = Sys_FloatTime();
   }
 
-  R_DrawParticles();
+  if (qw.active) qwRPartMod().R_DrawParticles();
+  else R_DrawParticles();
 
   if (r_dspeeds.value) rState.dp_time2 = Sys_FloatTime();
 

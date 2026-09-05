@@ -500,6 +500,48 @@ describe("COM_InitFilesystem / COM_Gamedir", () => {
 
 //============================================================================
 
+/*
+Q026: the qwcl/qwsv filesystem is src/qw/common.ts's (its COM_LoadPackFile
+opens the pak through src/platform/sys.ts's Sys_FileOpenRead), but every
+shared module -- src/common/model.ts, src/common/wad.ts, cmd.ts's Cmd_Exec_f,
+snd_mem.ts, the renderers' Draw_CachePic -- reads through
+src/common/common.ts's COM_LoadFile family. src/common/common.ts kept a
+second, private fd table until Q026 and its reads went through it, so a pak
+opened by the QW module was in neither: every pak-resident read came back as
+a zero-filled buffer. Both modules now share the one table sys.ts owns, which
+is also where the C's own common.c keeps its handles (common.c:1452/1630).
+*/
+describe("a pak opened by the QW filesystem reads back through src/common/common.ts", () => {
+  test("COM_LoadHunkFile of a pak-resident file returns the real bytes, not zeros", () => {
+    const baseDir = join(scratchDir, "qwpakread");
+    ensureDir(join(baseDir, "id1"));
+    ensureDir(join(baseDir, "qw"));
+
+    const payload = latin1Bytes("PAKPAYLOAD-0123456789");
+    writePakToDisk(join(baseDir, "qw", "pak0.pak"), [
+      { name: "gfx/palette.lmp", data: payload },
+      { name: "maps/qwpak.bsp", data: latin1Bytes("BSPBYTES") },
+    ]);
+
+    COM_InitArgv(["quake", "-basedir", baseDir]);
+    COM_InitFilesystem(); // src/qw/common.ts's -- the qwcl/qwsv one
+
+    const data = SharedCOM_LoadHunkFile("gfx/palette.lmp");
+    if (data === null) throw new Error("expected gfx/palette.lmp to be found in the QW pak");
+    // COM_LoadFile always appends a trailing 0 byte
+    expect(data.length).toBe(payload.length + 1);
+    expect(bytesToLatin1(data.subarray(0, payload.length))).toBe("PAKPAYLOAD-0123456789");
+
+    // a second read of a different file in the same pak, through the same
+    // shared fd: the seek-then-read pair has to land on the new file's offset
+    const second = SharedCOM_LoadHunkFile("maps/qwpak.bsp");
+    if (second === null) throw new Error("expected maps/qwpak.bsp to be found in the QW pak");
+    expect(bytesToLatin1(second.subarray(0, 8))).toBe("BSPBYTES");
+  });
+});
+
+//============================================================================
+
 describe("pop.lmp registration recipe (as test/host.test.ts) and the loose-file-with-slash rule", () => {
   // gfx/pop.lmp: the registered-version check's 128 big-endian shorts,
   // exactly test/host.test.ts's own recipe.

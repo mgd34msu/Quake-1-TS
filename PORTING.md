@@ -33,6 +33,12 @@ scope entirely.
   (`soft` | `gl`, archived, default `soft`), with the same load/fallback mechanics as
   Quake 2's `VID_CheckChanges`. This is a documented addition, the only new
   user-facing cvar the port introduces.
+- Because `VID_Init` reads `vid_ref` before `quake.rc` (and so before `stuffcmds`
+  runs any `+` argument), the renderer is also selectable with a command-line parm,
+  `-vid_ref <soft|gl>`, read by `COM_CheckParm` inside `VID_Init` itself -- the same
+  pre-init convention WinQuake uses for `-dedicated`, `-mem` and vid_x.c's
+  `-width`/`-height`/`-winsize`; `vid_restart` after setting the cvar is the runtime
+  path. All three binaries honour it.
 
 ## Directory and file mapping (WinQuake)
 

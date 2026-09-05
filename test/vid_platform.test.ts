@@ -28,6 +28,11 @@ import type { QpicT } from "../src/common/wad";
 import { d_8to24table, vid, vidBackend, vidMenuHooks } from "../src/client/vid";
 import { inputBackend } from "../src/client/input";
 import { conState } from "../src/client/console";
+import { COM_InitArgv, com_argc, com_argv } from "../src/common/common";
+import { cls, CactiveT } from "../src/client/client";
+import { hostClientHooks } from "../src/common/host";
+import { SCR_Init, SCR_UpdateScreen } from "../src/client/screen";
+import { scrState } from "../src/client/screen_types";
 import { cmdHost } from "../src/common/cmd";
 import { rState } from "../src/ref_soft/r_shared";
 import { SDL_ResetBackendForTests } from "../src/platform/sdl";
@@ -138,6 +143,10 @@ const fakeRenderer: Renderer = {
   SCR_ScreenShot_f(): void {},
 };
 
+// the same fake, but reporting itself as the GL renderer: registered under
+// "gl" below so "fell back to soft" is observable as re.current.isGL === false
+const fakeGlRenderer: Renderer = { ...fakeRenderer, isGL: true };
+
 const savedCmdInitialized = cmdHost.initialized;
 const savedRe = re.current;
 const savedVidBackend = vidBackend.current;
@@ -232,6 +241,65 @@ describe("VID_Init -- the 8-bit buffer and palette upload", () => {
   });
 });
 
+/*
+Q026: `+vid_ref gl` on the command line cannot pick the renderer -- the "+"
+arguments only run once quake.rc executes stuffcmds, long after Host_Init has
+called VID_Init. `-vid_ref <name>` is read by COM_CheckParm inside VID_Init
+itself, before the renderer is chosen.
+*/
+describe("VID_Init -- the -vid_ref command-line parm", () => {
+  const savedArgv = com_argv.slice();
+  const savedArgc = com_argc;
+  const palette = new Uint8Array(768);
+
+  function restoreArgv(): void {
+    COM_InitArgv(["quake", ...savedArgv.slice(1, savedArgc)]);
+  }
+
+  afterAll(() => {
+    restoreArgv();
+    vid_ref.string = "soft";
+    vid_ref.value = 0;
+  });
+
+  test("-vid_ref soft selects the software renderer", () => {
+    registerRenderer("soft", () => fakeRenderer);
+    registerRenderer("gl", () => fakeGlRenderer);
+    vid_ref.string = "gl"; // a stale value the parm has to override
+    cmdHost.initialized = false;
+
+    COM_InitArgv(["quake", "-vid_ref", "soft"]);
+    try {
+      expect(() => VID_Init(palette)).not.toThrow();
+    } finally {
+      restoreArgv();
+    }
+
+    expect(vid_ref.string).toBe("soft");
+    expect(re.current).toBe(fakeRenderer);
+    expect(re.current?.isGL).toBe(false);
+  });
+
+  test("-vid_ref gl asks for GL and lands on the soft fallback under the dummy driver", () => {
+    registerRenderer("soft", () => fakeRenderer);
+    registerRenderer("gl", () => fakeGlRenderer);
+    vid_ref.string = "soft";
+    cmdHost.initialized = false;
+
+    COM_InitArgv(["quake", "-vid_ref", "gl"]);
+    try {
+      expect(() => VID_Init(palette)).not.toThrow();
+    } finally {
+      restoreArgv();
+    }
+
+    // the dummy video driver has no GL, so VID_CheckChanges's fallback runs
+    expect(vid_ref.string).toBe("soft");
+    expect(re.current).toBe(fakeRenderer);
+    expect(re.current?.isGL).toBe(false);
+  });
+});
+
 describe("VID_CheckChanges -- the vid_ref renderer registry", () => {
   test("registering a fake renderer under \"soft\" installs it, and its modelHooks, together", () => {
     registerRenderer("soft", () => fakeRenderer);
@@ -273,28 +341,53 @@ describe("VID_CheckChanges -- the vid_ref renderer registry", () => {
 
   test("a \"gl\" selection that fails under the dummy video driver falls back to soft without throwing", () => {
     const realGl = getRegisteredRenderer("gl");
-    registerRenderer("gl", () => fakeRenderer);
+    registerRenderer("gl", () => fakeGlRenderer);
     const original = vid_ref.string;
     vid_ref.string = "gl";
-    // glimp.ts's GLimp_SetMode Con_Printf's the mode it is about to try
-    // before it knows whether the attempt fails; console.ts's Con_Printf
-    // re-enters SCR_UpdateScreen (-> getRenderer()) whenever
-    // conState.con_initialized is true and the client is not fully signed
-    // on (cls.signon !== SIGNONS, true here since this suite runs no real
-    // client). con_initialized is a shared process-wide flag several other
-    // test files' own real Host_Init calls leave true (Con_Init runs even
-    // on a dedicated boot), so it may already be true here regardless of
-    // this file's own setup -- forcing it false for this call's duration is
-    // this test's own guard against that reentrancy hazard, per standing
-    // order 15.
+    // Q026: glimp.ts's GLimp_SetMode Con_Printf's the mode it is about to
+    // try before it knows whether the attempt fails, and by then
+    // VID_CheckChanges has already dropped re.current. console.ts's
+    // Con_Printf re-enters SCR_UpdateScreen (-> getRenderer(), which
+    // Sys_Errors "No renderer is loaded") whenever conState.con_initialized
+    // is true and the client is not fully signed on -- which is exactly the
+    // state a `vid_restart gl` from the console is in. Both are forced ON
+    // here so the switch really runs through that window; what keeps it from
+    // throwing is VID_CheckChanges setting scrState.scr_disabled_for_loading
+    // for the duration, the same guard screen.c's SCR_UpdateScreen honours in
+    // both trees. Every flag touched is a shared process-wide singleton, so
+    // each is saved and restored (rule 15).
     const savedConInitialized = conState.con_initialized;
-    conState.con_initialized = false;
+    const savedSignon = cls.signon;
+    const savedClsState = cls.state;
+    const savedScrDisabled = scrState.scr_disabled_for_loading;
+    const savedScrHook = hostClientHooks.scrUpdateScreen;
+    const savedCmdInit = cmdHost.initialized;
+    conState.con_initialized = true;
+    cls.signon = 0; // !== SIGNONS: Con_Printf takes its screen-update branch
+    cls.state = CactiveT.ca_disconnected; // SCR_UpdateScreen returns early on ca_dedicated
+    scrState.scr_disabled_for_loading = false;
+    // what Host_Init does on a real client boot: SCR_Init sets screen.ts's
+    // private scr_initialized (without which SCR_UpdateScreen returns before
+    // getRenderer()), and screen.ts installs the hook Con_Printf calls. Both
+    // are set up here rather than assumed, per standing order 13.
+    cmdHost.initialized = false;
+    SCR_Init();
+    hostClientHooks.scrUpdateScreen = SCR_UpdateScreen;
     try {
       expect(() => VID_CheckChanges()).not.toThrow();
-      expect(vid_ref.string).toBe("soft"); // the direct-field fallback, see vid.ts's own comment on why this isn't Cvar_Set
-      expect(re.current).toBe(fakeRenderer);
+      expect(vid_ref.string).toBe("soft"); // Cvar_Set("vid_ref", "soft"), quake-2-ts's VID_CheckChanges fallback
+      expect(re.current).not.toBeNull();
+      expect(re.current).toBe(fakeRenderer); // the "soft" registration, not the "gl" one
+      expect(re.current?.isGL).toBe(false);
+      // restored to what it was, not left disabled
+      expect(scrState.scr_disabled_for_loading).toBe(false);
     } finally {
       conState.con_initialized = savedConInitialized;
+      cls.signon = savedSignon;
+      cls.state = savedClsState;
+      scrState.scr_disabled_for_loading = savedScrDisabled;
+      hostClientHooks.scrUpdateScreen = savedScrHook;
+      cmdHost.initialized = savedCmdInit;
       restoreRenderer("gl", realGl);
       if (vid_ref.string !== "soft") vid_ref.string = original;
     }

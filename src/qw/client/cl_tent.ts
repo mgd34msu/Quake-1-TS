@@ -87,13 +87,17 @@ Deviations from PORTING.md / the C source:
   textually identical structs, confirmed by reading both), for the
   `cl_beams` array below; only the array and its `MAX_BEAMS` size are this
   module's own, per the deviation above.
-- `Mod_ForName`, `R_RunParticleEffect`/`R_ParticleExplosion`/
-  `R_BlobExplosion`/`R_LavaSplash`/`R_TeleportSplash`, `S_PrecacheSound`/
-  `S_StartSound`: shared, one-engine modules (src/common/model.ts,
-  src/client/r_part.ts, src/client/snd_dma.ts) -- particle simulation and
-  sound are not QW-specific per PORTING.md's renderer-seam section, so these
-  import directly from the landed WinQuake modules, not through a QW
-  wrapper.
+- `Mod_ForName`, `S_PrecacheSound`/`S_StartSound`: shared, one-engine modules
+  (src/common/model.ts, src/client/snd_dma.ts) -- sound is not QW-specific
+  per PORTING.md's renderer-seam section, so these import directly from the
+  landed WinQuake modules, not through a QW wrapper.
+- `R_RunParticleEffect`/`R_ParticleExplosion`/`R_BlobExplosion`/
+  `R_LavaSplash`/`R_TeleportSplash` come from ./r_part (QW/client/r_part.c,
+  which QW/client/cl_tent.c is compiled and linked against), NOT from
+  src/client/r_part.ts: r_part.c is one of the wholesale-different files
+  (see src/qw/client/r_part.ts's own Q023b ruling), and the two modules own
+  separate particle pools, so mixing them would spawn particles into a pool
+  the qwcl renderer never draws.
 */
 
 import { Con_Printf } from "./console";
@@ -121,7 +125,7 @@ import { BeamT, cl, cl_visedicts, clState, MAX_VISEDICTS } from "../../client/cl
 import { EntityT } from "../../client/render";
 import { vid } from "../../client/vid";
 import { CL_AllocDlight } from "./cl_ents";
-import { R_BlobExplosion, R_LavaSplash, R_ParticleExplosion, R_RunParticleEffect, R_TeleportSplash } from "../../client/r_part";
+import { R_BlobExplosion, R_LavaSplash, R_ParticleExplosion, R_RunParticleEffect, R_TeleportSplash } from "./r_part";
 import { S_PrecacheSound, S_StartSound } from "../../client/snd_dma";
 import type { SfxT } from "../../client/sound";
 

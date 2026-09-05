@@ -128,7 +128,7 @@ import { Sys_Error, Sys_FileTime, Sys_SendKeyEvents } from "../../platform/sys";
 import { CactiveT, cl, cls } from "../../client/client";
 import { Con_CheckResize, Con_ClearNotify, Con_DrawConsole, Con_DrawNotify, Con_Printf, conState } from "./console";
 import { K_ESCAPE, KeydestT, keyState, key_lastpress } from "../../client/keys";
-import { M_Draw } from "../../client/menu";
+import { M_Draw } from "./menu"; // QW/client/screen.c:1119 links QW/client/menu.c, not WinQuake's
 import { getRenderer, r_netgraph } from "../../client/render";
 import { scr_fov, scr_viewsize } from "../../client/screen"; // one object per cvar name -- see the block below
 import { scrState, scr_vrect } from "../../client/screen_types";

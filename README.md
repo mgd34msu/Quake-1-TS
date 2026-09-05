@@ -17,7 +17,8 @@ QuakeWorld client and server.
 - Bug-for-bug fidelity to the C where observable; deviations documented
   in file headers and `PORTING.md`
 - Both renderers selectable at runtime through the one cvar this port
-  adds: `vid_ref soft` (default) / `vid_ref gl`
+  adds: `vid_ref soft` (default) / `vid_ref gl`, seeded at startup by the
+  `-vid_ref <name>` command-line parm
 
 ## Running
 
@@ -27,7 +28,7 @@ installation) in `id1/` under the base directory, and libSDL2.
 ```sh
 bun install
 bun src/main.ts -basedir /path/to/quake                # software renderer
-bun src/main.ts -basedir /path/to/quake +vid_ref gl    # OpenGL renderer
+bun src/main.ts -basedir /path/to/quake -vid_ref gl    # OpenGL renderer
 bun src/main.ts -dedicated 1 -basedir /path/to/quake +map start
 bun run build            # standalone binary: ./q1ts
 ```
@@ -84,9 +85,10 @@ downloaded into `qw/` on connect). `-game` is forced to `qw`, exactly as the
 original client does.
 
 `vid_ref` (`soft` by default, or `gl`) selects the renderer here too. It is
-read once while the client starts up, before `quake.rc` runs, so a renderer
-change takes effect from the video menu's Apply or a `vid_restart` at the
-console rather than from `+vid_ref` on the command line.
+read once while the client starts up, before `quake.rc` runs, so `+vid_ref gl`
+on the command line comes too late: pick the renderer at startup with the
+`-vid_ref <soft|gl>` parm (all three binaries), or change it later from the
+video menu's Apply or a `vid_restart` at the console.
 
 ## License
 

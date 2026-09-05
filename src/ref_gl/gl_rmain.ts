@@ -201,6 +201,7 @@ import { d_8to24table, vid } from "../client/vid";
 import { chase_active } from "../client/chase";
 import { gl_cshiftpercent, V_SetContentsColor } from "../client/view";
 import { R_DrawParticles } from "../client/r_part";
+import type * as QwRPartModule from "../qw/client/r_part";
 import { S_ExtraUpdate } from "../client/snd_dma";
 import {
   ANORM_DOTS_ROW,
@@ -1033,6 +1034,19 @@ export function R_SetupGL(): void {
   qgl().qglEnable(GL_DEPTH_TEST);
 }
 
+// QW/client/r_part.c is a wholesale-different file (see src/qw/client/r_part.ts's
+// own Q023b ruling): its own particle pool, `host_frametime` where WinQuake's
+// R_DrawParticles reads `cl.time - cl.oldtime`, and a literal 800 gravity.
+// gl_rmain.c is compiled once per tree and linked against the r_part.c of its
+// own tree, so under qw.active the call below has to reach the QW module -- the
+// pool QW's cl_tent.c/cl_ents.c fill is otherwise not the pool this renderer
+// draws. Resolved lazily with Bun's synchronous require() rather than a static
+// import, the same mechanism src/ref_soft/r_alias.ts uses for
+// src/qw/client/skin.ts.
+function qwRPartMod(): typeof QwRPartModule {
+  return require("../qw/client/r_part");
+}
+
 /*
 ================
 R_RenderScene
@@ -1059,7 +1073,8 @@ export function R_RenderScene(): void {
 
   R_RenderDlights();
 
-  R_DrawParticles();
+  if (qw.active) qwRPartMod().R_DrawParticles();
+  else R_DrawParticles();
 }
 
 let trickframe = 0;

@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll, spyOn } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { COM_CheckRegistered, COM_InitArgv, COM_InitFilesystem, pop } from "../src/common/common";
@@ -46,6 +46,10 @@ import {
   r_aliasstats,
 } from "../src/ref_soft/r_main";
 import { R_SetUpFrustumIndexes, R_TransformFrustum } from "../src/ref_soft/r_misc";
+import { r_worldentity } from "../src/ref_soft/r_main";
+import { qw } from "../src/common/quakedef";
+import * as winRPart from "../src/client/r_part";
+import * as qwRPart from "../src/qw/client/r_part";
 import { softRenderer } from "../src/ref_soft/ref_soft";
 import { buildBsp, ensureDir, writeGameFile } from "./support/bsp_builder";
 import { writePakToDisk } from "./support/pak_builder";
@@ -652,5 +656,92 @@ describe("EndFrame", () => {
     expect(updates[0].y).toBe(12);
     expect(updates[0].width).toBe(304);
     expect(updates[0].height).toBe(152);
+  });
+});
+
+/*
+Q026: r_main.c is compiled once per tree and linked against the r_part.c of
+its own tree; under qw.active the particle entry points must reach
+src/qw/client/r_part.ts (its own pool, its own gravity/frametime), not
+src/client/r_part.ts. Both modules are spied so "the QW one ran" and "the
+WinQuake one did not" are both real assertions (rule 15: mockImplementation
+spies installed in beforeAll, restored in afterAll; qw.active restored too).
+*/
+describe("particle entry points under qw.active", () => {
+  const qwClearSpy = spyOn(qwRPart, "R_ClearParticles");
+  const qwDrawSpy = spyOn(qwRPart, "R_DrawParticles");
+  const winClearSpy = spyOn(winRPart, "R_ClearParticles");
+  const winDrawSpy = spyOn(winRPart, "R_DrawParticles");
+  const savedQwActive = qw.active;
+
+  beforeAll(() => {
+    qwClearSpy.mockImplementation(() => {});
+    qwDrawSpy.mockImplementation(() => {});
+    winClearSpy.mockImplementation(() => {});
+    winDrawSpy.mockImplementation(() => {});
+  });
+
+  afterAll(() => {
+    qwClearSpy.mockRestore();
+    qwDrawSpy.mockRestore();
+    winClearSpy.mockRestore();
+    winDrawSpy.mockRestore();
+    qw.active = savedQwActive;
+    r_worldentity.model = null;
+  });
+
+  test("R_NewMap calls the QW module's R_ClearParticles, not WinQuake's", () => {
+    const world = cl.worldmodel;
+    expect(world).not.toBeNull();
+    if (!world) return;
+
+    qwClearSpy.mockClear();
+    winClearSpy.mockClear();
+    qw.active = true;
+    try {
+      R_NewMap();
+    } finally {
+      qw.active = false;
+    }
+
+    expect(qwClearSpy).toHaveBeenCalledTimes(1);
+    expect(winClearSpy).not.toHaveBeenCalled();
+  });
+
+  test("R_NewMap without qw.active still calls WinQuake's", () => {
+    qwClearSpy.mockClear();
+    winClearSpy.mockClear();
+
+    R_NewMap();
+
+    expect(winClearSpy).toHaveBeenCalledTimes(1);
+    expect(qwClearSpy).not.toHaveBeenCalled();
+  });
+
+  test("a full R_RenderView frame calls the QW module's R_DrawParticles, not WinQuake's", () => {
+    const world = cl.worldmodel;
+    expect(world).not.toBeNull();
+    if (!world) return;
+
+    // QW r_main.c's R_RenderView_ checks r_worldentity.model, not
+    // cl_entities[0].model (r_main.ts's own qw.active fold)
+    r_worldentity.model = world;
+    cl_entities[0].model = world;
+    cl.viewentity = 0;
+    cl.maxclients = 1;
+    cl.intermission = 0;
+    clState.cl_numvisedicts = 0;
+
+    qwDrawSpy.mockClear();
+    winDrawSpy.mockClear();
+    qw.active = true;
+    try {
+      R_RenderView();
+    } finally {
+      qw.active = false;
+    }
+
+    expect(qwDrawSpy).toHaveBeenCalledTimes(1);
+    expect(winDrawSpy).not.toHaveBeenCalled();
   });
 });

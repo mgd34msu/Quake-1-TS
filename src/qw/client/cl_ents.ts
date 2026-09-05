@@ -66,7 +66,7 @@ import { CactiveT, cl, cl_dlights, cl_visedicts, cls, clState, DlightT, MAX_DLIG
 import { EntityT, re } from "../../client/render";
 import { vid } from "../../client/vid";
 import { V_CalcRoll } from "../../client/view";
-import { R_RocketTrail } from "../../client/r_part";
+import { R_RocketTrail } from "./r_part";
 import { Con_DPrintf, Con_Printf } from "./console";
 import { Cvar_FindVar } from "../../common/cvar";
 import { Sys_Error } from "../../platform/sys";
