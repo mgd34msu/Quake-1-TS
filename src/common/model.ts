@@ -229,7 +229,8 @@ export class TextureT {
 }
 
 // gl_model.h's glpoly_t is renderer-private; ref_gl narrows it back out.
-export type GlpolyT = unknown;
+import type { GlpolyT } from "../ref_gl/gl_model_types";
+export type { GlpolyT };
 
 // efrag_t is declared in render.h and only the client ever touches it.
 export type { EfragT };
@@ -255,7 +256,7 @@ export class MsurfaceT {
   light_s = 0; // gl lightmap coordinates
   light_t = 0;
 
-  polys: GlpolyT = null; // multiple if warped
+  polys: GlpolyT | null = null; // multiple if warped
   texturechain: MsurfaceT | null = null;
 
   texinfo: MtexinfoT | null = null;
