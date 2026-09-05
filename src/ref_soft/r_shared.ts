@@ -371,7 +371,7 @@ export type RStateT = {
   r_dlightframecount: number;
 
   // r_efrag.c
-  r_pefragtopnode: MnodeT | null;
+  r_pefragtopnode: MnodeT | MleafT | null;
 
   // r_sky.c
   r_skymade: number;

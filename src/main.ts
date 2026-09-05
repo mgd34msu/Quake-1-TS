@@ -98,6 +98,10 @@ import "./client/screen";
 import "./client/view";
 import "./client/r_part";
 import "./client/snd_dma";
+// The renderers register themselves with src/platform/vid.ts's registry at
+// module load (the C links exactly one; this port links both and selects by
+// vid_ref).
+import "./ref_soft/ref_soft";
 
 let landriverRegistered = false;
 

@@ -210,7 +210,7 @@ export class EntityT {
 
   // FIXME: could turn these into a union
   trivial_accept = 0;
-  topnode: MnodeT | null = null; // for bmodels, first world node
+  topnode: MnodeT | MleafT | null = null; // for bmodels, first world node (mnode_t * in C, but a leaf when the bbox never straddles a plane)
   //  that splits bmodel, or NULL if
   //  not split
 
