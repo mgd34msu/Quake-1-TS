@@ -107,6 +107,14 @@ let cvarInfoHook: CvarInfoHook | null = null;
 export function setCvarInfoHook(fn: CvarInfoHook | null): void {
   cvarInfoHook = fn;
 }
+// Test-only getter: a suite that temporarily swaps this process-wide
+// singleton (e.g. to install its own binary's hook for a few tests, when
+// both qwcl's and qwsv's modules happen to share this one test process)
+// needs to restore whatever was ambient before it touched it, not assume
+// null, per this project's test hygiene rule 15.
+export function getCvarInfoHook(): CvarInfoHook | null {
+  return cvarInfoHook;
+}
 
 // cvar_t *cvar_vars;
 export let cvar_vars: CvarT | null = null;

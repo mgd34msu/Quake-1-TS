@@ -87,14 +87,17 @@ Deviations from PORTING.md / the C source:
   already uses for this exact purpose (cmd.h's contract does not require an
   exported `Q_strcasecmp`).
 - `Cmd_Init`: registers QW's own command set, in QW's own order (`stuffcmds`,
-  `exec`, `echo`, `alias`, `wait`, then `cmd` under `#ifndef SERVERONLY` --
-  `#ifdef SERVERONLY`'s qwsv variant, which never registers "cmd" at all, is
-  qwsv's own unit, not this one), all through src/common/cmd.ts's shared
-  `Cmd_AddCommand` (the one registry every subsystem's commands land in).
-  `echo`/`alias`/`wait` are registered with the re-exported, unchanged
-  function bodies; `exec`/`cmd` are registered with this file's own fresh
-  bodies, and `stuffcmds` with the now-shared, qw.active-aware
-  `Cmd_StuffCmds_f`.
+  `exec`, `echo`, `alias`, `wait`, then `cmd` under `#ifndef SERVERONLY`),
+  all through src/common/cmd.ts's shared `Cmd_AddCommand` (the one registry
+  every subsystem's commands land in). `echo`/`alias`/`wait` are registered
+  with the re-exported, unchanged function bodies; `exec`/`cmd` are
+  registered with this file's own fresh bodies, and `stuffcmds` with the
+  now-shared, qw.active-aware `Cmd_StuffCmds_f`. `#ifndef SERVERONLY`/
+  `#ifdef SERVERONLY` becomes the runtime flag `qw.serveronly`
+  (src/common/quakedef.ts, same "no C source line" idiom as `qw.active`):
+  qwsv (src/qw/server/sv_main.ts's SV_Init) calls this same Cmd_Init and
+  must not register "cmd" at all, so the registration is gated on
+  `!qw.serveronly` rather than split into a second Cmd_Init.
 */
 
 import { Con_Printf } from "../client/console";
@@ -102,6 +105,7 @@ import { Hunk_LowMark, Hunk_FreeToLowMark } from "../common/zone";
 import { COM_LoadHunkFile } from "../common/common";
 import { CvarT } from "../common/cvar";
 import { developer } from "../common/host";
+import { qw } from "../common/quakedef";
 import { SizeBuf, MSG_WriteByte, SZ_Print } from "../common/sizebuf";
 import { cls, CactiveT } from "../client/client";
 import { ClcOpsT } from "./protocol";
@@ -298,5 +302,6 @@ export function Cmd_Init(): void {
   Cmd_AddCommand("echo", Cmd_Echo_f);
   Cmd_AddCommand("alias", Cmd_Alias_f);
   Cmd_AddCommand("wait", Cmd_Wait_f);
-  Cmd_AddCommand("cmd", Cmd_ForwardToServer_f);
+  // #ifndef SERVERONLY -- qwsv (SERVERONLY) never registers "cmd" at all.
+  if (!qw.serveronly) Cmd_AddCommand("cmd", Cmd_ForwardToServer_f);
 }

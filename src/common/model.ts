@@ -126,6 +126,7 @@ import {
   DVERTEX_T_SIZE,
   DclipnodeT,
   DmodelT,
+  HEADER_LUMPS,
   LUMP_CLIPNODES,
   LUMP_EDGES,
   LUMP_ENTITIES,
@@ -163,6 +164,7 @@ import {
 import { ALIAS_VERSION, IDPOLYHEADER, SynctypeT, readMdl } from "./modelgen";
 import { IDSPRITEHEADER, SPRITE_VERSION, readDsprite } from "./spritegn";
 import { COM_FileBase, COM_LoadStackFile } from "./common";
+import { Com_BlockChecksum } from "../qw/md4";
 import { DotProduct, Length, MplaneT, VectorCopy, vec3, type Vec3 } from "./mathlib";
 import { Cache_Check, Cache_Free, CacheUser, Hunk_AllocName } from "./zone";
 import { Sys_Error } from "../platform/sys";
@@ -419,6 +421,17 @@ export class ModelT {
   visdata: Uint8Array | null = null;
   lightdata: Uint8Array | null = null;
   entities: string | null = null;
+
+  // QW/server/model.c's Mod_LoadBrushModel-only fields (`mod->checksum`/
+  // `mod->checksum2`, see that function's file header note): WinQuake's
+  // model.h/gl_model.h never declare them, but Mod_LoadBrushModel is shared
+  // between both engines in this port, so it computes them unconditionally
+  // (cheap; WinQuake simply never reads the fields). `checksum` is an XOR of
+  // Com_BlockChecksum over every header lump except LUMP_ENTITIES;
+  // `checksum2` additionally excludes LUMP_VISIBILITY/LUMP_LEAFS/LUMP_NODES
+  // (sv_init.c's anti-cheat check on the client-server model handshake).
+  checksum = 0;
+  checksum2 = 0;
 
   //
   // additional model data
@@ -1381,6 +1394,8 @@ function copyModel(dst: ModelT, src: ModelT): void {
   dst.visdata = src.visdata;
   dst.lightdata = src.lightdata;
   dst.entities = src.entities;
+  dst.checksum = src.checksum;
+  dst.checksum2 = src.checksum2;
   dst.cache.data = src.cache.data;
 }
 
@@ -1406,6 +1421,22 @@ export function Mod_LoadBrushModel(mod: ModelT, buffer: Uint8Array): void {
   loadState.mod_base = buffer;
 
   // load into heap
+
+  // checksum all of the map, except for entities -- QW/server/model.c's
+  // Mod_LoadBrushModel (this port's Mod_LoadBrushModel is shared, so it
+  // always computes these; see ModelT's checksum/checksum2 field note).
+  let checksum = 0;
+  let checksum2 = 0;
+  for (let i = 0; i < HEADER_LUMPS; i++) {
+    if (i === LUMP_ENTITIES) continue;
+    const lump = header.lumps[i];
+    checksum = (checksum ^ Com_BlockChecksum(buffer.subarray(lump.fileofs, lump.fileofs + lump.filelen), lump.filelen)) >>> 0;
+
+    if (i === LUMP_VISIBILITY || i === LUMP_LEAFS || i === LUMP_NODES) continue;
+    checksum2 = (checksum2 ^ Com_BlockChecksum(buffer.subarray(lump.fileofs, lump.fileofs + lump.filelen), lump.filelen)) >>> 0;
+  }
+  model.checksum = checksum;
+  model.checksum2 = checksum2;
 
   const hooks = modelLoaderHooks;
 

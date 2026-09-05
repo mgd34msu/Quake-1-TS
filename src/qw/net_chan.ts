@@ -147,6 +147,14 @@ export function setNetchanServerHooks(h: NetchanServerHooks | null): void {
 
 export let net_drop = 0; // packets dropped before this one
 
+// net_drop is an exported `let`: TS forbids assigning to an imported binding
+// from another module, but QW/server/sv_user.c's replay loop
+// (`while (net_drop > 2) { ...; net_drop--; }`) decrements the real global
+// in place, not a local copy. This setter lets sv_user.ts do the same.
+export function setNetDrop(n: number): void {
+  net_drop = n;
+}
+
 export const showpackets = new CvarT("showpackets", "0");
 export const showdrop = new CvarT("showdrop", "0");
 export const qport = new CvarT("qport", "0");

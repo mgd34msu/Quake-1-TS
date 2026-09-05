@@ -211,4 +211,9 @@ export class QuakeParmsT {
 // equivalent of the `#ifdef QUAKEWORLD` id never wrote -- the C keeps two
 // separate source trees (WinQuake and QW/client / QW/server) instead. No C
 // source line: this flag exists only in this port.
-export const qw = { active: false };
+// `serveronly`: QW's own `#ifndef SERVERONLY` compile-time split (qwcl links
+// without it, qwsv's Makefile defines it) between the two QW binaries that
+// share this file's `qw.active`-gated deltas. Same "no C source line" idiom
+// as `active` above; default false (qwcl), set true by src/qw/main_sv.ts
+// (qwsv) before Host_Init/SV_Init.
+export const qw = { active: false, serveronly: false };

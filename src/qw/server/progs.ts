@@ -283,3 +283,12 @@ export function PR_ClearEngineStrings(): void {
   engineStrings.length = 0;
   engineStringIndex.clear();
 }
+
+// QW's `int num_prstr` (pr_edict.c/pr_exec.c) has no function of its own in
+// the C -- it is a plain global other files (sv_ccmds.c's SV_Status_f) read
+// directly. This port keeps the count on `engineStrings.length` instead of a
+// separate counter (see file header), so this accessor is that count's
+// public read, named after the C global for callers outside this module.
+export function num_prstr(): number {
+  return engineStrings.length;
+}

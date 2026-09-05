@@ -16,9 +16,10 @@ test exercises is now src/common/cvar.ts's own `Cvar_Set`, folded under the
 Cvar_Set in src/qw/cvar.ts.
 */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { CvarT } from "../src/common/cvar";
 import { qw } from "../src/common/quakedef";
+import * as commonCmdMod from "../src/common/cmd";
 import {
   Cvar_RegisterVariable,
   Cvar_Set,
@@ -31,6 +32,7 @@ import {
 import {
   Cmd_TokenizeString,
   Cmd_ForwardToServer,
+  Cmd_Init,
   qwCmdHooks,
 } from "../src/qw/cmd";
 import { SizeBuf, SZ_Alloc } from "../src/common/sizebuf";
@@ -223,6 +225,52 @@ describe("Cmd_ForwardToServer", () => {
     Cmd_ForwardToServer();
 
     expect(sb.cursize).toBe(0);
+  });
+});
+
+describe("Cmd_Init", () => {
+  // QW/client/cmd.c's Cmd_Init registers "cmd" (Cmd_ForwardToServer_f) inside
+  // `#ifndef SERVERONLY`; src/qw/cmd.ts's Cmd_Init (also called by qwsv's
+  // SV_Init) gates that one registration on the runtime flag
+  // `qw.serveronly`. "cmd" is also registered globally by
+  // src/common/cmd.ts's own Cmd_Init (test/cmd.test.ts calls it at module
+  // load, a process-wide singleton per test hygiene rule 15), so
+  // `Cmd_Exists("cmd")` can't distinguish the two cases here -- this spies
+  // (call-through, restored immediately after each test) on the shared
+  // `Cmd_AddCommand` to see whether Cmd_Init actually asked to register
+  // "cmd" this call, regardless of what was already registered before it.
+  test('registers "cmd" when qw.serveronly is false', () => {
+    const savedServeronly = qw.serveronly;
+    const spy = spyOn(commonCmdMod, "Cmd_AddCommand");
+    try {
+      qw.serveronly = false;
+      Cmd_Init();
+      const names = spy.mock.calls.map(([name]) => name);
+      expect(names).toContain("cmd");
+    } finally {
+      spy.mockRestore();
+      qw.serveronly = savedServeronly;
+    }
+  });
+
+  test('does not register "cmd" when qw.serveronly is true (#ifndef SERVERONLY)', () => {
+    const savedServeronly = qw.serveronly;
+    const spy = spyOn(commonCmdMod, "Cmd_AddCommand");
+    try {
+      qw.serveronly = true;
+      Cmd_Init();
+      const names = spy.mock.calls.map(([name]) => name);
+      expect(names).not.toContain("cmd");
+      // the other four commands are still registered either way
+      expect(names).toContain("stuffcmds");
+      expect(names).toContain("exec");
+      expect(names).toContain("echo");
+      expect(names).toContain("alias");
+      expect(names).toContain("wait");
+    } finally {
+      spy.mockRestore();
+      qw.serveronly = savedServeronly;
+    }
   });
 });
 
