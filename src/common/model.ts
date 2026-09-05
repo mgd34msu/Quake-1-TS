@@ -167,6 +167,7 @@ import { DotProduct, Length, MplaneT, VectorCopy, vec3, type Vec3 } from "./math
 import { Cache_Check, Cache_Free, CacheUser, Hunk_AllocName } from "./zone";
 import { Sys_Error } from "../platform/sys";
 import { Con_Printf } from "../client/console";
+import type { EfragT } from "../client/render";
 
 /*
 
@@ -231,7 +232,7 @@ export class TextureT {
 export type GlpolyT = unknown;
 
 // efrag_t is declared in render.h and only the client ever touches it.
-export type EfragT = unknown;
+export type { EfragT };
 
 export class MsurfaceT {
   visframe = 0; // should be drawn when node is crossed
@@ -292,7 +293,7 @@ export class MleafT extends MnodeBaseT {
   // leaf specific
   visofs = -1;
   compressed_vis: Uint8Array | null = null;
-  efrags: EfragT = null;
+  efrags: EfragT | null = null;
 
   marksurfaces: MsurfaceT[] = []; // the base of the C's msurface_t ** pointer
   firstmarksurface = 0;

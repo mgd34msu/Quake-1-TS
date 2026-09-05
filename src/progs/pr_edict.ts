@@ -44,13 +44,8 @@ Deviations from PORTING.md / the C source:
   because COM_Parse returns null at end of data without touching com_token,
   the last non-null token is kept in a local so the C's
   `if (com_token[0] == '}') break;`-before-`if (!data)` order still holds.
-- `deathmatch.value` (host.c's cvar) and `current_skill` (host_cmd.c's int)
-  are read through `Cvar_VariableValue`: both live in units that are not
-  landed, and both C assignment sites of `current_skill` (sv_main.c's
-  SV_SpawnServer, host_cmd.c's Host_Loadgame_f) do
-  `Cvar_SetValue ("skill", (float)current_skill)` on the line after the
-  assignment, so the `skill` cvar equals `current_skill` at every point
-  ED_LoadFromFile can run.
+- `deathmatch` is host.ts's cvar and `current_skill` is host_cmd.ts's
+  `hostCmdState.current_skill`, exactly the C's globals.
 - `PR_AllocEdicts` has no C counterpart: SV_SpawnServer's
   `sv.edicts = Hunk_AllocName (MAX_EDICTS*pr_edict_size, "edicts")` allocates
   one flat block that EDICT_NUM slices. Here the edict table is an array of
@@ -87,7 +82,9 @@ import { Q_atof, Q_atoi, COM_Parse, COM_LoadHunkFile, com_filesize, type ParseSt
 import { CRC_Init, CRC_ProcessByte } from "../common/crc";
 import { VectorCopy, vec3_origin } from "../common/mathlib";
 import { Cmd_AddCommand, Cmd_Argv } from "../common/cmd";
-import { CvarT, Cvar_RegisterVariable, Cvar_VariableValue } from "../common/cvar";
+import { CvarT, Cvar_RegisterVariable } from "../common/cvar";
+import { deathmatch } from "../common/host";
+import { hostCmdState } from "../common/host_cmd";
 import { Com_sprintf } from "../common/sprintf";
 import { Con_DPrintf, Con_Printf } from "../client/console";
 import { Sys_Error, SysError } from "../platform/sys";
@@ -904,9 +901,8 @@ export function ED_LoadFromFile(ps: ParseState): void {
     ED_ParseEdict(ps, ent);
 
     // remove things from different skill levels or deathmatch
-    const deathmatch = Cvar_VariableValue("deathmatch");
-    const current_skill = Cvar_VariableValue("skill") | 0;
-    if (deathmatch) {
+    const current_skill = hostCmdState.current_skill;
+    if (deathmatch.value) {
       if ((ent.v.spawnflags | 0) & SPAWNFLAG_NOT_DEATHMATCH) {
         ED_Free(ent);
         inhibit++;

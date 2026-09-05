@@ -98,6 +98,7 @@ Deviations from the C source:
   errors on the missing names.
 */
 
+import { SV_BroadcastPrintf } from "../common/host";
 import { MAX_MAP_LEAFS } from "../common/bspfile";
 import { Con_DPrintf, Con_Printf } from "../client/console";
 import { Cbuf_AddText } from "../common/cmd";
@@ -390,15 +391,7 @@ bprint(value)
 */
 function PF_bprint(): void {
   const s = PF_VarString(0);
-
-  // SV_BroadcastPrintf (host.c) inlined -- see file header
-  for (let i = 0; i < svs.maxclients; i++) {
-    const client = svs.clients[i];
-    if (client.active && client.spawned) {
-      MSG_WriteByte(client.message, SvcOpsT.svc_print);
-      MSG_WriteString(client.message, s);
-    }
-  }
+  SV_BroadcastPrintf("%s", s);
 }
 
 /*

@@ -90,6 +90,7 @@ Deviations from PORTING.md / the C source:
   single-argument `SV_SpawnServer(server)`).
 */
 
+import { hostCmdState } from "../common/host_cmd";
 import { Cvar_RegisterVariable, Cvar_Set, Cvar_SetValue } from "../common/cvar";
 import { Com_sprintf } from "../common/sprintf";
 import { Con_DPrintf, Con_Printf } from "../client/console";
@@ -1041,11 +1042,11 @@ export function SV_SpawnServer(server: string): void {
 
   // make cvars consistant
   if (coop.value) Cvar_SetValue("deathmatch", 0);
-  let current_skill = Math.trunc(skill.value + 0.5);
-  if (current_skill < 0) current_skill = 0;
-  if (current_skill > 3) current_skill = 3;
+  hostCmdState.current_skill = Math.trunc(skill.value + 0.5);
+  if (hostCmdState.current_skill < 0) hostCmdState.current_skill = 0;
+  if (hostCmdState.current_skill > 3) hostCmdState.current_skill = 3;
 
-  Cvar_SetValue("skill", current_skill);
+  Cvar_SetValue("skill", hostCmdState.current_skill);
 
   // set up the new server
   Host_ClearMemory();
