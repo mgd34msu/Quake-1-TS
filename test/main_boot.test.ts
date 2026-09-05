@@ -1,0 +1,106 @@
+/*
+Self-sufficient per standing order 13: builds its own scratch dedicated-server
+fixtures (test/support/dedicated_fixture.ts, the same recipe
+test/host_cmd.test.ts uses, factored out per this unit's brief since that
+file exports no builder of its own) and drives a real `-dedicated 1` boot
+through src/main.ts's Sys_Main_Init + runFrames, never entering
+Sys_Main_Loop's infinite loop.
+
+Every process-wide flag Sys_Main_Init/Host_Init touches is captured before
+and restored in afterAll (`bun test` runs every file in one process).
+*/
+
+import { describe, expect, test, afterAll } from "bun:test";
+import { cmdHost } from "../src/common/cmd";
+import { setCvarServerHooks } from "../src/common/cvar";
+import { Host_Shutdown, host } from "../src/common/host";
+import { getNetHostHooks, net_activeconnections, setNetActiveConnections, setNetHostHooks } from "../src/common/net_main";
+import { setHostShutdown, sysState } from "../src/platform/sys";
+import { sv, svState, svs } from "../src/server/server";
+import { Sys_Main_Init, runFrames } from "../src/main";
+import { buildDedicatedFixture, destroyDedicatedFixture, type DedicatedFixture } from "./support/dedicated_fixture";
+
+const savedNostdout = sysState.nostdout;
+const savedIsDedicated = sysState.isDedicated;
+const savedCmdInitialized = cmdHost.initialized;
+const savedNetHooks = getNetHostHooks();
+const savedMaxclients = svs.maxclients;
+const savedMaxclientslimit = svs.maxclientslimit;
+const savedClients = svs.clients;
+const savedActiveConnections = net_activeconnections;
+
+const builtFixtures: DedicatedFixture[] = [];
+
+afterAll(() => {
+  sysState.nostdout = savedNostdout;
+  sysState.isDedicated = savedIsDedicated;
+  cmdHost.initialized = savedCmdInitialized;
+  setNetHostHooks(savedNetHooks);
+  setHostShutdown(null);
+  setCvarServerHooks(null);
+  setNetActiveConnections(savedActiveConnections);
+  svs.maxclients = savedMaxclients;
+  svs.maxclientslimit = savedMaxclientslimit;
+  svs.clients = savedClients;
+  svState.host_client = null;
+  svState.sv_player = null;
+  sv.clear();
+  for (const fixture of builtFixtures) destroyDedicatedFixture(fixture);
+});
+
+// Host_Init's own Cmd_AddCommand calls (via Host_InitLocal -> host_cmd.ts's
+// Host_InitCommands) throw Sys_Error once cmd.ts's cmdHost.initialized is
+// true (cmd.ts:422) -- the same "a previous suite in this process may have
+// set it" reset test/host_cmd.test.ts's beforeAll already needs, required
+// here too since this file calls Host_Init (through Sys_Main_Init) more
+// than once.
+function bootDedicated(argv: string[]): void {
+  cmdHost.initialized = false;
+  Sys_Main_Init(argv);
+}
+
+describe("Sys_Main_Init + runFrames -- a real dedicated boot", () => {
+  test("`+map world` spawns progs106's worldspawn and the server clock advances per frame", () => {
+    const fixture = buildDedicatedFixture("main-boot-map-");
+    builtFixtures.push(fixture);
+
+    bootDedicated(["q1ts", "-dedicated", "1", "-basedir", fixture.baseDir, "+map", "world"]);
+
+    expect(host.initialized).toBe(true);
+    expect(sysState.isDedicated).toBe(true);
+    expect(svs.maxclients).toBe(1);
+    expect(sv.active).toBe(false); // Host_Init only queues "exec quake.rc"; nothing has run it yet
+
+    // The first frame's Cbuf_Execute drains "exec quake.rc" -> "exec
+    // default.cfg" + "stuffcmds" -> "map world" (Host_Map_f), all before
+    // that same frame's Host_ServerFrame call -- see cmd.ts's
+    // Cbuf_Execute/Cbuf_InsertText, which re-scans the buffer after every
+    // inserted command instead of waiting for the next frame.
+    runFrames(1, 0.05);
+    expect(sv.active).toBe(true);
+    expect(sv.name).toBe("world");
+
+    const t1 = sv.time;
+    runFrames(10, 0.05);
+    const t2 = sv.time;
+    // sv_phys.ts's SV_Physics: `sv.time += host.frametime` once per server
+    // frame while active and unpaused (svs.maxclients === 1 and no client
+    // hook installed takes host.ts's Host_ServerFrame default of "always
+    // run physics on a dedicated server").
+    expect(t2 - t1).toBeCloseTo(0.5, 2);
+
+    expect(() => Host_Shutdown()).not.toThrow();
+    expect(() => Host_Shutdown()).not.toThrow(); // isdown guard, host.ts:1154 ("recursive shutdown")
+  });
+
+  test("`-nostdout` sets sysState.nostdout", () => {
+    const fixture = buildDedicatedFixture("main-boot-nostdout-");
+    builtFixtures.push(fixture);
+
+    bootDedicated(["q1ts", "-nostdout", "-dedicated", "1", "-basedir", fixture.baseDir]);
+
+    expect(sysState.nostdout).toBe(1);
+
+    expect(() => Host_Shutdown()).not.toThrow();
+  });
+});
