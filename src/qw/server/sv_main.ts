@@ -193,7 +193,8 @@ import { Com_sprintf } from "../../common/sprintf";
 import { Hunk_AllocName, Hunk_LowMark, Memory_Init } from "../../common/zone";
 import { Mod_Init } from "../../common/model";
 import type { QuakeParmsT } from "../../common/quakedef";
-import { Sys_ConsoleInput, Sys_Error, Sys_FileClose, Sys_FileOpenWrite, Sys_FileWrite, Sys_FloatTime, Sys_Init } from "../../platform/sys";
+import { Sys_ConsoleInput, Sys_Error, Sys_FileClose, Sys_FileOpenWrite, Sys_FileWrite, Sys_FloatTime } from "../../platform/sys";
+import { Sys_Init } from "../sys_sv";
 
 //============================================================================
 // lazily resolved siblings -- see file header

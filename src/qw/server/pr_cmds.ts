@@ -1157,7 +1157,6 @@ vector aim(entity, missilespeed)
 // is kept as a dead comment in the C, ported the same way here.
 // const sv_aim = new CvarT("sv_aim", "0.93");
 export const sv_aim = new CvarT("sv_aim", "2");
-Cvar_RegisterVariable(sv_aim);
 
 function PF_aim(): void {
   const ent = G_EDICT(OFS_PARM0);

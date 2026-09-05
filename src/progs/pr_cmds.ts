@@ -76,12 +76,8 @@ Deviations from the C source:
   function pointer at two table slots each (#19/#76, #20/#75, #68/#77 in the
   C); ported as the same function referenced twice in `pr_builtin`, exactly
   as the C's array literal does.
-- `sv_aim` (`cvar_t sv_aim = {"sv_aim", "0.93"};`) is defined here per the
-  unit brief's ruling (its registration site, `SV_Init` in sv_main.c, is not
-  landed). `Cvar_RegisterVariable(sv_aim)` runs at this module's load time
-  so `.value` is populated before `SV_Init` exists; `Cvar_RegisterVariable`
-  is idempotent by name, so sv_main.ts registering it again later is a
-  harmless no-op warning, not a double-link.
+- `sv_aim` (`cvar_t sv_aim = {"sv_aim", "0.93"};`) is defined here; its only
+  registration site is `SV_Init` in sv_main.ts, as in the C.
 - `PF_droptofloor`'s `ent->v.groundentity = EDICT_TO_PROG(trace.ent)` derefs
   `trace.ent` unchecked; this port only reaches that line when
   `trace.fraction < 1` (the `else` of the `fraction==1||allsolid` guard),
@@ -1150,7 +1146,6 @@ vector aim(entity, missilespeed)
 =============
 */
 export const sv_aim = new CvarT("sv_aim", "0.93");
-Cvar_RegisterVariable(sv_aim); // see file header's ruling
 
 function PF_aim(): void {
   const ent = G_EDICT(OFS_PARM0);
