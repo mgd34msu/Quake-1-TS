@@ -72,9 +72,9 @@ export class ServerT {
   name = ""; // map name
   modelname = ""; // maps/<name>.bsp, for model_precache[0]
   worldmodel: ModelT | null = null;
-  model_precache: string[] = new Array<string>(MAX_MODELS).fill(""); // NULL terminated
+  model_precache: Array<string | null> = new Array<string | null>(MAX_MODELS).fill(null); // NULL terminated
   models: Array<ModelT | null> = new Array<ModelT | null>(MAX_MODELS).fill(null);
-  sound_precache: string[] = new Array<string>(MAX_SOUNDS).fill(""); // NULL terminated
+  sound_precache: Array<string | null> = new Array<string | null>(MAX_SOUNDS).fill(null); // NULL terminated
   lightstyles: string[] = new Array<string>(MAX_LIGHTSTYLES).fill("");
   num_edicts = 0;
   max_edicts = 0;
@@ -102,9 +102,9 @@ export class ServerT {
     this.name = "";
     this.modelname = "";
     this.worldmodel = null;
-    this.model_precache = new Array<string>(MAX_MODELS).fill("");
+    this.model_precache = new Array<string | null>(MAX_MODELS).fill(null);
     this.models = new Array<ModelT | null>(MAX_MODELS).fill(null);
-    this.sound_precache = new Array<string>(MAX_SOUNDS).fill("");
+    this.sound_precache = new Array<string | null>(MAX_SOUNDS).fill(null);
     this.lightstyles = new Array<string>(MAX_LIGHTSTYLES).fill("");
     this.num_edicts = 0;
     this.max_edicts = 0;
