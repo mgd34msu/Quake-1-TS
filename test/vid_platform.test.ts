@@ -27,10 +27,12 @@ import { re } from "../src/client/render";
 import type { QpicT } from "../src/common/wad";
 import { d_8to24table, vid, vidBackend, vidMenuHooks } from "../src/client/vid";
 import { inputBackend } from "../src/client/input";
+import { conState } from "../src/client/console";
 import { cmdHost } from "../src/common/cmd";
 import { rState } from "../src/ref_soft/r_shared";
 import { SDL_ResetBackendForTests } from "../src/platform/sdl";
 import {
+  getRegisteredRenderer,
   registerRenderer,
   unregisterRenderer,
   VID_CheckChanges,
@@ -140,10 +142,23 @@ const savedInputBackend = inputBackend.current;
 const savedModelHooks = getModelLoaderHooks();
 const savedMenuDraw = vidMenuHooks.vid_menudrawfn;
 const savedMenuKey = vidMenuHooks.vid_menukeyfn;
+// src/main.ts imports both real renderers, so by the time this file runs
+// the process-wide registry (module-cached; a renderer module's own
+// registerRenderer call at its top level fires only once per process) may
+// already hold a real "soft"/"gl" registration from another test file's
+// import chain. Captured here so this file's own fake registrations can be
+// undone by restoring exactly what was here rather than deleting the entry.
+const savedSoftRenderer = getRegisteredRenderer("soft");
+const savedGlRenderer = getRegisteredRenderer("gl");
+
+function restoreRenderer(name: "soft" | "gl", factory: (() => Renderer) | null): void {
+  if (factory) registerRenderer(name, factory);
+  else unregisterRenderer(name);
+}
 
 afterAll(() => {
-  unregisterRenderer("soft");
-  unregisterRenderer("gl");
+  restoreRenderer("soft", savedSoftRenderer);
+  restoreRenderer("gl", savedGlRenderer);
   VID_ResetForTests();
   SDL_ResetBackendForTests();
   re.current = savedRe;
@@ -224,34 +239,60 @@ describe("VID_CheckChanges -- the vid_ref renderer registry", () => {
   });
 
   test("selecting an unregistered name Sys_Errors, listing what IS registered", () => {
+    // "gl" may already be genuinely registered process-wide (main.ts imports
+    // both renderer modules); hide it for this test's duration so the
+    // listing is exactly what this describe block put there, then restore
+    // whatever was really there.
+    const realGl = getRegisteredRenderer("gl");
+    if (realGl) unregisterRenderer("gl");
     const original = vid_ref.string;
     vid_ref.string = "nonexistent";
     try {
       expect(() => VID_CheckChanges()).toThrow(/vid_ref nonexistent not available \(registered: soft\)/);
     } finally {
       vid_ref.string = original;
+      if (realGl) registerRenderer("gl", realGl);
     }
   });
 
   test("an empty registry Sys_Errors the same way", () => {
     unregisterRenderer("soft");
+    // same "gl" pollution guard as the previous test
+    const realGl = getRegisteredRenderer("gl");
+    if (realGl) unregisterRenderer("gl");
     try {
       expect(() => VID_CheckChanges()).toThrow(/vid_ref soft not available \(registered: \(none\)\)/);
     } finally {
       registerRenderer("soft", () => fakeRenderer);
+      if (realGl) registerRenderer("gl", realGl);
     }
   });
 
   test("a \"gl\" selection that fails under the dummy video driver falls back to soft without throwing", () => {
+    const realGl = getRegisteredRenderer("gl");
     registerRenderer("gl", () => fakeRenderer);
     const original = vid_ref.string;
     vid_ref.string = "gl";
+    // glimp.ts's GLimp_SetMode Con_Printf's the mode it is about to try
+    // before it knows whether the attempt fails; console.ts's Con_Printf
+    // re-enters SCR_UpdateScreen (-> getRenderer()) whenever
+    // conState.con_initialized is true and the client is not fully signed
+    // on (cls.signon !== SIGNONS, true here since this suite runs no real
+    // client). con_initialized is a shared process-wide flag several other
+    // test files' own real Host_Init calls leave true (Con_Init runs even
+    // on a dedicated boot), so it may already be true here regardless of
+    // this file's own setup -- forcing it false for this call's duration is
+    // this test's own guard against that reentrancy hazard, per standing
+    // order 15.
+    const savedConInitialized = conState.con_initialized;
+    conState.con_initialized = false;
     try {
       expect(() => VID_CheckChanges()).not.toThrow();
       expect(vid_ref.string).toBe("soft"); // the direct-field fallback, see vid.ts's own comment on why this isn't Cvar_Set
       expect(re.current).toBe(fakeRenderer);
     } finally {
-      unregisterRenderer("gl");
+      conState.con_initialized = savedConInitialized;
+      restoreRenderer("gl", realGl);
       if (vid_ref.string !== "soft") vid_ref.string = original;
     }
   });

@@ -16,6 +16,8 @@ QuakeWorld client and server.
 - Strict TypeScript: zero `any`, no casts (`as const` excepted)
 - Bug-for-bug fidelity to the C where observable; deviations documented
   in file headers and `PORTING.md`
+- Both renderers selectable at runtime through the one cvar this port
+  adds: `vid_ref soft` (default) / `vid_ref gl`
 
 ## Running
 
@@ -24,9 +26,14 @@ installation) in `id1/` under the base directory, and libSDL2.
 
 ```sh
 bun install
-bun src/main.ts -basedir /path/to/quake
+bun src/main.ts -basedir /path/to/quake                # software renderer
+bun src/main.ts -basedir /path/to/quake +vid_ref gl    # OpenGL renderer
+bun src/main.ts -dedicated 1 -basedir /path/to/quake +map start
 bun run build            # standalone binary: ./q1ts
 ```
+
+Music: `cd` tracks play from `music/NN.ogg` under the game directory
+(system libvorbisfile), replacing the physical CD.
 
 ## License
 

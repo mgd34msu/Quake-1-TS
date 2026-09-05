@@ -12,6 +12,7 @@ and restored in afterAll (`bun test` runs every file in one process).
 
 import { describe, expect, test, afterAll } from "bun:test";
 import { cmdHost } from "../src/common/cmd";
+import { conState } from "../src/client/console";
 import { setCvarServerHooks } from "../src/common/cvar";
 import { Host_Shutdown, host } from "../src/common/host";
 import { getNetHostHooks, net_activeconnections, setNetActiveConnections, setNetHostHooks } from "../src/common/net_main";
@@ -28,6 +29,12 @@ const savedMaxclients = svs.maxclients;
 const savedMaxclientslimit = svs.maxclientslimit;
 const savedClients = svs.clients;
 const savedActiveConnections = net_activeconnections;
+// Host_Init calls console.ts's Con_Init directly (host.ts:1103, even on a
+// dedicated boot), which sets conState.con_initialized = true and is never
+// unset by anything else in this port; a later suite's Con_Printf call
+// would otherwise see it still true process-wide and take the "signon !=
+// SIGNONS" redraw branch it never used to reach.
+const savedConInitialized = conState.con_initialized;
 
 const builtFixtures: DedicatedFixture[] = [];
 
@@ -45,6 +52,7 @@ afterAll(() => {
   svState.host_client = null;
   svState.sv_player = null;
   sv.clear();
+  conState.con_initialized = savedConInitialized;
   for (const fixture of builtFixtures) destroyDedicatedFixture(fixture);
 });
 

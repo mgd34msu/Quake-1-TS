@@ -219,6 +219,15 @@ export function unregisterRenderer(name: RendererName): void {
   registry.delete(name);
 }
 
+// test seam: read back whatever is registered under `name` (real or a
+// test's fake) before a test overwrites the entry, so it can restore the
+// exact previous factory afterward instead of deleting a real registration
+// a real renderer module (main.ts imports both) may have made earlier in
+// this same process.
+export function getRegisteredRenderer(name: RendererName): (() => Renderer) | null {
+  return registry.get(name) ?? null;
+}
+
 let activeRendererKind: RendererName | null = null;
 
 //=============================================================================
@@ -302,6 +311,12 @@ function teardownActiveRenderer(): void {
   // next mode's buffers.
   re.current?.D_FlushCaches();
   rState.d_pzbuffer = null;
+
+  // render.ts's Renderer.Shutdown -- this port's own addition (see its
+  // doc comment): lets the outgoing renderer release what it owns (the GL
+  // renderer's qgl function table and masked palette byte) before this
+  // function drops re.current and tears down the platform-level context.
+  re.current?.Shutdown?.();
 
   if (activeRendererKind === "gl") {
     glimpHolder.current?.Shutdown();

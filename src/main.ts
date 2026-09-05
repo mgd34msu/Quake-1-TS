@@ -102,6 +102,7 @@ import "./client/snd_dma";
 // module load (the C links exactly one; this port links both and selects by
 // vid_ref).
 import "./ref_soft/ref_soft";
+import "./ref_gl/ref_gl"; // registers itself under "gl"
 
 let landriverRegistered = false;
 

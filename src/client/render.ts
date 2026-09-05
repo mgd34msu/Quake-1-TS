@@ -164,6 +164,7 @@ Deviations from PORTING.md / the C source:
 - Dropped `#ifdef QUAKE2` blocks: render.h's `R_DarkFieldParticles`.
 */
 
+import { CvarT } from "../common/cvar";
 import { EntityStateT } from "../common/quakedef";
 import type { MleafT, ModelLoaderHooks, ModelT, MnodeT, TextureT } from "../common/model";
 import type { QpicT } from "../common/wad";
@@ -286,6 +287,19 @@ export const r_origin: Vec3 = vec3();
 export const vpn: Vec3 = vec3();
 export const vright: Vec3 = vec3();
 export const vup: Vec3 = vec3();
+
+//=============================================================================
+// cvars both renderers define under the same name; one object, imported by
+// both r_main.ts and gl_rmain.ts, so Cvar_Set updates reach whichever
+// renderer is active. In the C only one renderer is linked, so the name is
+// registered once; here both R_Init functions still call
+// Cvar_RegisterVariable on this same object (the second call prints the C's
+// "Can't register variable, allready defined" message and is harmless).
+// r_main.c and gl_rmain.c agree on every initializer below.
+export const r_fullbright = new CvarT("r_fullbright", "0");
+export const r_drawentities = new CvarT("r_drawentities", "1");
+export const r_drawviewmodel = new CvarT("r_drawviewmodel", "1");
+export const r_speeds = new CvarT("r_speeds", "0");
 
 //=============================================================================
 // d_iface.h / glquake.h
@@ -412,6 +426,14 @@ export interface Renderer {
   SCR_SoftwareTileClear(x: number, y: number, w: number, h: number): void;
   SCR_DrawCrosshair(): void;
   SCR_ScreenShot_f(): void;
+
+  // This port's own addition, not from render.h: Quake links exactly one
+  // renderer, so it never unloads one. The vid_ref switch this port adds
+  // (PORTING.md's "Runtime and build" section) needs somewhere to release
+  // whatever the outgoing renderer holds onto (a GL context's function
+  // table, masked palette state, ...) before the next renderer installs
+  // itself. Optional because ref_soft has nothing to release.
+  Shutdown?(): void;
 }
 
 export const re: { current: Renderer | null } = { current: null };

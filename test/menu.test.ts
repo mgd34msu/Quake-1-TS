@@ -24,7 +24,8 @@ import { join } from "node:path";
 import type { ModelLoaderHooks } from "../src/common/model";
 import type { QpicT } from "../src/common/wad";
 import type { Renderer } from "../src/client/render";
-import { CvarT, Cvar_RegisterVariable, Cvar_FindVar, Cvar_Set, Cvar_VariableValue, Cvar_VariableString } from "../src/common/cvar";
+import { Cvar_RegisterVariable, Cvar_Set, Cvar_VariableValue, Cvar_VariableString } from "../src/common/cvar";
+import { v_gamma } from "../src/client/view";
 import { COM_AddGameDirectory, registered, rogue } from "../src/common/common";
 import { Cbuf_Init, Cbuf_Execute } from "../src/common/cmd";
 import { host } from "../src/common/host";
@@ -235,23 +236,36 @@ describe("M_Menu_Main_f / M_Main_Draw", () => {
 
 describe("M_AdjustSliders", () => {
   test("gamma clamps to 0.5..1", () => {
-    if (!Cvar_FindVar("gamma")) Cvar_RegisterVariable(new CvarT("gamma", "1", true));
+    // menu.ts reads/writes "gamma" by name (menu.c does the same -- it
+    // never links view.c's cvar_t directly), so this test registers the
+    // same object view.ts exports rather than a throwaway CvarT: two
+    // separate objects under the same name would leave whichever
+    // registers second permanently unreachable by name (Cvar_RegisterVariable
+    // does not replace an existing entry, matching the C's own "allready
+    // defined" behavior), and view.ts's V_CheckGamma reads its own `v_gamma`
+    // binding directly, not a by-name lookup.
+    Cvar_RegisterVariable(v_gamma); // a no-op if view.ts already registered it
+    const savedGamma = v_gamma.value;
     menu.menuState.options_cursor = 4; // gamma
 
-    // upper clamp: v_gamma.value -= dir*0.05, dir=-1 pushes it above 1
-    Cvar_Set("gamma", "1");
-    menu.M_AdjustSliders(-1);
-    expect(Cvar_VariableValue("gamma")).toBe(1);
+    try {
+      // upper clamp: v_gamma.value -= dir*0.05, dir=-1 pushes it above 1
+      Cvar_Set("gamma", "1");
+      menu.M_AdjustSliders(-1);
+      expect(Cvar_VariableValue("gamma")).toBe(1);
 
-    // lower clamp: dir=1 pushes it below 0.5
-    Cvar_Set("gamma", "0.5");
-    menu.M_AdjustSliders(1);
-    expect(Cvar_VariableValue("gamma")).toBe(0.5);
+      // lower clamp: dir=1 pushes it below 0.5
+      Cvar_Set("gamma", "0.5");
+      menu.M_AdjustSliders(1);
+      expect(Cvar_VariableValue("gamma")).toBe(0.5);
 
-    // an in-range adjustment is not clamped
-    Cvar_Set("gamma", "0.8");
-    menu.M_AdjustSliders(1); // 0.8 - 0.05 = 0.75
-    expect(Cvar_VariableValue("gamma")).toBeCloseTo(0.75, 5);
+      // an in-range adjustment is not clamped
+      Cvar_Set("gamma", "0.8");
+      menu.M_AdjustSliders(1); // 0.8 - 0.05 = 0.75
+      expect(Cvar_VariableValue("gamma")).toBeCloseTo(0.75, 5);
+    } finally {
+      Cvar_Set("gamma", String(savedGamma));
+    }
   });
 });
 

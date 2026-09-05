@@ -68,6 +68,12 @@ Deviations from PORTING.md / the C source:
 import { Cmd_AddCommand } from "../common/cmd";
 import { CvarT, Cvar_RegisterVariable, Cvar_SetValue } from "../common/cvar";
 import { Con_Printf } from "../client/console";
+// cvars gl_rmain.c also registers under the same name (render.ts's shared
+// block); imported, not redefined, so a Cvar_Set reaches both renderers'
+// objects because there is only one object. Re-exported below so existing
+// `from "./r_main"` imports (r_surf.ts) keep working.
+import { r_drawentities, r_drawviewmodel, r_fullbright, r_speeds } from "../client/render";
+export { r_drawentities, r_drawviewmodel, r_fullbright, r_speeds };
 import { Sys_Error, Sys_FloatTime, Sys_HighFPPrecision, Sys_LowFPPrecision } from "../platform/sys";
 import { DotProduct, Length, M_PI, PLANE_ANYZ, type Vec3, VectorCopy, VectorInverse, VectorNormalize, VectorSubtract, vec3 } from "../common/mathlib";
 import { Mod_LeafPVS } from "../common/model";
@@ -150,14 +156,10 @@ export const rMainDeadState: { viewmodname: string; modcount: number } = {
 };
 
 export const r_draworder = new CvarT("r_draworder", "0");
-export const r_speeds = new CvarT("r_speeds", "0");
 export const r_timegraph = new CvarT("r_timegraph", "0");
 export const r_graphheight = new CvarT("r_graphheight", "10");
 export const r_clearcolor = new CvarT("r_clearcolor", "2");
 export const r_waterwarp = new CvarT("r_waterwarp", "1");
-export const r_fullbright = new CvarT("r_fullbright", "0");
-export const r_drawentities = new CvarT("r_drawentities", "1");
-export const r_drawviewmodel = new CvarT("r_drawviewmodel", "1");
 export const r_aliasstats = new CvarT("r_polymodelstats", "0");
 export const r_dspeeds = new CvarT("r_dspeeds", "0");
 export const r_drawflat = new CvarT("r_drawflat", "0");
