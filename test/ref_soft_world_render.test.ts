@@ -33,7 +33,20 @@ r_drawsurf).
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { COM_CheckRegistered, COM_InitArgv, COM_InitFilesystem, pop } from "../src/common/common";
+import {
+  COM_CheckRegistered,
+  COM_InitArgv,
+  COM_InitFilesystem,
+  com_gamedir,
+  com_modified,
+  com_searchpaths,
+  pop,
+  setComGamedir,
+  setComModified,
+  setComSearchpaths,
+  setStaticRegistered,
+  static_registered,
+} from "../src/common/common";
 import { Mod_ForName, Mod_Init, type ModelT, getModelLoaderHooks, setModelLoaderHooks } from "../src/common/model";
 import { hostClientHooks } from "../src/common/host";
 import { qw } from "../src/common/quakedef";
@@ -178,6 +191,10 @@ const savedRViewVectors = hostClientHooks.rViewVectors;
 const savedLightstyleLength = cl_lightstyle[0].length;
 const savedLightstyleMap = cl_lightstyle[0].map;
 const savedLightstyleValue = d_lightstylevalue[0];
+const savedComSearchpaths = com_searchpaths;
+const savedComGamedir = com_gamedir;
+const savedComModified = com_modified;
+const savedStaticRegistered = static_registered;
 
 beforeAll(() => {
   ensureDir(join(baseDir, "id1"));
@@ -282,6 +299,10 @@ afterAll(() => {
   setModelLoaderHooks(savedModelHooks);
   if (savedSoftFactory) registerRenderer("soft", savedSoftFactory);
   else unregisterRenderer("soft");
+  setComSearchpaths(savedComSearchpaths);
+  setComGamedir(savedComGamedir);
+  setComModified(savedComModified);
+  setStaticRegistered(savedStaticRegistered);
   rmSync(scratchDir, { recursive: true, force: true });
 });
 

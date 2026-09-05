@@ -24,7 +24,7 @@ import { re } from "../src/client/render";
 import type { QpicT } from "../src/common/wad";
 import { keyState, KeydestT, K_DOWNARROW, K_ENTER, K_ESCAPE, K_LEFTARROW, K_RIGHTARROW, K_UPARROW } from "../src/client/keys";
 import { menuState, MStateT } from "../src/client/menu";
-import { registerRenderer, unregisterRenderer, vid_fullscreen, vid_mode, vid_ref, VID_ResetForTests } from "../src/platform/vid";
+import { getRegisteredRenderer, registerRenderer, unregisterRenderer, vid_fullscreen, vid_mode, vid_ref, VID_ResetForTests } from "../src/platform/vid";
 import { Cvar_RegisterVariable } from "../src/common/cvar";
 import { VID_MenuCursor, VID_MenuDraw, VID_MenuKey, VID_MenuSetCursorForTests } from "../src/platform/vid_menu";
 import { SDL_ResetBackendForTests } from "../src/platform/sdl";
@@ -115,6 +115,7 @@ const savedMState = menuState.m_state;
 const savedVidMode = vid_mode.value;
 const savedVidFullscreen = vid_fullscreen.value;
 const savedVidRef = vid_ref.string;
+const savedSoftFactory = getRegisteredRenderer("soft");
 
 beforeAll(() => {
   // vid_mode/vid_fullscreen/vid_ref are normally registered by VID_Init
@@ -135,7 +136,8 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  unregisterRenderer("soft");
+  if (savedSoftFactory) registerRenderer("soft", savedSoftFactory);
+  else unregisterRenderer("soft");
   VID_ResetForTests();
   SDL_ResetBackendForTests();
   re.current = savedRe;

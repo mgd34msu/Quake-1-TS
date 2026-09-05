@@ -38,7 +38,7 @@ const CHILD_SCRIPT = `
 import { buildQwclFixture, destroyQwclFixture } from "./test/support/qwcl_fixture";
 import { Sys_Main_Init, runFrames } from "./src/qw/main_cl";
 import { NET_Ready, NET_Shutdown } from "./src/qw/net_udp";
-import { Cvar_VariableString } from "./src/common/cvar";
+import { Cvar_Set, Cvar_VariableString } from "./src/common/cvar";
 import { CactiveT, cls } from "./src/client/client";
 import { vid } from "./src/client/vid";
 import { re } from "./src/client/render";
@@ -56,6 +56,14 @@ try {
   await NET_Ready();
 
   runFrames(10, 0.1);
+
+  // Cvar_Set (src/common/cvar.ts, a shared WinQuake-track module, same as
+  // net_udp.ts) prints "Cvar_Set: variable %s not found\\n" via the same
+  // Con_Printf import net_udp.ts uses, but unlike NET_Init's own prints (see
+  // below) this one runs well after Con_Init, so it is what actually proves
+  // the qwConsoleHooks forward -- called here, after Con_Init, specifically
+  // for that.
+  Cvar_Set("qwcl_boot_probe_missing_cvar", "1");
 
   // con_main.text is the QW console scrollback: one CON_TEXTSIZE byte per
   // character, high bit = colored, 0 = end of line.
@@ -96,11 +104,16 @@ try {
     userinfoVer: Info_ValueForKey(cls.qw.userinfo, "*ver"),
     userinfoName: Info_ValueForKey(cls.qw.userinfo, "name"),
     // src/qw/net_udp.ts is shared by qwsv and qwcl and imports Con_Printf
-    // from WinQuake's src/client/console.ts; these two lines are in QW's
-    // console buffer only because src/qw/main_cl.ts installed the
-    // qwConsoleHooks forward.
-    conHasUdpInitialized: conText.includes("UDP Initialized"),
-    conHasIpAddress: conText.includes("IP address "),
+    // from WinQuake's src/client/console.ts, forwarded into QW's own
+    // con_main.text by src/qw/main_cl.ts's qwConsoleHooks -- but NET_Init's
+    // own "UDP Initialized"/"IP address " prints run before Con_Init (QW/
+    // client/cl_main.c's Host_Init: NET_Init(PORT_CLIENT) at line ~26,
+    // Con_Init() at line ~31), so with NET_Init synchronous again neither
+    // ever reaches con_main.text (faithful: the console doesn't exist yet
+    // when they print) -- confirmed directly, not asserted here. The
+    // Cvar_Set probe above runs after Con_Init instead, so it is what
+    // actually proves the forward still works.
+    conHasCvarSetWarning: conText.includes("Cvar_Set: variable qwcl_boot_probe_missing_cvar not found"),
     conHasBanner: conText.includes("QuakeWorld Initialized"),
   };
 
@@ -162,8 +175,7 @@ interface BootSnapshot {
   userinfo: string;
   userinfoVer: string;
   userinfoName: string;
-  conHasUdpInitialized: boolean;
-  conHasIpAddress: boolean;
+  conHasCvarSetWarning: boolean;
   conHasBanner: boolean;
 }
 
@@ -222,8 +234,7 @@ function parseSnapshot(value: unknown): BootSnapshot {
     userinfo: str(r, "userinfo"),
     userinfoVer: str(r, "userinfoVer"),
     userinfoName: str(r, "userinfoName"),
-    conHasUdpInitialized: bool(r, "conHasUdpInitialized"),
-    conHasIpAddress: bool(r, "conHasIpAddress"),
+    conHasCvarSetWarning: bool(r, "conHasCvarSetWarning"),
     conHasBanner: bool(r, "conHasBanner"),
   };
 }
@@ -377,13 +388,17 @@ describe("Sys_Main_Init + runFrames -- a real qwcl boot", () => {
     expect(s.conOrmask).toBe(0); // only svc_print's PRINT_CHAT case sets it
   });
 
-  test("a shared QW module's Con_Printf reaches the QW console buffer", () => {
-    // src/qw/net_udp.ts imports Con_Printf from WinQuake's
-    // src/client/console.ts (qwsv needs it there); src/qw/main_cl.ts's
-    // qwConsoleHooks forward is what puts its output in con_main.text.
+  test("a shared WinQuake-track module's Con_Printf reaches the QW console buffer", () => {
+    // src/common/cvar.ts (Cvar_Set) imports Con_Printf from WinQuake's
+    // src/client/console.ts, the same shared import src/qw/net_udp.ts uses
+    // (qwsv needs it there too); src/qw/main_cl.ts's qwConsoleHooks forward
+    // is what puts its output in con_main.text. net_udp.ts's own "UDP
+    // Initialized"/"IP address " prints happen during NET_Init, which QW's
+    // Host_Init calls before Con_Init, so they never land in con_main.text
+    // (see the child script's own comment) -- the Cvar_Set probe there runs
+    // after Con_Init instead, so it is what actually exercises the forward.
     const s = requireSnapshot();
-    expect(s.conHasUdpInitialized).toBe(true);
-    expect(s.conHasIpAddress).toBe(true);
+    expect(s.conHasCvarSetWarning).toBe(true);
     // and cl_main.ts's own Con_Printf, which never needed the forward
     expect(s.conHasBanner).toBe(true);
   });

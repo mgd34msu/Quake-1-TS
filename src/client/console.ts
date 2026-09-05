@@ -138,7 +138,7 @@ QW-only sibling, `Con_Resize`/`Con_CheckResize`'s per-console rewrite,
 is not folded, per the module-creation note above.
 */
 
-import { Sys_Printf, Sys_DebugLog, Sys_SendKeyEvents, Sys_FloatTime, sysState } from "../platform/sys";
+import { Sys_Printf, Sys_DebugLog, Sys_SendKeyEvents, Sys_FloatTime, SysError, sysState } from "../platform/sys";
 import { qw } from "../common/quakedef";
 import { Com_sprintf } from "../common/sprintf";
 import type { CvarT } from "../common/cvar";
@@ -555,8 +555,27 @@ export function Con_Printf(fmt: string, ...args: Array<string | number>): void {
     // protect against infinite loop if something in SCR_UpdateScreen calls Con_Printf
     if (!inupdate) {
       inupdate = true;
-      hostMod().hostClientHooks.scrUpdateScreen?.(); // SCR_UpdateScreen
-      inupdate = false;
+      try {
+        hostMod().hostClientHooks.scrUpdateScreen?.(); // SCR_UpdateScreen
+      } catch (err) {
+        // Not in the C: a renderer-not-loaded state (VID_Shutdown already
+        // ran, or never ran yet) has no counterpart there -- the C's
+        // screen-update calls always have a live video mode to draw into
+        // once host_initialized is true. This port can reach Con_Printf
+        // with `re.current === null` (a shutdown-path or startup-path
+        // print racing the renderer's lifetime, e.g. an error raised while
+        // NET_Init's async bind is still resolving), where SCR_UpdateScreen's
+        // own call chain reaches render.ts's getRenderer() and throws a
+        // fresh "No renderer is loaded" Sys_Error instead of drawing. The
+        // real engine always prints to stdout regardless of video state
+        // (Sys_Printf above already ran unconditionally); matching that
+        // means swallowing only this one specific failure of the screen
+        // draw step, not the print itself -- anything else escaping
+        // SCR_UpdateScreen is a real bug and still propagates.
+        if (!(err instanceof SysError) || err.message !== "No renderer is loaded") throw err;
+      } finally {
+        inupdate = false;
+      }
     }
   }
 }

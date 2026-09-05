@@ -12,7 +12,7 @@ import {
 import { writePakToDisk } from "./support/pak_builder";
 import { sysState } from "../src/platform/sys";
 import { ENTVARS_OFS, GLOBAL_OFS } from "../src/progs/progdefs";
-import { EDICT_NUM, PR_GetString, pr } from "../src/progs/progs";
+import { EDICT_NUM, ENGINE_STRING_BASE, PR_GetString, pr } from "../src/progs/progs";
 import { sv, svs } from "../src/server/server";
 import {
   ED_Alloc,
@@ -278,8 +278,8 @@ describe("ED_NewString", () => {
     expect(PR_GetString(ED_NewString(""))).toBe("");
   });
 
-  test("allocates in the engine string table (negative string_t)", () => {
-    expect(ED_NewString("engine string table entry")).toBeLessThan(0);
+  test("allocates in the engine string table (string_t at or above ENGINE_STRING_BASE)", () => {
+    expect(ED_NewString("engine string table entry")).toBeGreaterThanOrEqual(ENGINE_STRING_BASE);
   });
 });
 

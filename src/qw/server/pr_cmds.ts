@@ -126,6 +126,11 @@ not repeated in full -- see src/progs/pr_cmds.ts's own file header):
 - `PF_setmodel`'s new inline-model branch calls `Mod_ForName(m, true)`,
   typed `ModelT | null` by this port's `model.ts`; a `SysError` guard
   covers the type-only possibility the same way, for the same reason.
+- `PF_Find`'s `if (!s) PR_RunError(...)`/`if (!t) continue;` (bug fix,
+  2026-09-05, D.md Defect B, same as src/progs/pr_cmds.ts's identical fix):
+  both test a `char *` that is never NULL in the C, so both are dead code
+  and are dropped here rather than ported as JS truthiness, which fired on
+  an empty (unset) `.target`/etc. field. See PF_Find's own comment.
 
 Deviations specific to this being qwsv's own progs host (see this unit's
 sibling files' own headers for the established precedent each one sets):
@@ -917,17 +922,26 @@ function PF_Remove(): void {
 }
 
 // entity (entity start, .string field, string match) find = #18;
+//
+// See src/progs/pr_cmds.ts's identical PF_Find deviation note: the C's
+// `if (!s) PR_RunError(...)` and the loop's `if (!t) continue;` both test a
+// `char *` that is never NULL (offset 0 is the empty string at
+// pr_strings[0]), so both are dead code in the real engine -- an unset
+// `.target`/etc. field resolves to "" and is compared like any other value.
+// This port's G_STRING/E_STRING (progs.ts) share that never-null property,
+// so both checks are dropped rather than ported as JS truthiness, which
+// would incorrectly fire on "" (the D.md-reported "PF_Find: bad search
+// string" defect on func_train_find's `find(world, targetname, "")` call in
+// plats.qc).
 function PF_Find(): void {
   let e = G_EDICTNUM(OFS_PARM0);
   const f = G_INT(OFS_PARM1);
   const s = G_STRING(OFS_PARM2);
-  if (!s) PR_RunError("PF_Find: bad search string");
 
   for (e++; e < sv.num_edicts; e++) {
     const ed = EDICT_NUM(e);
     if (ed.free) continue;
     const t = E_STRING(ed, f);
-    if (!t) continue;
     if (t === s) {
       RETURN_EDICT(ed);
       return;

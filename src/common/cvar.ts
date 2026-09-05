@@ -73,7 +73,7 @@ Deviations from PORTING.md / the C source:
 */
 
 import { Q_atof } from "./common";
-import { Cmd_Exists, Cmd_Argc, Cmd_Argv } from "./cmd";
+import { Cmd_Exists, Cmd_Argc, Cmd_Argv, cmdHost } from "./cmd";
 import { Con_Printf } from "../client/console";
 import { Com_sprintf } from "./sprintf";
 import { qw } from "./quakedef";
@@ -235,7 +235,19 @@ Adds a freestanding variable to the variable list.
 */
 export function Cvar_RegisterVariable(variable: CvarT): void {
   // first check to see if it has allready been defined
-  if (Cvar_FindVar(variable.name)) {
+  const existing = Cvar_FindVar(variable.name);
+  if (existing) {
+    // Port deviation, the twin of Cmd_AddCommand's `cmdHost.rendererSwitch`
+    // branch: a runtime renderer switch (`vid_restart`, the port's own
+    // feature -- the C's renderers are separate binaries) re-runs
+    // Draw_Init/SCR_Init/R_Init/Sbar_Init, and every cvar_t those register is
+    // a C file-scope object that this second pass finds already linked into
+    // cvar_vars. Re-linking THE SAME object is a no-op, not the double
+    // definition this guard exists to catch, so inside VID_CheckChanges's
+    // switch window it returns quietly. A DIFFERENT object under a name
+    // already taken is still a real collision -- the second object would
+    // never be reachable from the console -- and still prints.
+    if (cmdHost.rendererSwitch && existing === variable) return;
     Con_Printf("Can't register variable %s, allready defined\n", variable.name);
     return;
   }

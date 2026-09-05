@@ -34,6 +34,7 @@ import {
   Con_Init,
   Con_CheckResize,
   Con_Print,
+  Con_Printf,
   Con_ClearNotify,
   Con_ToggleConsole_f,
   Con_ToggleChat_f,
@@ -51,7 +52,7 @@ import { cls, CactiveT } from "../src/client/client";
 import { keyState, KeydestT } from "../src/client/keys";
 import { re, type Renderer } from "../src/client/render";
 import { TextureT } from "../src/common/model";
-import { FileHandle, COM_InitArgv } from "../src/common/common";
+import { FileHandle, COM_InitArgv, setComGamedir } from "../src/common/common";
 import { clMainState } from "../src/qw/client/cl_main";
 
 // This file's own beforeEach (below) parks cls.state at ca_active for every
@@ -552,5 +553,22 @@ describe("Con_DrawConsole download bar", () => {
     Con_DrawConsole(100);
 
     expect(draws.some((d) => d.y === 86)).toBe(false);
+  });
+});
+
+// F.md D2: same root cause as src/client/console.ts's own Con_DebugLog (see
+// test/console.test.ts) -- a failed qconsole.log open under -condebug (a
+// -game gamedir that doesn't exist yet) must be a silent no-op, not an
+// uncaught crash. This module routes through the same Sys_DebugLog
+// (src/platform/sys.ts), which is where the fix lives; this test exercises
+// this file's own Con_Printf call site.
+describe("Con_DebugLog (D2: -condebug with a not-yet-existing -game directory)", () => {
+  test("a failed qconsole.log open under -condebug is a silent no-op, not a crash", () => {
+    vid.width = 320;
+    COM_InitArgv(["quake", "-condebug"]);
+    setComGamedir("/nonexistent-dir-for-d2-qwcl-console-test/does-not-exist");
+
+    Con_Init();
+    expect(() => Con_Printf("this must not crash the engine\n")).not.toThrow();
   });
 });

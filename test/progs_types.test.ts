@@ -38,6 +38,7 @@ import {
   MAX_ENT_LEAFS,
   NUM_FOR_EDICT,
   PROG_TO_EDICT,
+  ENGINE_STRING_BASE,
   PR_ClearEngineStrings,
   PR_GetString,
   PR_SetEngineString,
@@ -326,15 +327,19 @@ describe("progs.ts", () => {
     const b = PR_SetEngineString("world");
     const aAgain = PR_SetEngineString("player");
 
-    expect(a).toBeLessThan(0);
-    expect(b).toBeLessThan(0);
+    // engine string indices are positive and based at ENGINE_STRING_BASE so
+    // that a float-view copy of the shared buffer cannot canonicalise them
+    // into a NaN (see progs.ts's string_t note)
+    expect(a).toBeGreaterThanOrEqual(ENGINE_STRING_BASE);
+    expect(b).toBeGreaterThanOrEqual(ENGINE_STRING_BASE);
     expect(a).not.toBe(b);
     expect(aAgain).toBe(a); // deduplicated by content, not a fresh index
 
     expect(PR_GetString(a)).toBe("player");
     expect(PR_GetString(b)).toBe("world");
 
-    expect(() => PR_GetString(a - 1000)).toThrow(SysError);
+    expect(() => PR_GetString(a + 1000)).toThrow(SysError);
+    expect(() => PR_GetString(-1)).toThrow(SysError);
   });
 
   test("PR_GetString on a progs string block reads to the first NUL", () => {

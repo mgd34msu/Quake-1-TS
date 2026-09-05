@@ -41,7 +41,7 @@ import { host } from "../src/common/host";
 import { re, type Renderer } from "../src/client/render";
 import { TextureT } from "../src/common/model";
 import { keyState, KeydestT } from "../src/client/keys";
-import { COM_InitArgv } from "../src/common/common";
+import { COM_InitArgv, setComGamedir } from "../src/common/common";
 
 function requireConText(): Uint8Array {
   if (con_text === null) throw new Error("con_text not allocated -- Con_Init must run first");
@@ -313,5 +313,22 @@ describe("Con_DrawConsole", () => {
     expect(lastRow[0]).toEqual({ x: 8, y: 16, num: "Q".charCodeAt(0) });
     expect(lastRow[1]).toEqual({ x: 16, y: 16, num: "1".charCodeAt(0) });
     expect(lastRow[2]).toEqual({ x: 24, y: 16, num: 0x20 });
+  });
+});
+
+// F.md D2: `-condebug` with a `-game` directory that doesn't exist yet
+// crashed with an uncaught ENOENT from the qconsole.log append. WinQuake's
+// Con_DebugLog (open/write/close, all unchecked) tolerates a failed open as
+// a silent no-op; this reproduces that by pointing com_gamedir at a
+// directory that was never created and confirming Con_Printf (which routes
+// through Con_DebugLog whenever con_debuglog is set) doesn't throw.
+describe("Con_DebugLog (D2: -condebug with a not-yet-existing -game directory)", () => {
+  test("a failed qconsole.log open under -condebug is a silent no-op, not a crash", () => {
+    vid.width = 320;
+    COM_InitArgv(["quake", "-condebug"]);
+    setComGamedir("/nonexistent-dir-for-d2-console-test/does-not-exist");
+
+    Con_Init();
+    expect(() => Con_Printf("this must not crash the engine\n")).not.toThrow();
   });
 });

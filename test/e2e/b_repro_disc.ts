@@ -1,0 +1,10 @@
+import { boot, frames, exec } from "./b_lib";
+import { cls, cl } from "../../src/client/client";
+boot(["-basedir","/home/buzzkill/Projects/qfiles/q1-basedir","-game","e2e_b","-nosound"]);
+frames(5);
+console.log("A cls.state", cls.state, "demoplayback", cls.demoplayback);
+exec("disconnect", 3);
+console.log("B cls.state", cls.state);
+exec("map e1m1", 30);
+console.log("C cls.state", cls.state, "mapname", cl.levelname);
+process.exit(0);

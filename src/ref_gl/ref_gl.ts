@@ -206,6 +206,7 @@ import {
   Draw_TransPic,
   Draw_TransPicTranslate,
   GL_Set2D,
+  GL_ClearTextureCaches,
 } from "./gl_draw";
 import { R_NetGraph } from "./gl_ngraph";
 
@@ -610,6 +611,11 @@ export const glRenderer: Renderer = {
     qglHolder.current = null;
 
     d_8to24table[255] = glVidPaletteState.preMaskAlpha255;
+
+    // gl_draw.ts's own note: the texture names gltextures[]/menu_cachepics[]
+    // hold belong to the context QGL_Shutdown just dropped, so a later
+    // `vid_ref gl; vid_restart` must not find them and reuse them.
+    GL_ClearTextureCaches();
   },
 };
 

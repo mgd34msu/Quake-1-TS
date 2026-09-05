@@ -1,0 +1,11 @@
+import { boot, frames, exec, conTail, check, summary } from "./b_lib";
+import { keyState } from "../../src/client/keys";
+boot(["-basedir", "/home/buzzkill/Projects/qfiles/q1-basedir", "-game", "e2e_b", "-nosound"]);
+frames(5);
+console.log("key_dest", keyState.key_dest);
+exec("echo hello_from_b");
+console.log("--- console tail ---");
+console.log(conTail(20));
+check("boot", true, "");
+summary("smoke");
+process.exit(0);

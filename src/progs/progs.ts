@@ -45,9 +45,26 @@ Deviations from the C source:
 - `string_t` (`char *pr_strings`, C pointer-difference engine strings like
   `host_client->name - pr_strings`) has no TS equivalent: this port ports
   PORTING.md's engine string table ruling here -- `PR_GetString(n)` resolves
-  either a progs-string offset (`n >= 0`) or an engine string
-  (`n < 0`, deduplicated by content) allocated through
-  `PR_SetEngineString`/cleared by `PR_ClearEngineStrings`.
+  either a progs-string offset (`0 <= n < ENGINE_STRING_BASE`) or an engine
+  string (`n >= ENGINE_STRING_BASE`, deduplicated by content) allocated
+  through `PR_SetEngineString`/cleared by `PR_ClearEngineStrings`.
+  Engine string indices are *positive* and based at `ENGINE_STRING_BASE`
+  rather than negative (the ruling's original shape) because the globals and
+  entvars blocks are one ArrayBuffer viewed as both Int32Array and
+  Float32Array: every negative int32 in [-0x7FFFFF, -1] has all float32
+  exponent bits set with a non-zero mantissa, i.e. it *is* a NaN bit pattern,
+  and JavaScript does not preserve NaN payloads across a float read/write
+  (`f[b] = f[a]` canonicalises to 0x7FC00000). qcc moves every builtin
+  argument with `OP_STORE_V` -- a three-word float copy -- so a negative
+  string_t passed to `setmodel`/`find`/`precache_sound` was destroyed on the
+  way in (proven at pr_exec.ts's OP_STORE_V against retail doors.qc:
+  `OP_LOAD_S self.model -> t`, `OP_STORE_V t -> OFS_PARM1`, `OP_CALL2
+  setmodel`). `ENGINE_STRING_BASE` is above every progs string offset and
+  below 0x7F800000, the first NaN bit pattern, so every string_t this port
+  hands to progs is an ordinary finite float32 that round-trips a float copy
+  exactly. This matches the C's own semantics: there the value is a plain
+  integer nobody interprets as a float, and `pr_strings + n` is simply a
+  pointer outside the loaded string block.
 - `LinkT` gains an `owner: EdictT | QwEdictT | null` field with no C
   counterpart, so `STRUCT_FROM_LINK`/`EDICT_FROM_AREA(l)` become `l.owner` at
   call sites instead of pointer arithmetic (`common.h`'s `STRUCT_FROM_LINK`
@@ -253,6 +270,13 @@ export function RETURN_EDICT(e: EdictT): void {
 //============================================================================
 // string_t resolution (see file header's string_t deviation note)
 
+// First engine-string index. Every progs-string offset is below it (the
+// string block is a few tens of KB at most), and it is far below 0x7F800000,
+// the smallest int32 whose float32 reinterpretation is a NaN -- so no
+// string_t this module hands out can be canonicalised by a float-view copy
+// of the shared globals/entvars buffer.
+export const ENGINE_STRING_BASE = 0x40000000;
+
 const engineStrings: string[] = [];
 const engineStringIndex = new Map<string, number>();
 
@@ -265,19 +289,22 @@ function readNulTerminated(bytes: Uint8Array, offset: number): string {
 }
 
 export function PR_GetString(n: StringT): string {
-  if (n >= 0) {
-    if (pr.strings === null) throw new SysError("PR_GetString: pr.strings not set (PR_LoadProgs not called)");
-    return readNulTerminated(pr.strings, n);
+  if (n >= ENGINE_STRING_BASE) {
+    const index = n - ENGINE_STRING_BASE;
+    if (index >= engineStrings.length) throw new SysError(`PR_GetString: bad engine string index ${n}`);
+    return engineStrings[index];
   }
-  const index = -n - 1;
-  if (index < 0 || index >= engineStrings.length) throw new SysError(`PR_GetString: bad engine string index ${n}`);
-  return engineStrings[index];
+  if (n < 0) throw new SysError(`PR_GetString: bad string offset ${n}`);
+  if (pr.strings === null) throw new SysError("PR_GetString: pr.strings not set (PR_LoadProgs not called)");
+  if (n >= pr.strings.length) throw new SysError(`PR_GetString: bad string offset ${n}`);
+  return readNulTerminated(pr.strings, n);
 }
 
 export function PR_SetEngineString(s: string): StringT {
   const existing = engineStringIndex.get(s);
   if (existing !== undefined) return existing;
-  const index = -(engineStrings.length + 1);
+  const index = ENGINE_STRING_BASE + engineStrings.length;
+  if (index >= 0x7f800000) throw new SysError("PR_SetEngineString: engine string table overflow");
   engineStrings.push(s);
   engineStringIndex.set(s, index);
   return index;

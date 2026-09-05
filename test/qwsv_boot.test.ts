@@ -28,14 +28,24 @@ Sys_Main_Loop's infinite loop. `-port 0` binds an ephemeral UDP port
 and 0 means "any free port"), so the boot can never collide with anything
 already listening on 27500.
 
-Standing order 13 / rule 15: this file touches no shared singleton of its
-own -- everything the boot mutates lives and dies in the child.
+Standing order 13 / rule 15: this file's own child-process boot touches no
+shared singleton of its own -- everything the boot mutates lives and dies in
+the child. The one exception is the final describe block, added for
+.orch/e2e/E.md defect C: it runs in-process (no SV_Init/Cmd_AddCommand
+involved, so none of the collision risk the rest of this file's own header
+describes applies) and touches two shared singletons directly --
+src/client/console.ts's `qwConsoleHooks` and src/qw/server/sv_send.ts's
+`sv_redirected`/`outputbuf` -- both reset in its own afterEach/afterAll.
 */
 
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 
 import { QWSV_FIXTURE_HOSTNAME, QWSV_FIXTURE_MAP } from "./support/qwsv_fixture";
+import * as sysModule from "../src/platform/sys";
+import { qwConsoleHooks, Con_Printf as WinQuakeConPrintf } from "../src/client/console";
+import { Con_Printf as SvSendConPrintf, SV_BeginRedirect } from "../src/qw/server/sv_send";
+import { RedirectT } from "../src/qw/server/server";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -324,5 +334,61 @@ describe("Sys_Main_Init + runFrames -- a real qwsv boot", () => {
   test("a `status` console command runs through Cbuf without throwing", () => {
     expect(bootLog).toContain("net address      : ");
     expect(bootLog).toContain("cpu utilization  : ");
+  });
+});
+
+//=============================================================================
+// .orch/e2e/E.md defect C: five modules shared with qwcl (src/qw/common.ts,
+// cmd.ts, net_chan.ts, net_udp.ts, pmovetst.ts) call Con_Printf/Con_DPrintf
+// imported from src/client/console.ts (WinQuake's file). qwcl installs
+// `qwConsoleHooks` to redirect those calls into its own console; qwsv
+// (src/qw/main_sv.ts's Sys_Main_Init) now does the same, pointed at
+// src/qw/server/sv_send.ts's redirect-aware Con_Printf instead -- the one
+// real Con_Printf implementation in the qwsv binary (see that file's own
+// header). Before this fix, a Con_Printf from one of those five files fell
+// through to console.ts's own bare-Sys_Printf body, bypassing
+// SV_BeginRedirect/outputbuf entirely: a client's `rcon`/`cmd status`
+// redirect would see nothing back if the message happened to originate from
+// one of those five files.
+//
+// In-process (not the child-process harness above): no SV_Init/Cmd_AddCommand
+// call is involved, so none of this file's own collision concern applies.
+// Mirrors the hook wiring src/qw/main_sv.ts's Sys_Main_Init does, without
+// running a whole boot.
+//=============================================================================
+
+describe("qwsv Con_Printf redirect reaches shared modules (.orch/e2e/E.md defect C)", () => {
+  const savedHook = qwConsoleHooks.Con_Printf;
+  const sysPrintfSpy = spyOn(sysModule, "Sys_Printf"); // bare call-through spy (rule 15)
+
+  beforeAll(() => {
+    // the same link step src/qw/main_sv.ts's Sys_Main_Init performs
+    qwConsoleHooks.Con_Printf = SvSendConPrintf;
+  });
+
+  afterEach(() => {
+    sysPrintfSpy.mockClear();
+    SV_BeginRedirect(RedirectT.RD_NONE); // clears sv_redirected and outputbuf, no network send
+  });
+
+  afterAll(() => {
+    qwConsoleHooks.Con_Printf = savedHook;
+    sysPrintfSpy.mockRestore();
+  });
+
+  test("without a redirect window, a shared module's Con_Printf still reaches the server's real stdout", () => {
+    WinQuakeConPrintf("SYSEXIT_E_C_MARKER_NO_REDIRECT\n");
+    const printed = sysPrintfSpy.mock.calls.filter((c) => String(c[1]).includes("SYSEXIT_E_C_MARKER_NO_REDIRECT"));
+    expect(printed.length).toBeGreaterThan(0);
+  });
+
+  test("SV_BeginRedirect(RD_CLIENT) captures a shared module's Con_Printf instead of printing it locally", () => {
+    SV_BeginRedirect(RedirectT.RD_CLIENT);
+    WinQuakeConPrintf("SYSEXIT_E_C_MARKER_REDIRECTED\n");
+    const printed = sysPrintfSpy.mock.calls.filter((c) => String(c[1]).includes("SYSEXIT_E_C_MARKER_REDIRECTED"));
+    // The whole point of the fix: this message must NOT reach the server's
+    // own stdout while a redirect window (rcon / `cmd status` from a client)
+    // is open -- it belongs in sv_send.ts's outputbuf instead.
+    expect(printed.length).toBe(0);
   });
 });

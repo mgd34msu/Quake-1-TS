@@ -148,7 +148,7 @@ export enum CmdSourceT {
 export const cmdState = { source: CmdSourceT.src_command, wait: false };
 
 // host_initialized (host.c); host.ts sets this once it exists.
-export const cmdHost = { initialized: false };
+export const cmdHost = { initialized: false, rendererSwitch: false };
 
 //=============================================================================
 //
@@ -467,7 +467,12 @@ export function Cmd_TokenizeString(text: string): void {
 // register commands and functions to call for them.
 // The cmd_name is referenced later, so it should not be in temp memory
 export function Cmd_AddCommand(cmd_name: string, fn: XCommandT): void {
-  if (cmdHost.initialized) Sys_Error("Cmd_AddCommand after host_initialized"); // because hunk allocation would get stomped
+  // Port deviation: a runtime renderer switch (`vid_restart`, the port's own
+  // feature -- the C's renderers are separate binaries) re-runs R_Init after
+  // host init; VID_CheckChanges opens `cmdHost.rendererSwitch` for that
+  // window so the new renderer's commands register and replace the old
+  // renderer's functions of the same name.
+  if (cmdHost.initialized && !cmdHost.rendererSwitch) Sys_Error("Cmd_AddCommand after host_initialized"); // because hunk allocation would get stomped
 
   // fail if the command is a variable name
   if (Cvar_VariableString(cmd_name).length > 0) {
@@ -478,6 +483,10 @@ export function Cmd_AddCommand(cmd_name: string, fn: XCommandT): void {
   // fail if the command already exists
   for (const cmd of cmd_functions) {
     if (cmd_name === cmd.name) {
+      if (cmdHost.rendererSwitch) {
+        cmd.fn = fn; // the previous renderer's function must not survive the switch
+        return;
+      }
       Con_Printf("Cmd_AddCommand: %s already defined\n", cmd_name);
       return;
     }

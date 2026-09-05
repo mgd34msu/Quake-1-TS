@@ -19,6 +19,7 @@ import {
   MAX_PRSTR,
   NUM_FOR_EDICT,
   PROG_TO_EDICT,
+  ENGINE_STRING_BASE,
   PR_ClearEngineStrings,
   PR_GetString,
   PR_SetString,
@@ -223,15 +224,18 @@ describe("progs.ts (QW)", () => {
     const b = PR_SetString("world");
     const aAgain = PR_SetString("player");
 
-    expect(a).toBeLessThan(0);
-    expect(b).toBeLessThan(0);
+    // positive, based at ENGINE_STRING_BASE, for the NaN-canonicalisation
+    // reason src/qw/server/progs.ts's header documents
+    expect(a).toBeGreaterThanOrEqual(ENGINE_STRING_BASE);
+    expect(b).toBeGreaterThanOrEqual(ENGINE_STRING_BASE);
     expect(a).not.toBe(b);
     expect(aAgain).toBe(a); // deduplicated by content, not a fresh index
 
     expect(PR_GetString(a)).toBe("player");
     expect(PR_GetString(b)).toBe("world");
 
-    expect(() => PR_GetString(a - 1000)).toThrow(SysError);
+    expect(() => PR_GetString(a + 1000)).toThrow(SysError);
+    expect(() => PR_GetString(-1)).toThrow(SysError);
 
     PR_ClearEngineStrings();
   });

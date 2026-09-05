@@ -16,6 +16,8 @@ import {
   type ParseState,
   COM_CheckParm,
   COM_InitArgv,
+  com_argc,
+  com_argv,
   COM_SkipPath,
   COM_StripExtension,
   COM_FileExtension,
@@ -253,6 +255,52 @@ describe("COM_CheckParm / COM_InitArgv / va", () => {
     expect(va("%s/%s", "id1", "pak0.pak")).toBe("id1/pak0.pak");
     expect(va("%i files", 5)).toBe("5 files");
   });
+});
+
+// F.md D4: a command line with more than ~50 `+`/`-` tokens appeared to
+// "hang the process". WinQuake's own COM_InitArgv (common.c:1057, read in
+// full against /home/buzzkill/Projects/qsrc/quake/WinQuake/common.c) drops
+// argv entries past MAX_NUM_ARGVS (50, including argv[0], the program name)
+// silently, exactly as this port's COM_InitArgv does below -- confirmed by
+// direct comparison, line for line. COM_InitArgv itself cannot hang (every
+// loop here is bounded by MAX_NUM_ARGVS/CMDLINE_LENGTH and argc, both finite);
+// the per-test timeout below is a regression guard, not evidence this one
+// ever needed it. What actually happened in the e2e report: enough `+echo`/
+// `+alias` tokens push a trailing `+quit` past the 50-token cutoff, so it
+// gets silently dropped along with everything after it -- the dedicated
+// server then legitimately keeps running (waiting for connections, low CPU,
+// no `+quit` ever having arrived) instead of exiting, which is the same
+// thing the original engine would do given the identical command line, not
+// an infinite loop in this function.
+describe("COM_InitArgv argv truncation at MAX_NUM_ARGVS=50 (D4)", () => {
+  test("49 total tokens (including argv[0]): none dropped", () => {
+    const argv = ["quake", ...Array.from({ length: 48 }, (_, i) => `arg${i}`)];
+    COM_InitArgv(argv);
+    expect(com_argc).toBe(49);
+    expect(com_argv[48]).toBe("arg47"); // last real token survives
+  }, 2000);
+
+  test("50 total tokens: exactly MAX_NUM_ARGVS, none dropped", () => {
+    const argv = ["quake", ...Array.from({ length: 49 }, (_, i) => `arg${i}`)];
+    COM_InitArgv(argv);
+    expect(com_argc).toBe(50);
+    expect(com_argv[49]).toBe("arg48");
+  }, 2000);
+
+  test("51 total tokens: truncated to 50, the 51st (e.g. a trailing +quit) silently dropped", () => {
+    const argv = ["quake", ...Array.from({ length: 49 }, (_, i) => `arg${i}`), "+quit"];
+    COM_InitArgv(argv);
+    expect(com_argc).toBe(50);
+    expect(com_argv[49]).toBe("arg48"); // "+quit" (index 50) never made it in
+    expect(com_argv.slice(0, com_argc)).not.toContain("+quit");
+  }, 2000);
+
+  test("70 total tokens (F.md's repro scale): truncated to 50, no hang", () => {
+    const argv = ["quake", ...Array.from({ length: 68 }, (_, i) => `+echo${i}`), "+quit"];
+    COM_InitArgv(argv);
+    expect(com_argc).toBe(50);
+    expect(com_argv.slice(0, com_argc)).not.toContain("+quit");
+  }, 2000);
 });
 
 //============================================================================

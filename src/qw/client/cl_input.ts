@@ -108,9 +108,9 @@ import { MSG_WriteByte, MSG_WriteDeltaUsercmd, COM_BlockSequenceCRCByte, nullcmd
 import { Netchan_Transmit } from "../net_chan";
 import { CL_CalcNet } from "./cl_parse";
 import { CL_WriteDemoCmd } from "./cl_demo";
-import { lookspring } from "./cl_main";
+import { lookspring, lookstrafe, sensitivity, m_pitch, m_yaw, m_forward, m_side } from "./cl_main";
 import { V_StartPitchDrift, V_StopPitchDrift } from "../../client/view";
-import { inputBackend } from "../../client/input";
+import { inputBackend, qwInputHooks } from "../../client/input";
 
 /*
 ===============================================================================
@@ -621,6 +621,12 @@ export function CL_InitInput(): void {
   Cmd_AddCommand("-mlook", IN_MLookUp);
 
   Cvar_RegisterVariable(cl_nodelta);
+
+  // QW/client/vid_x.c's IN_Move reads THESE objects, not the WinQuake tree's
+  // identically-named ones; one process compiles both, so the shared backend
+  // body (src/platform/sdl.ts) is handed the live set here -- see
+  // src/client/input.ts's header on qwInputHooks.
+  qwInputHooks.current = { in_strafe, in_mlook, lookstrafe, sensitivity, m_pitch, m_yaw, m_forward, m_side };
 }
 
 /*

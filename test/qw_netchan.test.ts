@@ -37,7 +37,16 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as netUdp from "../src/qw/net_udp";
-import { NetadrT, NET_StringToAdr, net_from } from "../src/qw/net_udp";
+import {
+  NetadrT,
+  NET_StringToAdr,
+  net_from,
+  net_local_adr,
+  NET_Init,
+  NET_Ready,
+  NET_Shutdown,
+  NET_GetPacket,
+} from "../src/qw/net_udp";
 import { net_message, MSG_WriteByte, MSG_ReadByte } from "../src/common/sizebuf";
 import {
   NetchanT,
@@ -381,5 +390,90 @@ describe("netchanState.isClient -- the qport write (RULING: substitutes for #ifn
     // header: 4 (w1) + 4 (w2) = 8 bytes, then the 2-byte payload
     expect(packet.length).toBe(10);
     expect(Array.from(packet.data.slice(8))).toEqual([7, 8]);
+  });
+});
+
+/*
+Everything above intercepts NET_SendPacket with a spy, so the framing can be
+read straight off the packet. This last block instead lets a Netchan packet
+go out through the real libc UDP socket src/qw/net_udp.ts now opens and come
+back in through the real NET_GetPacket -- QW has one process-global socket,
+so the round trip is the socket talking to its own bound address, which is
+what qwcl and qwsv do to 127.0.0.1 anyway.
+
+The read spins with Bun.sleepSync rather than awaiting: recvfrom is a
+synchronous syscall on a non-blocking descriptor, and never needing a turn of
+the event loop is the property that makes the transport usable from inside
+the engine's frame loop at all.
+
+Rule 15: this block restores the file's NET_SendPacket spy before it runs (it
+is the last block in the file, so nothing after it wants the spy), and puts
+net_message's data/maxsize back the way NET_Init found them -- the file-level
+afterAll then restores them to the process-wide originals.
+*/
+describe("a Netchan packet over the real UDP socket", () => {
+  const REAL_PORT = 26230;
+
+  let blockData: Uint8Array;
+  let blockMaxsize: number;
+
+  beforeAll(async () => {
+    sendPacketSpy.mockRestore(); // real NET_SendPacket from here down
+
+    blockData = net_message.data;
+    blockMaxsize = net_message.maxsize;
+
+    NET_Init(REAL_PORT); // repoints net_message at QW's own MAX_UDP_PACKET buffer
+    await NET_Ready();
+  });
+
+  afterAll(() => {
+    NET_Shutdown();
+    net_message.data = blockData;
+    net_message.maxsize = blockMaxsize;
+    net_message.cursize = 0;
+  });
+
+  test("Netchan_Transmit goes out on the wire and Netchan_Process accepts it back", () => {
+    const self = new NetadrT();
+    self.ip.set(net_local_adr.ip);
+    self.port = net_local_adr.port;
+    expect(self.port).toBe(REAL_PORT);
+
+    const client = new NetchanT();
+    const server = new NetchanT();
+    Netchan_Setup(client, self, 12345);
+    Netchan_Setup(server, self, 0);
+
+    // Sends over the real socket and reads the datagram back. The read
+    // spins on Bun.sleepSync, never an await: recvfrom is a synchronous
+    // syscall on a non-blocking descriptor.
+    const roundTrip = (payload: Uint8Array): boolean => {
+      netchanState.isClient = true;
+      Netchan_Transmit(client, payload.length, payload);
+
+      let got = false;
+      for (let i = 0; i < 500 && !got; i++) {
+        got = NET_GetPacket();
+        if (!got) Bun.sleepSync(2);
+      }
+      expect(got).toBe(true);
+
+      // NET_GetPacket filled net_from from the real recvfrom source address
+      expect(Array.from(net_from.ip)).toEqual(Array.from(self.ip));
+      expect(net_from.port).toBe(REAL_PORT);
+
+      netchanState.isClient = false;
+      return Netchan_Process(server);
+    };
+
+    // the warm-up packet a fresh channel pair always loses (sequence 0 is
+    // not newer than incoming_sequence 0) -- same as the spied tests above
+    expect(roundTrip(new Uint8Array([0]))).toBe(false);
+
+    expect(roundTrip(new Uint8Array([0x42, 0x43]))).toBe(true);
+    expect(MSG_ReadByte()).toBe(0x42);
+    expect(MSG_ReadByte()).toBe(0x43);
+    expect(server.incoming_sequence).toBe(1);
   });
 });

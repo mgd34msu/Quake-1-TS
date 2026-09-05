@@ -90,6 +90,13 @@ Deviations from PORTING.md / the C source:
   `setCvarInfoHook` callback (src/common/cvar.ts's fold, PORTING.md's
   QuakeWorld track). CL_Init installs it before registering any cvar, since
   in the C it is compiled in unconditionally.
+- `Host_WriteConfiguration`'s `fopen` goes through platform/sys.ts's
+  `Sys_FileOpenWrite`, which throws `SysError` where the C's `fopen` returned
+  NULL (e.g. `-game` names a directory that doesn't exist). Caught around the
+  open the same way the C tests `fopen`'s return against NULL, so
+  `Con_Printf ("Couldn't write config.cfg.\n"); return;` stays reachable
+  instead of the error propagating out through Sys_Quit (src/platform/sys.ts's
+  `installTerminationSignals`).
 */
 
 import { Cbuf_AddText, Cbuf_Execute, Cbuf_Init, Cbuf_InsertText, Cmd_AddCommand, Cmd_Argc, Cmd_Argv, Cmd_ForwardToServer, Cmd_Init, cl_warncmd, qwCmdHooks } from "../cmd";
@@ -144,7 +151,7 @@ import { getRenderer, r_origin, re, vpn, vright, vup } from "../../client/render
 import { S_StopAllSounds, S_Shutdown, S_Update } from "../../client/snd_dma";
 import { vidBackend } from "../../client/vid";
 import { V_Init } from "../../client/view";
-import { Sys_Error, Sys_FileClose, Sys_FileOpenWrite, Sys_FloatTime, Sys_Quit, Sys_SendKeyEvents, Sys_mkdir } from "../../platform/sys";
+import { Sys_Error, Sys_FileClose, Sys_FileOpenWrite, Sys_FloatTime, Sys_Quit, Sys_SendKeyEvents, Sys_mkdir, SysError } from "../../platform/sys";
 import { CL_DecayLights, CL_EmitEntities, CL_SetUpPlayerPrediction } from "./cl_ents";
 import { CL_InitPrediction, CL_PredictMove } from "./cl_pred";
 import { Cam_Reset, CL_InitCam } from "./cl_cam";
@@ -1242,7 +1249,16 @@ Writes key bindings and archived cvars to config.cfg
 */
 export function Host_WriteConfiguration(): void {
   if (clMainState.host_initialized) {
-    const handle = Sys_FileOpenWrite(va("%s/config.cfg", com_gamedir));
+    let handle: number;
+    try {
+      // f = fopen (va("%s/config.cfg",com_gamedir), "w");
+      handle = Sys_FileOpenWrite(va("%s/config.cfg", com_gamedir));
+    } catch (err) {
+      if (!(err instanceof SysError)) throw err;
+      // if (!f) { Con_Printf ("Couldn't write config.cfg.\n"); return; }
+      Con_Printf("Couldn't write config.cfg.\n");
+      return;
+    }
     if (handle === -1) {
       Con_Printf("Couldn't write config.cfg.\n");
       return;

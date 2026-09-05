@@ -132,11 +132,13 @@ function qwClMainMod(): typeof QwClMainModule {
 }
 import { COM_CheckParm, Q_atoi, com_argc, com_argv } from "../common/common";
 import { CvarT, Cvar_RegisterVariable, Cvar_Set } from "../common/cvar";
-import { Cmd_AddCommand } from "../common/cmd";
+import { Cmd_AddCommand, cmdHost } from "../common/cmd";
 import { Con_Printf } from "../client/console";
 import { scrState } from "../client/screen_types";
-import { re, type Renderer } from "../client/render";
-import { setModelLoaderHooks } from "../common/model";
+import { getRenderer, re, type Renderer } from "../client/render";
+import { Mod_ClearAll, Mod_ForName, setModelLoaderHooks } from "../common/model";
+import { cl, cl_static_entities } from "../client/client";
+import { Cache_Flush } from "../common/zone";
 import { inputBackend } from "../client/input";
 import { SDL_BackendEnabled, SDL_SetBackendEnabled, SDLVID_Init, SDLVID_Present, SDLVID_SetWindowTitle, SDLVID_Shutdown, SDL_SetFullscreenHint } from "./sdl";
 import { CreateGLimp, glimpHolder } from "./glimp";
@@ -370,14 +372,112 @@ export function VID_CheckChanges(runRInit: boolean = true): void {
   // switch and restored to whatever a real loading plaque had left it as.
   const savedScrDisabled = scrState.scr_disabled_for_loading;
   scrState.scr_disabled_for_loading = true;
+  // see Cmd_AddCommand: the incoming renderer's R_Init registers its
+  // console commands after host_initialized on a runtime switch.
+  const savedRendererSwitch = cmdHost.rendererSwitch;
+  cmdHost.rendererSwitch = cmdHost.initialized;
   try {
-    VID_CheckChanges_(runRInit);
+    // A renderer switch with a level already up has to reload it (see
+    // VID_RestartLevel). Decided HERE, not inside VID_CheckChanges_: that
+    // function drops re.current before it is done and re-enters itself on the
+    // gl-mode-set fallback below, by which point neither the outgoing
+    // renderer nor its answer to "was a level loaded" is still around.
+    const restartLevel = runRInit && re.current !== null && cl.worldmodel !== null;
+    if (restartLevel) {
+      // cl_parse.c's CL_ParseUpdate does exactly this before an entity's
+      // links are rebuilt, and it has to happen while the mleaf_t the efrags
+      // are threaded through are still the ones they were built from.
+      // Skipping it strands one efrag per static entity on the world model
+      // that is about to be thrown away, and cl.free_efrags (a fixed
+      // MAX_EFRAGS pool, refilled only by CL_ClearState) never gets them
+      // back -- a few switches in, R_SplitEntityOnNode starts printing
+      // "Too many efrags!" and the statics stop appearing.
+      const outgoing = getRenderer();
+      for (let i = 0; i < cl.num_statics; i++) outgoing.R_RemoveEfrags(cl_static_entities[i]);
+    }
+    VID_CheckChanges_(runRInit, restartLevel);
   } finally {
     scrState.scr_disabled_for_loading = savedScrDisabled;
+    cmdHost.rendererSwitch = savedRendererSwitch;
   }
 }
 
-function VID_CheckChanges_(runRInit: boolean): void {
+/*
+VID_RestartLevel -- the port's own stand-in for the model re-registration
+Quake 2's `vid_restart` gets for free (ref.c's R_BeginRegistration plus every
+re.RegisterModel/RegisterSkin call CL_PrepRefresh makes a second time).
+
+Quake 1 has no registration pass at all: model.c/gl_model.c bake the
+renderer's own data straight into model_t while the file is being read --
+textures through `ModelLoaderHooks.textureLoaded` (model.c's R_InitSky for
+"sky*", gl_model.c's R_InitSky + GL_LoadTexture for everything), alias and
+sprite data into `mod->cache` in that renderer's own layout, and lightmaps in
+gl_rmisc.c's R_NewMap. GLQUAKE being a compile-time #define, no C file ever
+has to hand a level it did not load to a different refresh. So the only way
+to do it here is to read every model again with the incoming renderer's hooks
+installed, which is exactly what the C's own two map-change primitives do:
+
+  Cache_Flush()   zone.c's "flush" command -- drops every cache_user_t block
+                  (alias and sprite data, draw.c's Draw_CachePic pics, QW's
+                  Skin_Cache skins), so Mod_LoadModel's `Cache_Check` early
+                  return misses and an alias model really is read again.
+  Mod_ClearAll()  model.c's own; sets needload on the brush and sprite models
+                  so Mod_LoadModel's `needload == NL_PRESENT` early return
+                  misses too.
+
+Mod_ForName then reloads INTO THE SAME model_t: Mod_FindName matches on
+mod->name before it ever considers an unreferenced slot, and
+Mod_LoadBrushModel's submodel loop copies over the "*1".."*N" model_t that
+are already in mod_known. That in-place reload is what keeps cl.worldmodel,
+cl_entities[0].model, cl.model_precache[], cl_static_entities[].model and the
+server's sv.worldmodel/sv.models[] -- the same objects SV_Move walks for
+hulls and clipnodes -- valid across the switch, rather than pointing at an
+abandoned copy while the renderer draws a different one.
+*/
+function VID_RestartLevel(): void {
+  Cache_Flush();
+  Mod_ClearAll();
+
+  for (let i = 1; i < cl.model_precache.length; i++) {
+    const mod = cl.model_precache[i];
+    if (mod === null) continue;
+    Mod_ForName(mod.name, true);
+  }
+
+  const r = getRenderer();
+
+  // cl_parse.c's CL_ParseServerInfo tail, minus the parts that only a signon
+  // message can supply: the world is loaded, so the refresh gets its
+  // per-level setup (gl_rmisc.c's R_NewMap is where r_worldentity.model,
+  // GL_BuildLightmaps and skytexturenum come from; r_main.c's is where the
+  // surface and edge pools come from).
+  r.R_NewMap();
+
+  // ... and then CL_ParseStatic's own tail for the statics that were parsed
+  // before the switch. R_NewMap has just cleared every leaf->efrags on the
+  // freshly loaded world, so without this the torches and flames stop being
+  // walked by R_StoreEfrags entirely.
+  for (let i = 0; i < cl.num_statics; i++) r.R_AddEfrags(cl_static_entities[i]);
+
+  // cl_parse.c's CL_NewTranslation, whose gl_rmisc.c half is the only thing
+  // that ever uploads playertextures[playernum]; nothing re-sends the
+  // svc_updatecolors messages that normally drive it, so a player model would
+  // otherwise draw through a texture name the destroyed context minted.
+  // r_main.c's software half is an empty body, so this costs nothing there.
+  // QW reaches R_TranslatePlayerSkin from gl_rmain.c's own per-frame
+  // `if (!sc->skin)` branch instead, so it needs no help here.
+  if (!qw.active) {
+    const players = Math.min(cl.maxclients, cl.scores.length);
+    for (let i = 0; i < players; i++) r.R_TranslatePlayerSkin(i);
+  }
+
+  // screen.c's SCR_UpdateScreen reads both: the refdef is sized off a mode
+  // that may have changed, and the new renderer has drawn nothing yet.
+  vid.recalc_refdef = 1;
+  scrState.scr_fullupdate = 0;
+}
+
+function VID_CheckChanges_(runRInit: boolean, restartLevel: boolean): void {
   const name = vid_ref.string;
   const factory = registry.get(name);
   if (!factory) {
@@ -428,7 +528,7 @@ function VID_CheckChanges_(runRInit: boolean): void {
         vid_ref.string = "soft";
         vid_ref.value = 0;
       }
-      VID_CheckChanges_(runRInit);
+      VID_CheckChanges_(runRInit, restartLevel);
       return;
     }
     glimpHolder.current = glimp;
@@ -458,7 +558,22 @@ function VID_CheckChanges_(runRInit: boolean): void {
     re.current.D_InitCaches(new Uint8Array(cacheSize), cacheSize);
   }
 
-  if (runRInit) hostClientHooks.rInit?.();
+  if (runRInit) {
+    // host.c's Host_Init runs R_InitTextures, then Draw_Init/SCR_Init/R_Init
+    // and Sbar_Init, right around its VID_Init call. Every one of them hands
+    // out an object only the renderer that made it can draw -- gl_rmisc.c's
+    // r_notexture_mip, gl_draw.c's char_texture/conback/draw_backtile, and
+    // the qpic_t * SCR_Init and Sbar_Init take from Draw_PicFromWad -- so on
+    // a live renderer switch they all have to run again against the incoming
+    // one. Same order as Host_Init: Draw_Init first, because SCR_Init's and
+    // Sbar_Init's Draw_PicFromWad calls need gl_draw.c's scrap atlas.
+    hostClientHooks.rInitTextures?.(); // R_InitTextures
+    hostClientHooks.drawInit?.(); // Draw_Init
+    hostClientHooks.scrInit?.(); // SCR_Init
+    hostClientHooks.rInit?.(); // R_Init
+    hostClientHooks.sbarInit?.(); // Sbar_Init
+    if (restartLevel) VID_RestartLevel();
+  }
 }
 
 export function VID_Restart_f(): void {

@@ -92,6 +92,14 @@ Deviations from the C source:
   acceptable `bun run check` failures from this file are
   "Cannot find module '../server/sv_main'" / "'../server/sv_move'" and
   errors on the missing names.
+- `PF_Find`'s `if (!s) PR_RunError(...)`/`if (!t) continue;` (bug fix,
+  2026-09-05, D.md Defect B): both test a `char *` that is never NULL in the
+  C (offset 0 is the empty string at `pr_strings[0]`), so both are dead code
+  in the real engine and are dropped here rather than ported as JS
+  truthiness, which fired on an empty (unset) `.target`/etc. field and threw
+  "PF_Find: bad search string" on `changelevel dm2` (func_train_find's
+  `find(world, targetname, self.target)` in plats.qc, `self.target` unset).
+  See PF_Find's own comment for the full reasoning.
 */
 
 import { SV_BroadcastPrintf } from "../common/host";
@@ -908,17 +916,30 @@ function PF_Remove(): void {
 
 // entity (entity start, .string field, string match) find = #5;
 // non-QUAKE2 branch (see file header)
+//
+// The C's `s = G_STRING(OFS_PARM2); if (!s) PR_RunError(...)` and the loop's
+// `t = E_STRING(ed,f); if (!t) continue;` both test a `char *` (pr_strings +
+// offset), which is never NULL -- offset 0 is the empty string living at
+// pr_strings[0], not a null pointer -- so both checks are dead code in the
+// real engine: an entity whose `.target` (or whatever field `f` names) is
+// unset resolves to "" and is compared by `strcmp` like any other value,
+// never short-circuited. This port's G_STRING/E_STRING (progs.ts) have the
+// same property -- they always return a string, throwing SysError only for
+// a genuinely out-of-range engine-string index, never returning a falsy
+// non-string -- so porting `!s`/`!t` literally as JS truthiness would fire
+// on "" and diverge from the C (this was the D.md-reported "PF_Find: bad
+// search string" defect on func_train_find's `find(world, targetname, "")`
+// call in plats.qc). Both checks are dropped, matching the C's actual
+// (never-firing) behavior rather than its literal token-for-token text.
 function PF_Find(): void {
   let e = G_EDICTNUM(OFS_PARM0);
   const f = G_INT(OFS_PARM1);
   const s = G_STRING(OFS_PARM2);
-  if (!s) PR_RunError("PF_Find: bad search string");
 
   for (e++; e < sv.num_edicts; e++) {
     const ed = EDICT_NUM(e);
     if (ed.free) continue;
     const t = E_STRING(ed, f);
-    if (!t) continue;
     if (t === s) {
       RETURN_EDICT(ed);
       return;

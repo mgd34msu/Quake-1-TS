@@ -30,8 +30,9 @@ Deviations from PORTING.md / the C source:
   does not exist, instead of an `eval_t *`; callers read the word through
   E_FLOAT/E_INT/E_VECTOR/E_STRING (progs.ts). The two-entry lookup cache is
   kept as-is, including the C's caching of negative results.
-- `ED_NewString` returns a `string_t` (PR_SetEngineString's negative engine
-  string index) rather than a `char *` into the hunk; ED_ParseEpair's
+- `ED_NewString` returns a `string_t` (PR_SetEngineString's engine string
+  index, at or above progs.ts's `ENGINE_STRING_BASE`) rather than a `char *`
+  into the hunk; ED_ParseEpair's
   `ED_NewString (s) - pr_strings` therefore becomes a plain assignment. This
   is PORTING.md's engine string table ruling.
 - `ED_Write`/`ED_WriteGlobals` take a `TextFileWriter` (`{ write(s) }`)

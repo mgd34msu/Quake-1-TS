@@ -215,6 +215,16 @@ export function setMyTcpipAddress(s: string): void {
 export let net_hostport = 0;
 export let DEFAULTnet_hostport = 26000;
 
+// Test-only setter: `net_hostport` is a bare `let` whose only writers are
+// NET_Init (from `-port`/`-udpport`) and NET_Port_f (from the "port"
+// command). A suite that needs the landriver to see a specific port without
+// standing up the whole NET_Init/Cbuf path has no other way to set it, or to
+// put it back afterwards (rule 15) -- same reason setNetNumLandrivers below
+// exists.
+export function setNetHostport(port: number): void {
+  net_hostport = port;
+}
+
 let listening = false;
 
 export let slistInProgress = false;

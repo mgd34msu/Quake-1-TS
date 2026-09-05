@@ -32,7 +32,7 @@ import { MAX_EDICTS } from "../src/qw/bothdefs";
 import { MAX_CLIENTS, SvcOpsT } from "../src/qw/protocol";
 import { OFS_PARM0, OFS_PARM1, OFS_PARM2, OFS_PARM3, OFS_RETURN } from "../src/progs/pr_comp";
 import { EDICT_NUM, EDICT_TO_PROG, PR_GetString, PR_SetString, QwEdictT, qwpr } from "../src/qw/server/progs";
-import { ED_FindFunction, PR_AllocEdicts, PR_LoadProgs } from "../src/qw/server/pr_edict";
+import { ED_FindField, ED_FindFunction, PR_AllocEdicts, PR_LoadProgs } from "../src/qw/server/pr_edict";
 import { PRRunError, PR_ExecuteProgram, prExec } from "../src/qw/server/pr_exec";
 import { ClientStateT, ServerStateT, SOLID_BBOX, SOLID_BSP, MOVETYPE_PUSH, sv, svs } from "../src/qw/server/server";
 import { SV_ClearWorld } from "../src/qw/server/world";
@@ -132,6 +132,10 @@ function setParmFloat(ofs: number, value: number): void {
   requireGlobals().f[ofs] = value;
 }
 
+function setParmInt(ofs: number, value: number): void {
+  requireGlobals().i[ofs] = value;
+}
+
 function setParmVector(ofs: number, v: readonly [number, number, number]): void {
   const g = requireGlobals();
   g.f[ofs] = v[0];
@@ -217,6 +221,47 @@ describe("PF_ftos / PF_vtos (Com_sprintf formatting)", () => {
     setParmVector(OFS_PARM0, [1, 2, 3]);
     pr_builtin[27]();
     expect(returnString()).toBe(Com_sprintf("'%5.1f %5.1f %5.1f'", 1, 2, 3));
+  });
+});
+
+describe("PF_Find", () => {
+  // D.md Defect B: QW/server/pr_cmds.c's PF_Find is identical to WinQuake's
+  // here -- G_STRING/E_STRING are (pr_strings + offset), never a NULL
+  // pointer, so the C's `if (!s)`/`if (!t)` checks are dead code and an
+  // unset (empty) field is searched/matched like any other value. Same
+  // repro as test/pr_cmds.test.ts's identical case: func_train_find's
+  // `find(world, targetname, self.target)` in plats.qc with `self.target`
+  // unset.
+  test("an empty search string does not throw, and matches an edict whose field is also empty", () => {
+    const targetOfs = ED_FindField("target")?.ofs;
+    if (targetOfs === undefined) throw new Error("target field not found");
+
+    // ED_Alloc (matching the C's own `for (i=MAX_CLIENTS+1; i<sv.num_edicts;
+    // i++)` scan) hands back the same scratch edict on every call while
+    // sv.num_edicts sits below MAX_CLIENTS+1, which this fixture's
+    // beforeAll leaves it at (1) -- so spawnEdict() cannot produce several
+    // distinct edicts here. Reach for fresh, never-yet-touched indices
+    // directly instead (every edict up to MAX_EDICTS is pre-allocated by
+    // PR_AllocEdicts in beforeAll, free=false and all fields zero by
+    // construction) and bump sv.num_edicts to cover them, restored after.
+    const savedNumEdicts = sv.num_edicts;
+    try {
+      const base = Math.max(sv.num_edicts, MAX_CLIENTS + 2);
+      const start = EDICT_NUM(base);
+      const emptyTarget = EDICT_NUM(base + 1); // .target left at its default (0 -> "")
+      const nonEmptyTarget = EDICT_NUM(base + 2);
+      nonEmptyTarget.v.target = PR_SetString("qwsv_pr_cmds_test_target");
+      sv.num_edicts = base + 3;
+
+      setParmEdict(OFS_PARM0, start);
+      setParmInt(OFS_PARM1, targetOfs);
+      setParmString(OFS_PARM2, ""); // the empty search string itself
+      expect(() => pr_builtin[18]()).not.toThrow();
+
+      expect(returnEdictNum()).toBe(EDICT_TO_PROG(emptyTarget));
+    } finally {
+      sv.num_edicts = savedNumEdicts;
+    }
   });
 });
 

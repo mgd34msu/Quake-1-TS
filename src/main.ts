@@ -80,7 +80,7 @@ import { Host_Frame, Host_Init, sys_ticrate } from "./common/host";
 import { LINUX_VERSION, QuakeParmsT } from "./common/quakedef";
 import { registerLandriver, vcrState } from "./common/net_main";
 import { udpLandriver } from "./platform/net_udp";
-import { Sys_FloatTime, Sys_Init, Sys_Printf, SysError, sysState } from "./platform/sys";
+import { Sys_FloatTime, Sys_Init, Sys_Printf, Sys_Quit, SysError, installTerminationSignals, sysState } from "./platform/sys";
 // The client subsystems host.c links against. Each registers its
 // hostClientHooks members at module load, so importing them here is the
 // port's equivalent of the C link step; a dedicated server still runs with
@@ -224,6 +224,10 @@ try/catch's role.
 ================
 */
 export async function main(argv: string[]): Promise<void> {
+  // Not in sys_linux.c -- see platform/sys.ts's installTerminationSignals
+  // header for why this port installs SIGINT/SIGTERM handling anyway.
+  installTerminationSignals(Sys_Quit);
+
   try {
     Sys_Main_Init(argv);
     await Sys_Main_Loop();

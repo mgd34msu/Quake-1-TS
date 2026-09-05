@@ -46,14 +46,15 @@ import { CvarT, Cvar_RegisterVariable } from "../common/cvar";
 import { Con_Printf, Con_DPrintf } from "../client/console";
 import type { UsercmdT } from "../server/server";
 import type { QwUsercmdT } from "../qw/protocol";
-import { PITCH, YAW } from "../common/quakedef";
+import { PITCH, YAW, qw } from "../common/quakedef";
+import { COM_CheckParm } from "../common/common";
 import { noclip_anglehack } from "../common/host_cmd";
 import { cl } from "../client/client";
 import { in_strafe, in_mlook } from "../client/cl_input";
 import { lookstrafe, sensitivity, m_pitch, m_yaw, m_forward, m_side } from "../client/cl_main";
 import { V_StopPitchDrift } from "../client/view";
 import { hostClientHooks } from "../common/host";
-import { inputBackend, type InputBackend } from "../client/input";
+import { inputBackend, qwInputHooks, type InputBackend, type QwInputRefs } from "../client/input";
 import {
   Key_Event,
   K_ALT,
@@ -152,6 +153,11 @@ const SDL_EVENT_SIZE = 56;
 const KEYEVENT_STATE = 12;
 const KEYEVENT_REPEAT = 13;
 const KEYEVENT_SYM = 20;
+// SDL_MouseMotionEvent: x 20, y 24, xrel 28, yrel 32.
+const MOTIONEVENT_X = 20;
+const MOTIONEVENT_Y = 24;
+const MOTIONEVENT_XREL = 28;
+const MOTIONEVENT_YREL = 32;
 // SDL_MouseButtonEvent: button 16, state 17.
 const BUTTONEVENT_BUTTON = 16;
 // SDL_MouseWheelEvent: x 16, y 20.
@@ -201,6 +207,7 @@ const symbols = {
   SDL_GL_SetSwapInterval: { args: ["i32"], returns: "i32" },
 
   SDL_PollEvent: { args: ["ptr"], returns: "i32" },
+  SDL_PushEvent: { args: ["ptr"], returns: "i32" },
   SDL_PumpEvents: { args: [], returns: "void" },
 
   SDL_GetRelativeMouseState: { args: ["ptr", "ptr"], returns: "u32" },
@@ -617,11 +624,6 @@ export function SDL_KeyToQuake(sym: number): number {
   return 0;
 }
 
-const eventBuf = new Uint8Array(SDL_EVENT_SIZE);
-const eventView = new DataView(eventBuf.buffer);
-const relX = new Int32Array(1);
-const relY = new Int32Array(1);
-
 let mouse_avail = false;
 let mouse_active = false;
 let mouse_x = 0;
@@ -644,9 +646,11 @@ export const m_filter = new CvarT("m_filter", "0", true);
 function IN_ActivateMouse(): void {
   const l = lib();
   if (!l || !mouse_avail || mouse_active) return;
+  // SDL_SetRelativeMouseMode "will flush any pending mouse motion"
+  // (SDL_mouse.h), so the queue carries nothing from before the grab; these
+  // two drop whatever the pump had already accumulated into the engine's own
+  // accumulator while the mouse was released.
   l.symbols.SDL_SetRelativeMouseMode(1);
-  // drain whatever relative motion piled up while the mouse was released
-  l.symbols.SDL_GetRelativeMouseState(relX, relY);
   mouse_x = 0;
   mouse_y = 0;
   mouse_active = true;
@@ -677,6 +681,13 @@ export function SDL_SetFullscreenHint(fullscreen: boolean): void {
 IN_Init -- vid_x.c:1132. `-nomouse` disables the mouse outright, same as the
 C (IN_Init still registers the two cvars either way, matching the C's own
 order: the Cvar_RegisterVariable calls precede the -nomouse check).
+
+`mouse_avail` is the parm's answer and nothing else, exactly as the C has it:
+vid_x.c's IN_Init needs no display, and host.c calls IN_Init BEFORE VID_Init
+on non-win32 ("mouse comes before video for security reasons"), so anything
+this function asked of the window or of SDL's video subsystem would always be
+answered "not yet". Arming the pointer grab is IN_ActivateMouse's job, driven
+per frame by IN_Commands once VID_Init has a window up.
 */
 export function IN_Init(): void {
   Cvar_RegisterVariable(_windowed_mouse);
@@ -684,13 +695,12 @@ export function IN_Init(): void {
 
   setKeyEventPump(SDL_PumpInput);
 
+  if (COM_CheckParm("-nomouse")) return;
   mouse_x = 0;
   mouse_y = 0;
   old_mouse_x = 0;
   old_mouse_y = 0;
-
-  const l = lib();
-  mouse_avail = l !== null && initSubsystem(l, SDL_INIT_VIDEO);
+  mouse_avail = true;
 }
 
 export function IN_Shutdown(): void {
@@ -725,11 +735,26 @@ QW/client/vid_x.c:1071 has the same function with a byte-identical body over
 QW's own usercmd_t. The three fields either body writes are the three both
 structs have, so one body serves both entry points (IN_Move / IN_MoveQw)
 rather than being duplicated the way the two C trees duplicate it.
+
+What the two C bodies do NOT share is the eight globals they read: each tree
+has its own `in_strafe`/`in_mlook` (cl_input.c) and its own `sensitivity`/
+`m_pitch`/`m_yaw`/`m_forward`/`m_side`/`lookstrafe` (cl_main.c), because they
+are two binaries. Both trees are compiled into this one process, so the body
+picks the live set on entry (`inputRefs`) and reads it through locals of the
+same names -- in a WinQuake process `qw.active` is false and the reads are the
+module's own imports, unchanged.
 */
 interface InMoveCmd {
   forwardmove: number;
   sidemove: number;
   upmove: number;
+}
+
+const winquakeInputRefs: QwInputRefs = { in_strafe, in_mlook, lookstrafe, sensitivity, m_pitch, m_yaw, m_forward, m_side };
+
+function inputRefs(): QwInputRefs {
+  const qwRefs = qwInputHooks.current;
+  return qw.active && qwRefs !== null ? qwRefs : winquakeInputRefs;
 }
 
 export function IN_Move(cmd: UsercmdT): void {
@@ -744,9 +769,7 @@ function IN_Move_(cmd: InMoveCmd): void {
   const l = lib();
   if (!l || !mouse_active) return;
 
-  l.symbols.SDL_GetRelativeMouseState(relX, relY);
-  mouse_x += relX[0];
-  mouse_y += relY[0];
+  const { in_strafe, in_mlook, lookstrafe, sensitivity, m_pitch, m_yaw, m_forward, m_side } = inputRefs();
 
   if (m_filter.value) {
     mouse_x = (mouse_x + old_mouse_x) * 0.5;
@@ -817,6 +840,14 @@ export function SDL_PumpInput(): void {
   if (!l) return;
   if ((subsystems & SDL_INIT_VIDEO) === 0) return;
 
+  // per call, not file scope: SCR_ModalMessage's `do { key_count = -1;
+  // Sys_SendKeyEvents(); } while (...)` spin runs inside a Key_Event this very
+  // loop dispatched, so an inner pump would otherwise overwrite the buffer the
+  // outer iteration is still reading. (vid_x.c's GetEvent has one file-scope
+  // x_event and the same re-entry, but XNextEvent copies per call.)
+  const eventBuf = new Uint8Array(SDL_EVENT_SIZE);
+  const eventView = new DataView(eventBuf.buffer);
+
   while (l.symbols.SDL_PollEvent(eventBuf) !== 0) {
     const type = eventView.getUint32(0, true);
     switch (type) {
@@ -825,6 +856,18 @@ export function SDL_PumpInput(): void {
         if (eventBuf[KEYEVENT_REPEAT] !== 0) break;
         const key = SDL_KeyToQuake(eventView.getInt32(KEYEVENT_SYM, true));
         if (key !== 0) Key_Event(key, eventBuf[KEYEVENT_STATE] !== 0);
+        break;
+      }
+      case SDL_MOUSEMOTION: {
+        // vid_x.c's `case MotionNotify:` computes mouse_x/mouse_y here in the
+        // pump and IN_Move only consumes what the pump accumulated. SDL's
+        // xrel/yrel are already the deltas the C recovers by subtracting the
+        // previous pointer position (or the window centre under
+        // _windowed_mouse, whose warp-to-centre dance SDL_SetRelativeMouseMode
+        // replaces); summing them keeps every event of a frame, where the C's
+        // assignment keeps only the last one.
+        mouse_x += eventView.getInt32(MOTIONEVENT_XREL, true);
+        mouse_y += eventView.getInt32(MOTIONEVENT_YREL, true);
         break;
       }
       case SDL_MOUSEBUTTONDOWN:
@@ -1031,4 +1074,162 @@ export function SDL_ResetBackendForTests(): void {
   mouse_active = false;
   windowActive = true;
   currentlyFullscreen = false;
+}
+
+//=============================================================================
+// TEST SEAM -- synthesizing SDL_Event byte layouts and pushing them onto
+// SDL's own queue, so a headless suite drives SDL_PumpInput above through the
+// same SDL_PollEvent call a real keyboard/mouse goes through. Nothing in the
+// engine calls anything below; SDL_PushEvent is bound purely for this.
+//
+// The byte offsets here are the same SDL2 public layouts SDL_PumpInput reads
+// back (SDL_KeyboardEvent / SDL_MouseMotionEvent / SDL_MouseButtonEvent /
+// SDL_MouseWheelEvent / SDL_WindowEvent), extended with the fields only a
+// writer needs. Verified to round-trip push -> poll byte for byte on this
+// host's sdl2-compat 2.32.70 (SDL2 ABI over SDL3), with two documented
+// exceptions:
+//
+// - SDL_PushEvent does not feed SDL's internal relative-motion accumulator, so
+//   SDL_GetRelativeMouseState reports 0,0 for a pushed event. It is no longer
+//   a delta source for the engine (SDL_PumpInput decodes SDL_MOUSEMOTION's
+//   xrel/yrel itself, the way vid_x.c's GetEvent decodes MotionNotify), so a
+//   pushed motion event now drives the whole path. SDL_SetRelativeDeltaForTests
+//   below stays as a way to seed the accumulator directly.
+// - SDL_MOUSEWHEEL's integer x/y are recomputed by sdl2-compat from SDL3's
+//   own integer_x/integer_y, which an SDL2-side push never sets, so a pushed
+//   wheel event polls back with y == 0 no matter what was written. The
+//   precise-scroll fields are written here anyway, and SDL_MakeMouseWheel is
+//   still the right shape for a plain SDL2 host.
+
+const BUTTONEVENT_STATE = 17;
+const BUTTONEVENT_CLICKS = 18;
+const WHEELEVENT_X = 16;
+const WHEELEVENT_DIRECTION = 24;
+const WHEELEVENT_PRECISE_X = 28;
+const WHEELEVENT_PRECISE_Y = 32;
+const EVENT_WINDOWID = 8;
+
+export const SDL_TEST_BUTTON_LEFT = SDL_BUTTON_LEFT;
+export const SDL_TEST_BUTTON_MIDDLE = SDL_BUTTON_MIDDLE;
+export const SDL_TEST_BUTTON_RIGHT = SDL_BUTTON_RIGHT;
+export const SDL_TEST_WINDOWEVENT_FOCUS_GAINED = SDL_WINDOWEVENT_FOCUS_GAINED;
+export const SDL_TEST_WINDOWEVENT_FOCUS_LOST = SDL_WINDOWEVENT_FOCUS_LOST;
+export const SDL_TEST_WINDOWEVENT_CLOSE = SDL_WINDOWEVENT_CLOSE;
+
+function newEvent(type: number): { bytes: Uint8Array; view: DataView } {
+  const bytes = new Uint8Array(SDL_EVENT_SIZE);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, type, true);
+  view.setUint32(EVENT_WINDOWID, 1, true);
+  return { bytes, view };
+}
+
+/* SDL_KeyboardEvent. `sym` is an SDLK_* keycode -- the field SDL_PumpInput
+   hands to SDL_KeyToQuake. `scancode` is carried for completeness only. */
+export function SDL_MakeKeyEvent(sym: number, down: boolean, repeat = false, scancode = 0): Uint8Array {
+  const { bytes, view } = newEvent(down ? SDL_KEYDOWN : SDL_KEYUP);
+  bytes[KEYEVENT_STATE] = down ? 1 : 0;
+  bytes[KEYEVENT_REPEAT] = repeat ? 1 : 0;
+  view.setUint32(16, scancode, true);
+  view.setInt32(KEYEVENT_SYM, sym, true);
+  return bytes;
+}
+
+/* SDL_MouseMotionEvent. */
+export function SDL_MakeMouseMotionEvent(xrel: number, yrel: number, x = 0, y = 0): Uint8Array {
+  const { bytes, view } = newEvent(SDL_MOUSEMOTION);
+  view.setInt32(MOTIONEVENT_X, x, true);
+  view.setInt32(MOTIONEVENT_Y, y, true);
+  view.setInt32(MOTIONEVENT_XREL, xrel, true);
+  view.setInt32(MOTIONEVENT_YREL, yrel, true);
+  return bytes;
+}
+
+/* SDL_MouseButtonEvent. `button` is SDL_BUTTON_LEFT/MIDDLE/RIGHT. */
+export function SDL_MakeMouseButtonEvent(button: number, down: boolean): Uint8Array {
+  const { bytes } = newEvent(down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP);
+  bytes[BUTTONEVENT_BUTTON] = button;
+  bytes[BUTTONEVENT_STATE] = down ? 1 : 0;
+  bytes[BUTTONEVENT_CLICKS] = 1;
+  return bytes;
+}
+
+/* SDL_MouseWheelEvent -- see the section header on the integer y field. */
+export function SDL_MakeMouseWheelEvent(y: number, x = 0): Uint8Array {
+  const { bytes, view } = newEvent(SDL_MOUSEWHEEL);
+  view.setInt32(WHEELEVENT_X, x, true);
+  view.setInt32(WHEELEVENT_Y, y, true);
+  view.setUint32(WHEELEVENT_DIRECTION, 0, true);
+  view.setFloat32(WHEELEVENT_PRECISE_X, x, true);
+  view.setFloat32(WHEELEVENT_PRECISE_Y, y, true);
+  return bytes;
+}
+
+/* SDL_WindowEvent -- `event` is SDL_WINDOWEVENT_FOCUS_GAINED/LOST/CLOSE. */
+export function SDL_MakeWindowEvent(event: number): Uint8Array {
+  const { bytes } = newEvent(SDL_WINDOWEVENT);
+  bytes[WINDOWEVENT_EVENT] = event;
+  return bytes;
+}
+
+export function SDL_MakeQuitEvent(): Uint8Array {
+  return newEvent(SDL_QUIT).bytes;
+}
+
+/* SDL_PushEvent returns 1 on success, 0 if a filter dropped it, <0 on error. */
+export function SDL_PushTestEvent(event: Uint8Array): number {
+  const l = lib();
+  if (!l) return -1;
+  return l.symbols.SDL_PushEvent(event);
+}
+
+/* One poll of SDL's queue with the engine's own decoder, for a suite that
+   wants to drive the pump without a Host_Frame around it. */
+export function SDL_PumpInputForTests(): void {
+  SDL_PumpInput();
+}
+
+/* Seeds the accumulator IN_Move_ consumes directly, bypassing the pump. */
+export function SDL_SetRelativeDeltaForTests(dx: number, dy: number): void {
+  mouse_x = dx;
+  mouse_y = dy;
+}
+
+export interface SdlInputStateForTests {
+  mouse_avail: boolean;
+  mouse_active: boolean;
+  mouse_x: number;
+  mouse_y: number;
+  old_mouse_x: number;
+  old_mouse_y: number;
+  windowActive: boolean;
+  fullscreen: boolean;
+  videoSubsystem: boolean;
+  libraryLoaded: boolean;
+}
+
+export function SDL_InputStateForTests(): SdlInputStateForTests {
+  return {
+    mouse_avail,
+    mouse_active,
+    mouse_x,
+    mouse_y,
+    old_mouse_x,
+    old_mouse_y,
+    windowActive,
+    fullscreen: currentlyFullscreen,
+    videoSubsystem: (subsystems & SDL_INIT_VIDEO) !== 0,
+    libraryLoaded: library !== null,
+  };
+}
+
+/* Drop everything still queued, so one scenario's leftovers cannot leak into
+   the next assertion. */
+export function SDL_DrainEventsForTests(): number {
+  const l = lib();
+  if (!l) return 0;
+  let n = 0;
+  const buf = new Uint8Array(SDL_EVENT_SIZE);
+  while (l.symbols.SDL_PollEvent(buf) !== 0) n++;
+  return n;
 }

@@ -204,7 +204,7 @@ picks up the switch):
     change needed there beyond the plain import-path switch.
 */
 
-import { Sys_Printf, Sys_DebugLog, Sys_SendKeyEvents, Sys_FloatTime } from "../../platform/sys";
+import { Sys_Printf, Sys_DebugLog, Sys_SendKeyEvents, Sys_FloatTime, SysError } from "../../platform/sys";
 import { Com_sprintf } from "../../common/sprintf";
 import { CvarT, Cvar_RegisterVariable } from "../../common/cvar";
 import { Cmd_AddCommand } from "../../common/cmd";
@@ -570,8 +570,19 @@ export function Con_Printf(fmt: string, ...args: Array<string | number>): void {
     // protect against infinite loop if something in SCR_UpdateScreen calls Con_Printf
     if (!inupdate) {
       inupdate = true;
-      screenMod().SCR_UpdateScreen();
-      inupdate = false;
+      try {
+        screenMod().SCR_UpdateScreen();
+      } catch (err) {
+        // Not in the C: see src/client/console.ts's own Con_Printf for why a
+        // renderer-not-loaded state has no counterpart there, and why this
+        // swallows only this one specific failure of the screen draw step
+        // (SCR_UpdateScreen -> render.ts's getRenderer()), never the print
+        // itself (Sys_Printf above already ran unconditionally) -- anything
+        // else escaping SCR_UpdateScreen is a real bug and still propagates.
+        if (!(err instanceof SysError) || err.message !== "No renderer is loaded") throw err;
+      } finally {
+        inupdate = false;
+      }
     }
   }
 }

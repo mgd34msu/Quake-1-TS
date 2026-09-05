@@ -55,10 +55,16 @@ Deviations from PORTING.md / the C source:
   `Sys_FileOpenWrite` both go through platform/sys.ts's file layer via the
   `SysFileTextWriter` sink below (`{ write(s) }`, which is the shape
   `Cvar_WriteVariables` and `ED_Write` already take). One behavioural
-  difference: `Sys_FileOpenWrite` `Sys_Error`s where the C's `fopen`
-  returned NULL and Host_WriteConfiguration printed "Couldn't write
-  config.cfg.", so that Con_Printf branch is unreachable here; it is kept in
-  place for the `handle === -1` case sys.ts documents.
+  difference: `Sys_FileOpenWrite` throws `SysError` where the C's `fopen`
+  returned NULL (e.g. `-game` names a directory that doesn't exist, so
+  `com_gamedir` is unwritable); `Host_WriteConfiguration` catches that
+  `SysError` around the open the same way the C tests `fopen`'s return
+  against NULL, so `Con_Printf ("Couldn't write config.cfg.\n"); return;`
+  stays reachable instead of the error propagating out through
+  `Host_Shutdown`/`Sys_Quit` (see src/platform/sys.ts's
+  `installTerminationSignals`, which now also survives a `quit()` that
+  throws, but a config write failure during ordinary shutdown should never
+  reach that far in the first place).
 - `Host_InitVCR`'s `-record` branch writes the VCR header with raw
   `Sys_FileWrite` calls in the C. net_main.ts (U009) already ruled that the
   whole `quake.vcr` recording is buffered in `vcrState.writeChunks` and
@@ -119,6 +125,7 @@ import {
   Sys_SendKeyEvents,
   setHostShutdown,
   sysState,
+  SysError,
 } from "../platform/sys";
 import { MSG_WriteByte, MSG_WriteShort, MSG_WriteString, SZ_Clear, SizeBuf } from "./sizebuf";
 import { SvcOpsT } from "./protocol";
@@ -556,7 +563,16 @@ export function Host_WriteConfiguration(): void {
   // dedicated servers initialize the host but don't parse and set the
   // config.cfg cvars
   if (host.initialized && !sysState.isDedicated) {
-    const handle = Sys_FileOpenWrite(Com_sprintf("%s/config.cfg", com_gamedir));
+    let handle: number;
+    try {
+      // f = fopen (va("%s/config.cfg",com_gamedir), "w");
+      handle = Sys_FileOpenWrite(Com_sprintf("%s/config.cfg", com_gamedir));
+    } catch (err) {
+      if (!(err instanceof SysError)) throw err;
+      // if (!f) { Con_Printf ("Couldn't write config.cfg.\n"); return; }
+      Con_Printf("Couldn't write config.cfg.\n");
+      return;
+    }
     if (handle === -1) {
       Con_Printf("Couldn't write config.cfg.\n");
       return;

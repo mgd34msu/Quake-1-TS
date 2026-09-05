@@ -50,6 +50,26 @@ Deviations from PORTING.md / the C source:
   src/qw/server/sv_main.ts's SV_Error throws `PRRunError`, a subclass), so a
   caller -- here, and every test -- can observe it. The message is already on
   stderr by then, so this catch does not print it again.
+- `qwConsoleHooks.Con_Printf`/`Con_DPrintf` installed below (.orch/e2e/E.md
+  defect C): five modules shared with qwcl (src/qw/common.ts, cmd.ts,
+  net_chan.ts, net_udp.ts, pmovetst.ts) import Con_Printf/Con_DPrintf from
+  src/client/console.ts (WinQuake's file, whose `qw.active` fold gives them
+  QW's Con_Printf semantics -- see that file's own header), because qwsv
+  links no console.c of its own at all. Without a hook installed here, a
+  Con_Printf from one of those five files in the qwsv binary fell through to
+  console.ts's own body (a bare Sys_Printf to the server's local stdout),
+  bypassing QW/server/sv_send.c's `SV_BeginRedirect`/`outputbuf` redirect
+  entirely -- a client's `rcon`/`cmd status` (which redirects the server's
+  reply back over the wire instead of printing it locally) would see nothing
+  back if the message happened to originate from one of those five files
+  (e.g. net_chan.ts's overflow/out-of-order warnings). qwcl already solves
+  the identical problem for its own five-of-nine-shared-modules case by
+  installing these same hooks pointed at its own console (src/qw/main_cl.ts);
+  this is the same mechanism, pointed at src/qw/server/sv_send.ts's
+  redirect-aware Con_Printf/Con_DPrintf instead, which is what every other
+  qwsv-server file (sv_init.ts, sv_ccmds.ts, sv_main.ts) already imports
+  Con_Printf/Con_DPrintf from as the binary's one real implementation. No
+  `Con_SafePrintf` hook: none of the five shared modules calls it.
 */
 
 import { COM_CheckParm, COM_InitArgv, Q_atof, com_argc, com_argv } from "./common";
@@ -58,8 +78,11 @@ import { NET_Ready } from "./net_udp";
 import { SV_Frame, SV_Init } from "./server/sv_main";
 import { SV_FlushSignon } from "./server/sv_init";
 import { setSvFlushSignonHook } from "./server/pr_edict";
+import { SV_Quit_f } from "./server/sv_ccmds";
+import { Con_Printf as SV_Con_Printf, Con_DPrintf as SV_Con_DPrintf } from "./server/sv_send";
+import { qwConsoleHooks } from "../client/console";
 import { Sys_DoubleTime, Sys_NostdoutFromCvar, sys_extrasleep } from "./sys_sv";
-import { Sys_Printf, SysError, sysState } from "../platform/sys";
+import { Sys_Printf, SysError, installTerminationSignals, sysState } from "../platform/sys";
 
 /*
 =============
@@ -73,6 +96,12 @@ export function Sys_Main_Init(argv: string[]): void {
   qw.active = true;
   qw.serveronly = true;
   sysState.isDedicated = true; // see file header
+
+  // see file header: the same link step qwcl's own main_cl.ts does, pointed
+  // at this binary's real Con_Printf/Con_DPrintf instead (sv_send.ts's
+  // redirect-aware ones).
+  qwConsoleHooks.Con_Printf = SV_Con_Printf;
+  qwConsoleHooks.Con_DPrintf = SV_Con_DPrintf;
 
   setSvFlushSignonHook(SV_FlushSignon); // see file header
 
@@ -142,6 +171,16 @@ main
 =============
 */
 export async function main(argv: string[]): Promise<void> {
+  // Not in QW/server/sys_unix.c -- see platform/sys.ts's
+  // installTerminationSignals header for why this port installs
+  // SIGINT/SIGTERM handling anyway. qwsv never calls setHostShutdown (see
+  // that file's own header: sys_unix.c's Sys_Quit has no such hook to
+  // register), so the tree's own "quit" body is SV_Quit_f (SV_FinalMessage,
+  // "Shutting down.", SV_Shutdown, Sys_Quit) -- the same body Cmd_AddCommand
+  // wires to the typed "quit" console command in sv_ccmds.ts -- rather than
+  // bare Sys_Quit, which alone would exit with no cleanup at all here.
+  installTerminationSignals(SV_Quit_f);
+
   try {
     Sys_Main_Init(argv);
     await Sys_Main_Loop();

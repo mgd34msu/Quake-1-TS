@@ -64,9 +64,9 @@ Deviations from the C source:
   network value; pr_cmds.ts's `PF_` builtins never touch pointers, so this
   encoding stays private to this file.
 - OP_NOT_S reads the string through `PR_GetString` instead of indexing
-  `pr_strings` directly, so that engine strings (progs.ts's negative
-  `string_t` ruling) test as non-empty rather than indexing off the front of
-  the string block.
+  `pr_strings` directly, so that engine strings (progs.ts's `string_t`
+  ruling, indices at or above `ENGINE_STRING_BASE`) test as non-empty rather
+  than reading past the end of the string block.
 - OP_NE_S stores libc `strcmp`'s return value, whose exact magnitude is
   implementation-defined in C. The local `strcmp` below returns the
   difference of the first differing bytes (glibc's observable behaviour);

@@ -1,0 +1,11 @@
+import { boot, frames, exec } from "./b_lib";
+import { cl } from "../../src/client/client";
+boot(["-basedir","/home/buzzkill/Projects/qfiles/q1-basedir","-game","e2e_b","-nosound"]);
+frames(5);
+exec("disconnect", 3);
+exec("map e1m1", 20);
+console.log("A levelname", cl.levelname, "maxclients", cl.maxclients);
+exec("changelevel e1m2", 30);
+console.log("B levelname", cl.levelname, "maxclients", cl.maxclients);
+console.log("OK");
+process.exit(0);

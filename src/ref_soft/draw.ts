@@ -106,10 +106,11 @@ Deviations from PORTING.md / the C source:
   the `__linux__` branch per this unit's RULING
   (`"(Linux Quake %2.2f) %4.2f"`, `LINUX_VERSION`/`VERSION` from
   quakedef.ts). The other three branches are dropped.
-- `Draw_Init` registers `hostClientHooks.drawInit = Draw_Init` at module
-  load, the same pattern chase.ts/vid.ts/sdl.ts/snd_dma.ts use for the
-  `Host_Init` hooks host.ts cannot call directly without an import cycle
-  (host.ts's file header).
+- `Draw_Init` does not itself register `hostClientHooks.drawInit`:
+  ref_soft.ts installs a dispatching `hostClientHooks.drawInit = () =>
+  re.current?.Draw_Init()` alongside its other three `re.current`-routed
+  hooks, so a GL build swapped into `re.current` at runtime still gets its
+  own `Draw_Init` called instead of this module's.
 - `R_DrawRect8`'s `byte *psrc` (an already-offset pointer into
   `r_rectdesc.ptexbytes`) becomes a base `Uint8Array` plus a separate
   `psrcOfs: number` parameter, since this port has no pointer arithmetic.
@@ -127,7 +128,6 @@ import { QpicT, W_GetLumpName, W_GetQpic, SwapPic } from "../common/wad";
 import { CacheUser, Cache_Check } from "../common/zone";
 import { COM_LoadCacheFile } from "../common/common";
 import { vid, vidBackend, VrectT } from "../client/vid";
-import { hostClientHooks } from "../common/host";
 import { TRANSPARENT_COLOR } from "./d_iface";
 import { cls } from "../client/client";
 import { scr_vrect } from "../client/screen_types";
@@ -777,7 +777,3 @@ export function Draw_EndDisc(): void {
   vidBackend.current?.D_EndDirectRect(vid.width - 24, 0, 24, 24);
 }
 
-//=============================================================================
-// hostClientHooks.drawInit registration -- see file header's deviation note.
-
-hostClientHooks.drawInit = Draw_Init;

@@ -39,6 +39,41 @@ scope entirely.
   pre-init convention WinQuake uses for `-dedicated`, `-mem` and vid_x.c's
   `-width`/`-height`/`-winsize`; `vid_restart` after setting the cvar is the runtime
   path. All three binaries honour it.
+- sys_linux.c/QW's sys_unix.c install no `signal(SIGINT, ...)`/`signal(SIGTERM,
+  ...)` handler at all (grepped both C trees in full: absent) -- Ctrl-C/`kill`
+  on the real engine is the OS default action, immediate termination, no
+  `Host_Shutdown`/`SV_Shutdown`, no config write. This port deliberately installs
+  one anyway (`src/platform/sys.ts`'s `installTerminationSignals`, called once
+  from each binary's own `main()`): a dedicated server killed with Ctrl-C or
+  `kill` should still write its config and send clients a final message, the
+  same as typing `quit` at its own console does. The one-bullet deviation this
+  entails: registering a `process.on("SIGTERM"/"SIGINT")` handler changes the
+  signal's disposition from "the OS terminates the process immediately,
+  regardless of what it's doing" to "queue the JS callback for the next time
+  the event loop is free" -- Node/Bun's signal delivery for a *handled* signal
+  is cooperative with the event loop, not asynchronous like the OS default is.
+  A process wedged in a **synchronous, non-yielding** loop therefore cannot
+  respond to SIGTERM/SIGINT at all until that loop returns control -- confirmed
+  directly (`bun -e 'process.on("SIGTERM",()=>process.exit(0));while(true){}'`
+  survives a `kill -TERM` indefinitely, where the same loop with no handler
+  registered dies from the OS default instantly). `Sys_Main_Loop`'s own
+  `await Bun.sleep(1)` after every `Host_Frame` call exists in part to keep
+  this window bounded to one frame; a synchronous busy-wait *inside* a frame
+  (e.g. `src/common/net_dgrm.ts`'s `_Datagram_Connect`, a `do { ... } while
+  (ret === 0 && SetNetTime() - start_time < 2.5)` retry loop with no `await`
+  anywhere in its body) reopens that window for up to its own bound (2.5s
+  here) per call -- bounded C-style busy-waits translated straight from the
+  original's blocking-socket retry loop are the only such loops this port
+  knows of, and they are the reason a killed process can take a few seconds
+  longer to die than an idle one, not a hang. This is a real, accepted
+  trade-off of the deviation, not a defect in the handler itself: there is no
+  pure-JS way to make a single-threaded event loop preempt a synchronous
+  stretch of its own code, so the alternative would be dropping the graceful
+  Ctrl-C handling entirely. `test/sys_exit.test.ts` documents both halves of
+  this (the graceful case, and the busy-loop-defers-signals limitation)
+  directly; if a future unit finds an *unbounded* synchronous loop reachable
+  from a running server, that loop is the bug to fix (restore the missing
+  `await`), not this handler.
 
 ## Directory and file mapping (WinQuake)
 
@@ -131,10 +166,32 @@ build) is the test fixture; `progs106/*.qc` is reference for builtin semantics.
 - `string_t`: progs strings stay offsets into the string block. The C also stores
   engine strings by pointer difference (`host_client->name - pr_strings`,
   `m - pr_strings` in `PF_setmodel`), which has no TS equivalent. Ruling: an engine
-  string table in `pr_edict.ts` — `PR_SetEngineString(s): number` returns a negative
-  index, `PR_GetString(n): string` resolves either kind. `ED_NewString` allocates
-  there too. This is the port's one deviation inside the VM; every call site keeps
-  its C name and shape.
+  string table in `progs.ts` — `PR_SetEngineString(s): number` (QW's own host calls
+  it `PR_SetString`) returns `ENGINE_STRING_BASE + n`, and `PR_GetString(n): string`
+  resolves either kind: `0 <= n < ENGINE_STRING_BASE` is a progs-block offset,
+  `n >= ENGINE_STRING_BASE` is an engine string, anything else is a `Sys_Error`
+  (the C would read whatever `pr_strings + n` pointed at; a bounds error is the
+  faithful-but-safe port behaviour). `ED_NewString` allocates there too. This is the
+  port's one deviation inside the VM; every call site keeps its C name and shape.
+
+  **Engine string indices must be positive.** They were negative until 2026-09-05,
+  matching the C's `-num_prstr` and the "pointer below `pr_strings`" test, and that
+  silently destroyed engine strings at runtime. The globals block and every edict's
+  field block are one `ArrayBuffer` viewed as both `Int32Array` and `Float32Array`.
+  Every negative int32 in `[-0x7FFFFF, -1]` has all float32 exponent bits set with a
+  non-zero mantissa — it *is* a NaN bit pattern — and JavaScript does not preserve
+  NaN payloads across a float read/write: `f[b] = f[a]` canonicalises to
+  `0x7FC00000`. qcc moves **every** builtin argument with `OP_STORE_V`, a three-word
+  float copy, so a negative `string_t` was wiped on the way into `setmodel`, `find`,
+  `precache_sound` and the rest. (Proven on retail data: doors.qc `func_door`
+  statements `OP_LOAD_S self.model -> t`, `OP_STORE_V t -> OFS_PARM1`,
+  `OP_CALL2 setmodel` — `PF_setmodel` then wrote `0x7FC00000` into `e.v.model`.)
+  `ENGINE_STRING_BASE` is `0x40000000`: above every progs string offset, below
+  `0x7F800000` (the smallest int32 that reinterprets as a NaN), so every `string_t`
+  the engine hands to progs is an ordinary finite float32 and round-trips a float
+  copy exactly. Progs-block offsets were always safe for the same reason — they are
+  small positive ints. Never encode any progs-visible value as a negative int32 that
+  can reach a float view; if a new one is needed, base it above `0x40000000` too.
 - `EDICT_TO_PROG`/`PROG_TO_EDICT`: the C stores a byte offset. This port stores the
   edict index (`sv.edicts[i]`). Savegame text uses `NUM_FOR_EDICT` in both, so the
   on-disk format is unaffected. Report any place that inspects the raw value.

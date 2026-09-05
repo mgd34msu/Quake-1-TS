@@ -1428,3 +1428,48 @@ export function GL_SelectTexture(target: number): void {
   glState.currenttexture = cnttextures[target - TEXTURE0_SGIS];
   glState.oldtarget = target;
 }
+
+/*
+================
+GL_ClearTextureCaches
+
+This port's own addition (see ref_gl.ts's Renderer.Shutdown), with no C
+counterpart because GLQUAKE is a compile-time #define and no build of it ever
+tears its refresh down: `vid_restart` here destroys the GL context, and every
+texture name gltextures[]/menu_cachepics[] and glState.texture_extension_number
+hand out was minted against that context. Left alone, the next
+`vid_ref gl; vid_restart` would find "conchars" already in gltextures[] and
+"gfx/box_tl.lmp" already in menu_cachepics[] and hand back the dead names
+instead of uploading anything.
+
+Draw_Init and R_Init re-derive translate_texture, scrap_texnum and
+playertextures from texture_extension_number, and GL_BuildLightmaps
+(R_NewMap) does the same for lightmap_textures, so putting the counter back
+to its glquake.ts initializer is all those three need.
+================
+*/
+export function GL_ClearTextureCaches(): void {
+  for (const glt of gltextures) {
+    glt.identifier = "";
+    glt.texnum = 0;
+    glt.width = 0;
+    glt.height = 0;
+    glt.mipmap = false;
+  }
+  numgltextures = 0;
+  texels = 0;
+
+  for (const cp of menu_cachepics) cp.name = "";
+  menu_numcachepics = 0;
+  pic_texels = 0;
+  pic_count = 0;
+
+  for (const a of scrap_allocated) a.fill(0);
+  for (const t of scrap_texels) t.fill(0);
+  scrap_dirty = false;
+  scrap_texnum = 0;
+  scrap_uploads = 0;
+
+  glState.texture_extension_number = 1;
+  glState.currenttexture = -1; // GL_Bind's "already bound" short-circuit
+}

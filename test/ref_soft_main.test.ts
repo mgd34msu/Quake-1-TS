@@ -11,7 +11,7 @@ import { cl, cl_entities, clState } from "../src/client/client";
 import { getRenderer, r_refdef, re, type Renderer, vpn, vright, vup } from "../src/client/render";
 import { VID_GRADES, vid, vidBackend, type VidBackend, VrectT } from "../src/client/vid";
 import { scr_vrect, scrState } from "../src/client/screen_types";
-import { unregisterRenderer } from "../src/platform/vid";
+import { getRegisteredRenderer, registerRenderer, unregisterRenderer } from "../src/platform/vid";
 import { CalcFov, scr_fov, scr_viewsize } from "../src/client/screen";
 import { lcd_x } from "../src/client/view";
 import { AMP, AMP2, SIN_BUFFER_SIZE, intsintable, modelorg, r_frustum_indexes, rState, screenedge, sintable, view_clipplanes } from "../src/ref_soft/r_local";
@@ -119,6 +119,7 @@ const savedRViewVectors = hostClientHooks.rViewVectors;
 // picking individual fields (rule 15).
 const savedRState = { ...rState };
 const savedDState = { ...dState };
+const savedSoftFactory = getRegisteredRenderer("soft");
 
 /*
 A cvar's `value` is 0 until Cvar_RegisterVariable or Cvar_Set fills it in, the
@@ -203,7 +204,8 @@ afterAll(() => {
   hostClientHooks.rInitTextures = savedRInitTextures;
   hostClientHooks.drawInit = savedDrawInit;
   hostClientHooks.rViewVectors = savedRViewVectors;
-  unregisterRenderer("soft");
+  if (savedSoftFactory) registerRenderer("soft", savedSoftFactory);
+  else unregisterRenderer("soft");
   setModelLoaderHooks(null);
   cl.worldmodel = null;
   rmSync(scratchDir, { recursive: true, force: true });

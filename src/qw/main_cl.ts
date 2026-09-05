@@ -96,7 +96,16 @@ import { Con_DPrintf, Con_Printf, Con_SafePrintf } from "./client/console";
 import { SCR_UpdateScreen } from "./client/screen";
 import { qwConsoleHooks } from "../client/console";
 import { hostClientHooks } from "../common/host";
-import { Sys_FloatTime, Sys_Init, Sys_Printf, SysError, setHostShutdown, sysState } from "../platform/sys";
+import {
+  Sys_FloatTime,
+  Sys_Init,
+  Sys_Printf,
+  Sys_Quit,
+  SysError,
+  installTerminationSignals,
+  setHostShutdown,
+  sysState,
+} from "../platform/sys";
 // The object files qwcl links -- see the file header's link-step note. Each
 // module either installs a backend/hook holder at load (the platform layer,
 // the two renderers) or is reached only through one of those, so importing
@@ -224,6 +233,13 @@ message is already on stderr by then, so this catch does not print it again.
 =============
 */
 export async function main(argv: string[]): Promise<void> {
+  // Not in QW/client/sys_linux.c -- see platform/sys.ts's
+  // installTerminationSignals header for why this port installs
+  // SIGINT/SIGTERM handling anyway. setHostShutdown(Host_Shutdown) (below,
+  // in Sys_Main_Init) is what makes Sys_Quit's own hostShutdown hook run
+  // qwcl's CDAudio/NET/S/IN/VID shutdown and config write.
+  installTerminationSignals(Sys_Quit);
+
   try {
     Sys_Main_Init(argv);
     await Sys_Main_Loop();

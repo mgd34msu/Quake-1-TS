@@ -102,6 +102,45 @@ export function Sys_Quit(): never {
   process.exit(0);
 }
 
+// Not in sys_linux.c/sys_unix.c: neither installs a signal(SIGINT, ...) /
+// signal(SIGTERM, ...) handler of its own (grepped both source trees in
+// full -- confirmed absent), so the C's own behavior on Ctrl-C/`kill` is the
+// platform default (immediate termination, no Host_Shutdown/SV_Shutdown, no
+// config write). This port installs one anyway, as a deliberate documented
+// deviation (see PORTING.md's platform section): a bare `kill`/Ctrl-C on a
+// long-running dedicated server should still write its config and tell
+// connected clients it's going away, the same as typing "quit" at its own
+// console does, rather than vanishing with no cleanup at all just because
+// the shell sent a signal instead of a line of stdin. Each entry point's
+// main() calls this once with the tree's own "quit" body (bare Sys_Quit for
+// the two trees whose hostShutdown hook already runs the right shutdown
+// sequence; qwsv's own SV_Quit_f, which prints "Shutting down." and sends
+// SV_FinalMessage before Sys_Quit, since qwsv never registers a
+// setHostShutdown hook of its own -- see src/qw/main_sv.ts).
+let terminating = false;
+export function installTerminationSignals(quit: () => void): void {
+  const handler = (): void => {
+    if (terminating) return; // guard re-entry: exactly once, even if both signals arrive
+    try {
+      quit();
+      terminating = true; // latch the guard only once quit() has actually completed
+    } catch {
+      // quit() (bare Sys_Quit, or qwsv's SV_Quit_f) is expected to end the
+      // process itself via Sys_Quit's process.exit(0); if a Sys_Error during
+      // shutdown (e.g. Host_WriteConfiguration's config.cfg write failing)
+      // makes it throw instead, the C's own behavior for a fatal error is
+      // exit(1), not a hung process. Without this, `terminating` would never
+      // get latched (see above) but the process would also never exit, and
+      // every later SIGTERM/SIGINT the shell sends would be silently
+      // swallowed by the `if (terminating) return;` guard above -- only
+      // SIGKILL would work.
+      process.exit(1);
+    }
+  };
+  process.on("SIGINT", handler);
+  process.on("SIGTERM", handler);
+}
+
 let secbase = 0;
 export function Sys_FloatTime(): number {
   const now = Date.now();
@@ -118,8 +157,17 @@ export function Sys_FloatTime(): number {
 
 export function Sys_DebugLog(file: string, fmt: string, ...args: Array<string | number>): void {
   const data = Com_sprintf(fmt, ...args);
-  // open(file, O_WRONLY | O_CREAT | O_APPEND, 0666); write; close
-  appendFileSync(file, data);
+  // open(file, O_WRONLY | O_CREAT | O_APPEND, 0666); write; close -- WinQuake's
+  // Con_DebugLog never checks any of the three calls' return values, so a
+  // failed open (e.g. ENOENT: the gamedir named by `-game` doesn't exist yet,
+  // see console.ts's Con_Init) is a silent no-op there, not a crash. Ported
+  // the same way: swallow the error instead of letting it propagate.
+  try {
+    appendFileSync(file, data);
+  } catch {
+    // open()'s return value is unchecked in the C; the following write/close
+    // on an invalid fd are harmless no-ops there too.
+  }
 }
 
 export function Sys_Warn(warning: string, ...args: Array<string | number>): void {
@@ -327,15 +375,36 @@ export function Sys_Sleep(): void {}
 //=============================================================================
 // console input/output
 
-let stdinReaderStarted = false;
-let stdinBuffer = "";
-const stdinLineQueue: string[] = [];
+// sys_linux.c/QW's sys_unix.c: `static char text[256]; len = read(0, text,
+// sizeof(text)); ...; text[len-1] = 0;` -- a single read() returns whatever
+// the kernel currently has buffered, up to 256 bytes, which for a pipe (not
+// a line-buffered tty) can be MULTIPLE newline-terminated lines at once; the
+// C strips only the trailing byte (assumed '\n') and hands the rest back
+// as-is, embedded newlines included. Host_GetConsoleCommands/
+// SV_GetConsoleCommands then do a bare `Cbuf_AddText(cmd)` (no "\n" of their
+// own -- confirmed by direct reading of both host.c and sys_unix.c: neither
+// appends one), so it is Sys_ConsoleInput's OWN embedded newlines that keep
+// two commands arriving in one read() from being executed as one glued-together
+// line by Cbuf_Execute's own newline/`;` splitting. See F.md's D2 sibling
+// report, .orch/e2e/E.md defect B: an earlier version of this function split
+// on every '\n' into single-line queue entries with the newline discarded,
+// so two lines arriving in one write() (e.g. a script piping "hostname a\n
+// echo MARK\n" in one shot) lost their separator entirely once
+// Host_GetConsoleCommands's own `while` loop (below, unchanged, always did a
+// bare Cbuf_AddText per call) concatenated them back together.
+const MAXCMDLINE = 256;
 
-// Lazily pumps stdin into a line queue the first time Sys_ConsoleInput is
+let stdinReaderStarted = false;
+const stdinChunkQueue: string[] = [];
+
+// Lazily pumps stdin into a chunk queue the first time Sys_ConsoleInput is
 // called with isDedicated set. sys_linux.c instead makes fd 0 non-blocking
-// (fcntl FNDELAY) and does a raw `read()` per poll; bun has no non-blocking
-// stdin read, so this reads the stream continuously in the background and
-// Sys_ConsoleInput just drains whatever whole lines have arrived so far.
+// (fcntl FNDELAY) and does one raw `read()` per poll; bun has no non-blocking
+// stdin read, so this reads the stream continuously in the background,
+// re-chunking whatever text arrives into (at most) MAXCMDLINE-byte pieces --
+// the same bound a real `read(0, text, sizeof(text))` would enforce -- and
+// Sys_ConsoleInput dequeues one whole chunk per call, exactly as one `read()`
+// would return one chunk per call.
 function pumpStdin(): void {
   void (async () => {
     const reader = Bun.stdin.stream().getReader();
@@ -343,13 +412,11 @@ function pumpStdin(): void {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (value) stdinBuffer += decoder.decode(value, { stream: true });
+      if (!value || value.length === 0) continue;
 
-      let idx = stdinBuffer.indexOf("\n");
-      while (idx !== -1) {
-        stdinLineQueue.push(stdinBuffer.slice(0, idx)); // text[len-1] = 0; rip off the \n
-        stdinBuffer = stdinBuffer.slice(idx + 1);
-        idx = stdinBuffer.indexOf("\n");
+      const text = decoder.decode(value, { stream: true });
+      for (let i = 0; i < text.length; i += MAXCMDLINE) {
+        stdinChunkQueue.push(text.slice(i, i + MAXCMDLINE));
       }
     }
   })();
@@ -364,8 +431,13 @@ export function Sys_ConsoleInput(): string | null {
     pumpStdin();
   }
 
-  const line = stdinLineQueue.shift();
-  return line === undefined ? null : line;
+  const chunk = stdinChunkQueue.shift();
+  if (chunk === undefined || chunk.length < 1) return null; // len < 1 -> return NULL
+
+  // text[len-1] = 0; -- unconditionally drops the last character of
+  // whatever was read (assumed '\n'), same as the C; any newlines earlier in
+  // the chunk are left exactly where they were.
+  return chunk.slice(0, chunk.length - 1);
 }
 
 // void Sys_SendKeyEvents (void)

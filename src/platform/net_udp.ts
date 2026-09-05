@@ -4,102 +4,73 @@ Ported from WinQuake/net_udp.h and WinQuake/net_udp.c (GNU GPL v2 or later),
 folding in win32/net_wins.c's `-ip` command-line override (linux/net_udp.c
 itself has no `-ip` handling; the unit brief for this port explicitly rules
 it in here) -- net_wins.c/net_bsd.c themselves are not separately ported
-(PORTING.md's platform mapping: one Bun.udpSocket LAN driver).
+(PORTING.md's platform mapping: one LAN driver).
 
-This module implements one `net_landriver_t` (net.h) over `Bun.udpSocket`.
-`net.ts`/`net_main.ts` (unit U009, the owner of `net_landriver_t`/
-`qsockaddr`/the `net_landrivers[]` table/`net_hostport`/the `hostname` cvar)
-did not exist yet when this unit started (`src/common/net.ts`: "Cannot find
-module" -- confirmed by `ls` before writing this file). Per the unit brief's
-fallback ruling this file first declared local structural `NetLandriverT`/
-`QsockaddrT` interfaces with the same shape instead of importing them;
-net.ts landed mid-session with a `NetLandriverT`/`QsockaddrT` matching the
-brief's sheet exactly, so this file now does `import type` from it instead
-(see below) -- the fallback interfaces were removed once the real ones were
-available, per the ruling's primary instruction. Only `udpLandriver` is
-exported; net_main.ts's `NET_Init` is expected to
-register it into `net_landrivers[]` at integration (the driver-table
-initializer that lived in net_bsd.c/net_win.c/net_dos.c is not this file's
-job either way -- see net_bsd.c:66-92 for its shape, mirrored below in
-`udpLandriver`'s literal).
+This module implements one `net_landriver_t` (net.h) directly on the same
+libc BSD-socket calls net_udp.c itself uses, bound through `bun:ffi`'s
+`dlopen("libc.so.6", ...)`: socket/bind/close/sendto/recvfrom/getsockname/
+setsockopt/ioctl/gethostname/gethostbyname, with `errno` read through
+`__errno_location()`. `struct sockaddr_in` is laid out by hand in a 16-byte
+`Uint8Array` (sin_family little-endian u16, sin_port big-endian u16,
+sin_addr 4 bytes, 8 bytes of padding) -- byte-for-byte the layout the C
+reinterprets `struct qsockaddr` as; `inet_addr`/`inet_ntoa`/`htons`/`ntohs`
+are done in TS on those bytes.
+
+Why libc and not `Bun.udpSocket`: net_dgrm.c's `_Datagram_Connect` sends
+CCREQ_CONNECT and then busy-waits in a synchronous `do { dfunc.Read(...) }
+while (... < 2.5)` loop for the reply (net_dgrm.c:1097-1134 in this port's
+net_dgrm.ts), and `Datagram_CheckNewConnections`/`Datagram_GetMessage` poll
+the same way. That idiom requires `recvfrom` to be a synchronous call the
+engine thread can make at any moment, which is exactly what net_udp.c's
+non-blocking sockets give it. `Bun.udpSocket` only ever delivers a datagram
+through an event-loop `data()` callback, so nothing could arrive while the
+engine spun and every real (non-loopback) client connect reported "No
+Response" (.orch/e2e/D.md, Defect A). The sockets below are real file
+descriptors put in non-blocking mode with `ioctl(FIONBIO)` exactly as
+UDP_OpenSocket does, so `int` socket handles, the `net_broadcastsocket == 0`
+sentinel and the C's whole polling structure all carry over unchanged.
 
 Deviations from the C:
 - `struct qsockaddr { short sa_family; unsigned char sa_data[14]; }` ->
-  `QsockaddrT { sa_family: number; sa_data: Uint8Array (14) }`. Every place
-  the C reinterprets a qsockaddr as `struct sockaddr_in` reads/writes
-  `sa_data` directly at the sockaddr_in layout's offsets past sa_family:
-  sin_port at sa_data[0..1] (big-endian/network order), sin_addr at
-  sa_data[2..5] (dotted-quad byte order), the remaining 8 bytes unused/zero.
-- Sockets: there is no OS file descriptor to hand back synchronously --
-  `Bun.udpSocket()` returns a Promise. Ruling (unit brief): UDP_OpenSocket
-  allocates a small integer handle immediately and queues the bind in the
-  background; UDP_Read against a socket whose bind hasn't resolved yet (or
-  that failed to bind) just sees an empty receive queue, the same as every
-  other "nothing arrived yet" case (see the UDP_Read note below); UDP_Write before
-  the bind resolves returns -1. `UDP_Ready(socket)` (not part of net_udp.h)
-  is exported as a test/integration seam: `await`ing it resolves once that
-  handle's bind attempt has settled, returning whether it actually bound.
-- UDP_Read: the C returns 0 for EWOULDBLOCK/ECONNREFUSED (recvfrom "nothing
-  available yet", not an error -- net_dgrm.c:335-341 treats 0 as "stop
-  polling, try again later" and -1 as a real read error worth a Con_Printf)
-  and returns -1 only for a genuine error. The unit brief's prose describes
-  this as "-1 when nothing queued", which would flip that C distinction and
-  make net_dgrm.ts's future poll loop mis-treat "no packet yet" as a read
-  error; resolved here in the C's actual favor -- an empty receive queue
-  (bound or not-yet-bound) returns 0, and -1 is reserved for an unknown/
-  closed socket handle (this port's closest analog to a bad-fd recvfrom()
-  error). Reported as the port's resolution of that inconsistency.
-- UDP_GetAddrFromName/gethostbyname, UDP_Init's gethostname+gethostbyname,
-  and UDP_GetNameFromAddr's gethostbyaddr: none has a safe synchronous,
-  network-free bun equivalent (a real DNS lookup would block the whole
-  event loop or require an async signature no caller in net.h expects).
-  Ruling (unit brief): GetAddrFromName resolves dotted-quad strings only
-  (PartialIPAddress, ported exactly) and returns -1 for anything else;
-  GetNameFromAddr never does reverse DNS and just returns AddrToString;
-  UDP_Init never calls gethostname/gethostbyname and instead takes myAddr
-  from `-ip` (parsed as a dotted quad, Sys_Error on a bad one, exactly as
-  net_wins.c's `-ip` handling) or defaults to 127.0.0.1 ("resolve localhost
-  -> 127.0.0.1" per the brief) with no `-ip` given. Real async DNS is a
-  documented follow-up.
-- UDP_Init's `hostname` cvar ("if the quake hostname isn't set, set it to
-  the machine name"): net_main.c owns and registers this cvar; since
-  net_main.ts doesn't exist yet, this file registers a local placeholder
-  cvar if `Cvar_FindVar("hostname")` finds none (Cvar_RegisterVariable's own
-  "already defined" guard makes the later real registration, once
-  net_main.ts lands, a harmless no-op -- same precedent as common.ts's
-  `host_parms` placeholder). With no real machine name available either
-  (see the DNS point above), the address label (`-ip`'s argument, or
-  "127.0.0.1") is used in its place, truncated to 15 chars like the C's
-  `buff[15] = 0`.
-- UDP_Init's `net_controlsocket`/broadcastaddr setup normally reads back its
-  own just-opened control socket's bound address via UDP_GetSocketAddr to
-  build `my_tcpip_address`. Because UDP_OpenSocket's bind is async (previous
-  point), that socket is never bound yet at the moment UDP_Init returns;
-  `my_tcpip_address` is built directly from myAddr instead of round-tripping
-  through UDP_GetSocketAddr/AddrToString/colon-strip, which is the same
-  observable result the C produces (getsockname's 0.0.0.0/127.0.0.1 result
-  gets substituted with myAddr regardless -- see UDP_GetSocketAddr below).
-- `net_hostport`/`my_tcpip_address`/`tcpipAvailable` are net_main.c globals
-  this driver only reads/writes via `extern`. Not yet owned by anything
-  (net_main.ts doesn't exist), so they live here as `udpState`, the same
-  registrable-singleton idiom sys.ts uses for `hostShutdown`; `setNetHostport`
-  lets net_main.ts override the default (26000, net_main.c's
-  DEFAULTnet_hostport) once it lands, mirroring its `-port` handling.
-- UDP_Broadcast/UDP_MakeSocketBroadcastCapable: the unit brief anticipated
-  Bun might not expose SO_BROADCAST; it does (`Socket.setBroadcast`), so
-  this is ported directly against that instead of the brief's documented
-  "return -1" fallback.
-- UDP_CheckNewConnections: the C's `ioctl(FIONREAD)` can itself fail and
-  Sys_Error; there is no such ioctl here, only a JS array length check,
-  which cannot fail the same way, so that Sys_Error path has no equivalent
-  and is dropped.
-- UDP_StringToAddr: `sscanf("%d.%d.%d.%d:%d", ...)` always returns 0 in the
-  C even on a partial/failed match, leaving the unfilled `int`s as whatever
-  garbage was already on the stack (undefined behavior, not reproducible in
-  JS). Ported as a regex anchored the same way as the format string; a
-  field sscanf would have left unfilled reads as 0 instead of stack garbage,
-  and the function still always returns 0, matching the C's observable
-  return value (never -1) even though the "garbage" itself can't match.
+  `QsockaddrT { sa_family: number; sa_data: Uint8Array (14) }` (net.ts).
+  Every place the C hands a `struct qsockaddr *` straight to a socket call,
+  this file marshals that object into/out of a 16-byte scratch buffer
+  (`qsockaddrToNative`/`nativeToQsockaddr`) at the identical offsets.
+- `dlopen` failure: there is no equivalent in the C (libc is linked in). If
+  the system libc cannot be opened, `UDP_Init` returns -1 -- the same result
+  `-noudp` produces, so the engine runs with the loopback driver only --
+  and every other entry point returns its own "no socket" error value
+  instead of throwing.
+- UDP_GetNameFromAddr: the C's `gethostbyaddr` reverse lookup is dropped
+  (unit brief). It always returns UDP_AddrToString's dotted string, which is
+  the C's own fallback when the lookup finds nothing.
+- UDP_GetAddrFromName: the C falls through to a blocking `gethostbyname` for
+  any name that does not start with a digit. Per the unit brief this port
+  resolves digit-leading names through PartialIPAddress (ported exactly) and
+  the literal name "localhost" to 127.0.0.1 on net_hostport, and returns -1
+  for anything else rather than blocking the engine on a DNS lookup.
+  `gethostbyname` is bound below (UDP_Init needs it) if this is ever revisited.
+- UDP_Init's `gethostbyname(buff)` result is NULL-checked before
+  `local->h_addr_list[0]` is dereferenced; the C dereferences unconditionally
+  and segfaults on a machine whose own hostname does not resolve. myAddr
+  keeps its 127.0.0.1 default in that case.
+- UDP_CheckNewConnections' `ioctl(FIONREAD, &available)` writes 4 bytes into
+  the C's 8-byte `unsigned long available`, leaving its top 4 bytes as
+  whatever was on the stack. The buffer here is zeroed first and only its
+  low 32 bits are read, which is what the C's `if (available)` test means on
+  every input FIONREAD can actually produce.
+- UDP_Read/UDP_Write clamp the caller's `len` to the JS buffer's own length
+  before handing its pointer to recvfrom/sendto. The C has no such clamp;
+  no caller in the tree passes a `len` past the end of its buffer, so this
+  is unobservable, but a native write past a JS-owned buffer is not
+  recoverable the way a C stack smash is.
+- `net_hostport`, `my_tcpip_address` and `tcpipAvailable` are net_main.c
+  globals net_udp.c reaches by `extern`. They are imported from net_main.ts
+  here (`net_hostport` as an ES live binding, the other two written through
+  net_main.ts's `setMyTcpipAddress`/`setTcpipAvailable`, since only the
+  defining module may reassign an exported `let`) -- the same way net_loop.ts
+  already imports `hostname`. `udpState` stays exported as a read-only view
+  of those three for callers that already read it.
 - PartialIPAddress is ported at byte granularity (this port's IPs are plain
   4-byte arrays, not a raw `sockaddr_in.s_addr` int) instead of literally
   reproducing the C's `mask <<= 8` / `htonl` bit tricks; the two are
@@ -109,34 +80,119 @@ Deviations from the C:
   32-bit-shift-past-width UB corner in the original C with no defined
   result to match; this port returns -1 for that input instead (documented
   new behavior for an input class the original never defined).
+- UDP_StringToAddr: `sscanf("%d.%d.%d.%d:%d", ...)` always returns 0 in the
+  C even on a partial/failed match, leaving the unfilled `int`s as whatever
+  was already on the stack (undefined behavior, not reproducible in JS).
+  Ported as a regex anchored the same way as the format string; unfilled
+  fields read as 0, and the function still always returns 0, matching the
+  C's observable return value (never -1).
 */
 
+import { dlopen, ptr, read } from "bun:ffi";
 import { COM_CheckParm, Q_atoi, com_argc, com_argv } from "../common/common";
-import { Cvar_FindVar, Cvar_RegisterVariable, Cvar_Set, CvarT } from "../common/cvar";
+import { Cvar_Set } from "../common/cvar";
 import { Con_Printf } from "../client/console";
 import { Sys_Error } from "./sys";
+import {
+  hostname,
+  my_tcpip_address,
+  net_hostport,
+  setMyTcpipAddress,
+  setTcpipAvailable,
+  tcpipAvailable,
+} from "../common/net_main";
 import type { NetLandriverT, QsockaddrT } from "../common/net";
 
-// net.h's net_landriver_t / struct qsockaddr: src/common/net.ts (U009)
-// landed mid-session (it did not exist when this unit started -- confirmed
-// missing by `ls` before this file was written, per the unit brief's
-// fallback ruling; a local structural interface was declared first and is
-// now replaced by this import now that the real module is here and its
-// `NetLandriverT`/`QsockaddrT` match the brief's sheet exactly). Re-exported
-// so this module stays a one-stop import for its own test suite.
 export type { NetLandriverT, QsockaddrT } from "../common/net";
 
+//=============================================================================
+// <sys/socket.h>, <netinet/in.h>, <asm-generic/ioctls.h>, <asm-generic/errno-base.h>
+
 const AF_INET = 2;
+const PF_INET = 2;
+const SOCK_DGRAM = 2;
+const IPPROTO_UDP = 17;
+const SOL_SOCKET = 1;
+const SO_BROADCAST = 6;
+const FIONBIO = 0x5421;
+const FIONREAD = 0x541b;
+const EWOULDBLOCK = 11; // EAGAIN
+const ECONNREFUSED = 111;
 
-// net_main.c's globals this driver reaches through `extern` -- see header.
-export const udpState = {
-  net_hostport: 26000, // DEFAULTnet_hostport
-  my_tcpip_address: "",
-  tcpipAvailable: false,
-};
+// sizeof(struct qsockaddr) == sizeof(struct sockaddr_in) == 16
+const SOCKADDR_SIZE = 16;
 
-export function setNetHostport(port: number): void {
-  udpState.net_hostport = port;
+// <sys/param.h>
+const MAXHOSTNAMELEN = 64;
+
+// struct hostent, x86-64: char *h_name; char **h_aliases; int h_addrtype;
+// int h_length; char **h_addr_list;
+const HOSTENT_H_ADDR_LIST = 24;
+
+//=============================================================================
+
+const libcSymbols = {
+  socket: { args: ["i32", "i32", "i32"], returns: "i32" },
+  bind: { args: ["i32", "ptr", "u32"], returns: "i32" },
+  close: { args: ["i32"], returns: "i32" },
+  sendto: { args: ["i32", "ptr", "u64", "i32", "ptr", "u32"], returns: "i32" },
+  recvfrom: { args: ["i32", "ptr", "u64", "i32", "ptr", "ptr"], returns: "i32" },
+  getsockname: { args: ["i32", "ptr", "ptr"], returns: "i32" },
+  setsockopt: { args: ["i32", "i32", "i32", "ptr", "u32"], returns: "i32" },
+  ioctl: { args: ["i32", "u64", "ptr"], returns: "i32" },
+  gethostname: { args: ["ptr", "u64"], returns: "i32" },
+  gethostbyname: { args: ["ptr"], returns: "ptr" },
+  __errno_location: { args: [], returns: "ptr" },
+} as const;
+
+type LibC = ReturnType<typeof dlopen<typeof libcSymbols>>;
+
+let libc: LibC | null = null;
+let libcFailed = false;
+
+function lib(): LibC | null {
+  if (libcFailed) return null;
+  if (libc) return libc;
+  for (const name of ["libc.so.6", "libc.so"]) {
+    try {
+      libc = dlopen(name, libcSymbols);
+      return libc;
+    } catch {
+      continue;
+    }
+  }
+  libcFailed = true;
+  Con_Printf("UDP_Init: could not open the system C library\n");
+  return null;
+}
+
+function errno(l: LibC): number {
+  const location = l.symbols.__errno_location();
+  if (location === null) return 0;
+  return read.i32(location, 0);
+}
+
+//=============================================================================
+// scratch buffers, one per call site that needs one live at the same time as
+// another -- the C's equivalents are function-local stack structs and this
+// module, like the C, is single-threaded and never re-enters itself.
+
+const readSockaddr = new Uint8Array(SOCKADDR_SIZE);
+const writeSockaddr = new Uint8Array(SOCKADDR_SIZE);
+const getnameSockaddr = new Uint8Array(SOCKADDR_SIZE);
+const socklenBuf = new Uint32Array(1);
+const optvalBuf = new Int32Array(1);
+const availableBuf = new Int32Array(2); // the C's `unsigned long available`
+
+function qsockaddrToNative(addr: QsockaddrT, out: Uint8Array): void {
+  out[0] = addr.sa_family & 0xff;
+  out[1] = (addr.sa_family >> 8) & 0xff;
+  out.set(addr.sa_data.subarray(0, 14), 2);
+}
+
+function nativeToQsockaddr(src: Uint8Array, addr: QsockaddrT): void {
+  addr.sa_family = src[0] | (src[1] << 8);
+  addr.sa_data.set(src.subarray(2, SOCKADDR_SIZE), 0);
 }
 
 //=============================================================================
@@ -165,38 +221,33 @@ function fillSockaddr(addr: QsockaddrT, ipBytes: Uint8Array, port: number): void
   addr.sa_data[5] = ipBytes[3] ?? 0;
 }
 
+function cstringOf(buf: Uint8Array): string {
+  let end = buf.indexOf(0);
+  if (end < 0) end = buf.length;
+  let s = "";
+  for (let i = 0; i < end; i++) s += String.fromCharCode(buf[i]);
+  return s;
+}
+
 //=============================================================================
-// socket handle table
+// net_main.c's globals this driver reaches through `extern` -- see header.
 
-interface RxPacket {
-  data: Uint8Array;
-  port: number;
-  address: string;
-}
-
-interface UdpSocketEntry {
-  socket: Bun.udp.Socket<"buffer"> | null;
-  rxQueue: RxPacket[];
-  closed: boolean;
-}
-
-let nextHandle = 1;
-const socketTable = new Map<number, UdpSocketEntry>();
-const pendingBinds = new Map<number, Promise<void>>();
-
-// Test/integration seam, not part of net_udp.h: resolves once `socket`'s
-// (async) bind attempt has settled, returning whether it actually bound.
-export async function UDP_Ready(socket: number): Promise<boolean> {
-  const pending = pendingBinds.get(socket);
-  if (pending) await pending;
-  const entry = socketTable.get(socket);
-  return entry !== undefined && entry.socket !== null;
-}
+export const udpState = {
+  get net_hostport(): number {
+    return net_hostport;
+  },
+  get my_tcpip_address(): string {
+    return my_tcpip_address;
+  },
+  get tcpipAvailable(): boolean {
+    return tcpipAvailable;
+  },
+};
 
 //=============================================================================
 
 let net_acceptsocket = -1; // socket for fielding new connections
-let net_controlsocket = -1;
+let net_controlsocket = 0;
 let net_broadcastsocket = 0;
 const broadcastaddr: QsockaddrT = { sa_family: AF_INET, sa_data: new Uint8Array(14) };
 
@@ -205,41 +256,53 @@ let myAddr: Uint8Array = new Uint8Array([127, 0, 0, 1]);
 function UDP_Init(): number {
   if (COM_CheckParm("-noudp")) return -1;
 
-  // determine my name & address -- see header (no gethostname/gethostbyname)
-  let addressLabel = "127.0.0.1";
+  const l = lib();
+  if (!l) return -1; // see header
+
+  // determine my name & address
+  const buff = new Uint8Array(MAXHOSTNAMELEN);
+  l.symbols.gethostname(ptr(buff), MAXHOSTNAMELEN);
+  const local = l.symbols.gethostbyname(ptr(buff));
+  if (local !== null) {
+    const addrList = read.ptr(local, HOSTENT_H_ADDR_LIST);
+    if (addrList !== 0) {
+      const first = read.ptr(addrList, 0);
+      if (first !== 0) {
+        myAddr = new Uint8Array([read.u8(first, 0), read.u8(first, 1), read.u8(first, 2), read.u8(first, 3)]);
+      }
+    }
+  }
+
+  // net_wins.c's `-ip` override -- see header
   const ipParm = COM_CheckParm("-ip");
   if (ipParm) {
     if (ipParm < com_argc - 1) {
       const parsed = stringToIpBytes(com_argv[ipParm + 1]);
       if (!parsed) Sys_Error("%s is not a valid IP address", com_argv[ipParm + 1]);
-      myAddr = parsed;
-      addressLabel = com_argv[ipParm + 1];
+      else myAddr = parsed;
     } else {
       Sys_Error("NET_Init: you must specify an IP address after -ip");
     }
-  } else {
-    myAddr = new Uint8Array([127, 0, 0, 1]);
   }
 
   // if the quake hostname isn't set, set it to the machine name
-  let hostnameCvar = Cvar_FindVar("hostname");
-  if (!hostnameCvar) {
-    hostnameCvar = new CvarT("hostname", "UNNAMED");
-    Cvar_RegisterVariable(hostnameCvar);
-  }
-  if (hostnameCvar.string === "UNNAMED") {
-    Cvar_Set("hostname", addressLabel.slice(0, 15));
+  if (hostname.string === "UNNAMED") {
+    Cvar_Set("hostname", cstringOf(buff).slice(0, 15));
   }
 
   net_controlsocket = UDP_OpenSocket(0);
   if (net_controlsocket === -1) Sys_Error("UDP_Init: Unable to open control socket\n");
 
-  fillSockaddr(broadcastaddr, new Uint8Array([255, 255, 255, 255]), udpState.net_hostport);
+  fillSockaddr(broadcastaddr, new Uint8Array([255, 255, 255, 255]), net_hostport);
 
-  udpState.my_tcpip_address = `${myAddr[0]}.${myAddr[1]}.${myAddr[2]}.${myAddr[3]}`;
+  const addr: QsockaddrT = { sa_family: 0, sa_data: new Uint8Array(14) };
+  UDP_GetSocketAddr(net_controlsocket, addr);
+  const withPort = UDP_AddrToString(addr);
+  const colon = withPort.lastIndexOf(":");
+  setMyTcpipAddress(colon >= 0 ? withPort.slice(0, colon) : withPort);
 
   Con_Printf("UDP Initialized\n");
-  udpState.tcpipAvailable = true;
+  setTcpipAvailable(true);
 
   return net_controlsocket;
 }
@@ -253,7 +316,7 @@ function UDP_Listen(state: boolean): void {
   // enable listening
   if (state) {
     if (net_acceptsocket !== -1) return;
-    net_acceptsocket = UDP_OpenSocket(udpState.net_hostport);
+    net_acceptsocket = UDP_OpenSocket(net_hostport);
     if (net_acceptsocket === -1) Sys_Error("UDP_Listen: Unable to open accept socket\n");
     return;
   }
@@ -265,49 +328,38 @@ function UDP_Listen(state: boolean): void {
 }
 
 function UDP_OpenSocket(port: number): number {
-  const handle = nextHandle++;
-  const entry: UdpSocketEntry = { socket: null, rxQueue: [], closed: false };
-  socketTable.set(handle, entry);
+  const l = lib();
+  if (!l) return -1;
 
-  const promise = Bun.udpSocket({
-    hostname: "0.0.0.0",
-    port,
-    socket: {
-      data(_socket, data, fromPort, fromAddress) {
-        entry.rxQueue.push({ data: new Uint8Array(data), port: fromPort, address: fromAddress });
-      },
-      error(_socket, error) {
-        Con_Printf("UDP: %s\n", error.message);
-      },
-    },
-  })
-    .then((socket) => {
-      if (entry.closed) {
-        socket.close();
-        return;
-      }
-      entry.socket = socket;
-    })
-    .catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      Con_Printf("UDP_OpenSocket: %s\n", message);
-    });
+  const newsocket = l.symbols.socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (newsocket === -1) return -1;
 
-  pendingBinds.set(handle, promise);
-  return handle;
+  optvalBuf[0] = 1; // qboolean _true = true
+  if (l.symbols.ioctl(newsocket, FIONBIO, ptr(optvalBuf)) === -1) {
+    l.symbols.close(newsocket);
+    return -1;
+  }
+
+  const address = new Uint8Array(SOCKADDR_SIZE);
+  address[0] = AF_INET & 0xff;
+  address[1] = (AF_INET >> 8) & 0xff;
+  address[2] = (port >> 8) & 0xff; // htons(port)
+  address[3] = port & 0xff;
+  // sin_addr.s_addr = INADDR_ANY -- the buffer is already zeroed
+  if (l.symbols.bind(newsocket, ptr(address), SOCKADDR_SIZE) === -1) {
+    l.symbols.close(newsocket);
+    return -1;
+  }
+
+  return newsocket;
 }
 
 function UDP_CloseSocket(socket: number): number {
+  const l = lib();
+  if (!l) return -1;
+
   if (socket === net_broadcastsocket) net_broadcastsocket = 0;
-
-  const entry = socketTable.get(socket);
-  if (!entry) return -1;
-
-  entry.closed = true;
-  if (entry.socket) entry.socket.close();
-  socketTable.delete(socket);
-  pendingBinds.delete(socket);
-  return 0;
+  return l.symbols.close(socket);
 }
 
 //=============================================================================
@@ -348,7 +400,7 @@ export function PartialIPAddress(input: string, hostaddr: QsockaddrT): number {
 
   if (octets.length === 0 || octets.length > 4) return -1; // see header: >4 groups is UB in the C, not ported
 
-  let port = udpState.net_hostport;
+  let port = net_hostport;
   if (buff.charAt(i) === ":") {
     port = Q_atoi(buff.slice(i + 1));
   }
@@ -376,37 +428,46 @@ function UDP_Connect(_socket: number, _addr: QsockaddrT): number {
 function UDP_CheckNewConnections(): number {
   if (net_acceptsocket === -1) return -1;
 
-  const entry = socketTable.get(net_acceptsocket);
-  if (entry && entry.rxQueue.length > 0) return net_acceptsocket;
+  const l = lib();
+  if (!l) return -1;
+
+  availableBuf[0] = 0;
+  availableBuf[1] = 0;
+  if (l.symbols.ioctl(net_acceptsocket, FIONREAD, ptr(availableBuf)) === -1)
+    Sys_Error("UDP: ioctlsocket (FIONREAD) failed\n");
+  if (availableBuf[0]) return net_acceptsocket;
   return -1;
 }
 
 //=============================================================================
 
 function UDP_Read(socket: number, buf: Uint8Array, len: number, addr: QsockaddrT): number {
-  const entry = socketTable.get(socket);
-  if (!entry) return -1; // unknown/closed handle -- this port's closest analog to a bad-fd recvfrom() error
+  const l = lib();
+  if (!l) return -1;
 
-  const packet = entry.rxQueue.shift();
-  if (!packet) return 0; // EWOULDBLOCK/ECONNREFUSED equivalent (also covers "bind still pending") -- see header
+  const n = len < buf.length ? len : buf.length; // see header
+  socklenBuf[0] = SOCKADDR_SIZE;
+  readSockaddr.fill(0);
+  const ret = l.symbols.recvfrom(socket, ptr(buf), n, 0, ptr(readSockaddr), ptr(socklenBuf));
+  if (ret === -1) {
+    const e = errno(l);
+    if (e === EWOULDBLOCK || e === ECONNREFUSED) return 0;
+    return -1;
+  }
 
-  const n = Math.min(len, packet.data.length);
-  buf.set(packet.data.subarray(0, n), 0);
-
-  const ipBytes = stringToIpBytes(packet.address) ?? new Uint8Array(4);
-  fillSockaddr(addr, ipBytes, packet.port);
-
-  return n;
+  nativeToQsockaddr(readSockaddr, addr);
+  return ret;
 }
 
 //=============================================================================
 
 function UDP_MakeSocketBroadcastCapable(socket: number): number {
-  const entry = socketTable.get(socket);
-  if (!entry || !entry.socket) return -1;
+  const l = lib();
+  if (!l) return -1;
 
+  optvalBuf[0] = 1;
   // make this socket broadcast capable
-  if (!entry.socket.setBroadcast(true)) return -1;
+  if (l.symbols.setsockopt(socket, SOL_SOCKET, SO_BROADCAST, ptr(optvalBuf), 4) < 0) return -1;
   net_broadcastsocket = socket;
 
   return 0;
@@ -430,18 +491,14 @@ function UDP_Broadcast(socket: number, buf: Uint8Array, len: number): number {
 //=============================================================================
 
 function UDP_Write(socket: number, buf: Uint8Array, len: number, addr: QsockaddrT): number {
-  const entry = socketTable.get(socket);
-  if (!entry || !entry.socket) return -1; // not bound yet, or unknown handle -- see header
+  const l = lib();
+  if (!l) return -1;
 
-  const port = (addr.sa_data[0] << 8) | addr.sa_data[1];
-  const address = `${addr.sa_data[2]}.${addr.sa_data[3]}.${addr.sa_data[4]}.${addr.sa_data[5]}`;
-
-  try {
-    const ok = entry.socket.send(buf.subarray(0, len), port, address);
-    return ok ? len : 0; // false is this port's closest analog to sendto()'s EWOULDBLOCK
-  } catch {
-    return -1;
-  }
+  const n = len < buf.length ? len : buf.length; // see header
+  qsockaddrToNative(addr, writeSockaddr);
+  const ret = l.symbols.sendto(socket, ptr(buf), n, 0, ptr(writeSockaddr), SOCKADDR_SIZE);
+  if (ret === -1 && errno(l) === EWOULDBLOCK) return 0;
+  return ret;
 }
 
 //=============================================================================
@@ -468,26 +525,37 @@ function UDP_StringToAddr(s: string, addr: QsockaddrT): number {
 //=============================================================================
 
 function UDP_GetSocketAddr(socket: number, addr: QsockaddrT): number {
-  addr.sa_family = AF_INET;
-  addr.sa_data.fill(0);
+  addr.sa_family = 0;
+  addr.sa_data.fill(0); // Q_memset (addr, 0, sizeof(struct qsockaddr))
 
-  const entry = socketTable.get(socket);
-  const bunSocket = entry ? entry.socket : null;
-  if (!bunSocket) return 0; // getsockname() has nothing to report; addr stays zeroed like the C's memset
+  const l = lib();
+  if (!l) return 0;
 
-  let ipBytes = stringToIpBytes(bunSocket.address.address);
-  const isAny = !ipBytes || (ipBytes[0] === 0 && ipBytes[1] === 0 && ipBytes[2] === 0 && ipBytes[3] === 0);
-  const isLoopback = ipBytes && ipBytes[0] === 127 && ipBytes[1] === 0 && ipBytes[2] === 0 && ipBytes[3] === 1;
-  if (isAny || isLoopback) ipBytes = myAddr;
+  getnameSockaddr.fill(0);
+  socklenBuf[0] = SOCKADDR_SIZE;
+  l.symbols.getsockname(socket, ptr(getnameSockaddr), ptr(socklenBuf));
+  nativeToQsockaddr(getnameSockaddr, addr);
 
-  fillSockaddr(addr, ipBytes ?? new Uint8Array(4), bunSocket.port);
+  const a0 = addr.sa_data[2];
+  const a1 = addr.sa_data[3];
+  const a2 = addr.sa_data[4];
+  const a3 = addr.sa_data[5];
+  const isAny = a0 === 0 && a1 === 0 && a2 === 0 && a3 === 0;
+  const isLoopback = a0 === 127 && a1 === 0 && a2 === 0 && a3 === 1; // inet_addr("127.0.0.1")
+  if (isAny || isLoopback) {
+    addr.sa_data[2] = myAddr[0] ?? 0;
+    addr.sa_data[3] = myAddr[1] ?? 0;
+    addr.sa_data[4] = myAddr[2] ?? 0;
+    addr.sa_data[5] = myAddr[3] ?? 0;
+  }
+
   return 0;
 }
 
 //=============================================================================
 
 function UDP_GetNameFromAddr(addr: QsockaddrT): string {
-  return UDP_AddrToString(addr);
+  return UDP_AddrToString(addr); // no gethostbyaddr reverse lookup -- see header
 }
 
 //=============================================================================
@@ -495,7 +563,13 @@ function UDP_GetNameFromAddr(addr: QsockaddrT): string {
 function UDP_GetAddrFromName(name: string, addr: QsockaddrT): number {
   if (name.length > 0 && name.charAt(0) >= "0" && name.charAt(0) <= "9") return PartialIPAddress(name, addr);
 
-  return -1; // no gethostbyname network lookup -- see header
+  // see header: no blocking gethostbyname; "localhost" is resolved locally
+  if (name === "localhost") {
+    fillSockaddr(addr, new Uint8Array([127, 0, 0, 1]), net_hostport);
+    return 0;
+  }
+
+  return -1;
 }
 
 //=============================================================================

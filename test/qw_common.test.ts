@@ -42,6 +42,8 @@ import { join } from "node:path";
 
 import {
   COM_InitArgv,
+  com_argc,
+  com_argv,
   COM_InitFilesystem,
   COM_Gamedir,
   COM_FOpenFile,
@@ -405,6 +407,43 @@ describe("COM_BlockSequenceCRCByte", () => {
 });
 
 //============================================================================
+
+// F.md D4 (this tree's own COM_InitArgv): see test/common.test.ts's own
+// header comment for the full analysis -- QW/client/common.c's COM_InitArgv
+// (read in full against /home/buzzkill/Projects/qsrc/quake/QW/client/common.c)
+// truncates at the same MAX_NUM_ARGVS=50 (including argv[0]), silently
+// dropping anything past it, exactly as this port's own COM_InitArgv does.
+// No hang is possible here either (every loop is bounded); the per-test
+// timeout is a regression guard.
+describe("COM_InitArgv argv truncation at MAX_NUM_ARGVS=50 (D4, QuakeWorld track)", () => {
+  test("49 total tokens (including argv[0]): none dropped", () => {
+    const argv = ["quake", ...Array.from({ length: 48 }, (_, i) => `arg${i}`)];
+    COM_InitArgv(argv);
+    expect(com_argc).toBe(49);
+    expect(com_argv[48]).toBe("arg47");
+  }, 2000);
+
+  test("50 total tokens: exactly MAX_NUM_ARGVS, none dropped", () => {
+    const argv = ["quake", ...Array.from({ length: 49 }, (_, i) => `arg${i}`)];
+    COM_InitArgv(argv);
+    expect(com_argc).toBe(50);
+    expect(com_argv[49]).toBe("arg48");
+  }, 2000);
+
+  test("51 total tokens: truncated to 50, the 51st (e.g. a trailing +quit) silently dropped", () => {
+    const argv = ["quake", ...Array.from({ length: 49 }, (_, i) => `arg${i}`), "+quit"];
+    COM_InitArgv(argv);
+    expect(com_argc).toBe(50);
+    expect(com_argv.slice(0, com_argc)).not.toContain("+quit");
+  }, 2000);
+
+  test("70 total tokens (F.md's repro scale): truncated to 50, no hang", () => {
+    const argv = ["quake", ...Array.from({ length: 68 }, (_, i) => `+echo${i}`), "+quit"];
+    COM_InitArgv(argv);
+    expect(com_argc).toBe(50);
+    expect(com_argv.slice(0, com_argc)).not.toContain("+quit");
+  }, 2000);
+});
 
 describe("COM_InitFilesystem / COM_Gamedir", () => {
   function makeBaseDir(name: string): string {

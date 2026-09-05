@@ -322,6 +322,34 @@ describe("PF_Find", () => {
 
     expect(returnEdictNum()).toBe(0);
   });
+
+  // D.md Defect B: WinQuake's G_STRING/E_STRING macros are (pr_strings +
+  // offset) -- never a NULL pointer, so the C's `if (!s)`/`if (!t)` checks
+  // are dead code and an unset (empty) field is searched/matched like any
+  // other value, not treated as an error. Reproduces func_train_find's
+  // `find(world, targetname, self.target)` call in plats.qc for a
+  // func_train whose `target` was never set.
+  test("an empty search string does not throw, and matches an edict whose field is also empty", () => {
+    const targetOfs = ED_FindField("target")?.ofs;
+    if (targetOfs === undefined) throw new Error("target field not found");
+
+    // a known starting point, so the search begins right after it and no
+    // earlier test's edicts (whose `target` field this suite never touches,
+    // but which this test must not depend on regardless) can interfere
+    const start = spawnEdict();
+
+    const emptyTarget = spawnEdict(); // .target left at its default (0 -> "")
+
+    const nonEmptyTarget = spawnEdict();
+    nonEmptyTarget.v.target = PR_SetEngineString("pr_cmds_test_target");
+
+    setParmEdict(OFS_PARM0, start);
+    setParmInt(OFS_PARM1, targetOfs);
+    setParmString(OFS_PARM2, ""); // the empty search string itself
+    expect(() => pr_builtin[18]()).not.toThrow();
+
+    expect(returnEdictNum()).toBe(EDICT_TO_PROG(emptyTarget));
+  });
 });
 
 describe("PF_findradius", () => {

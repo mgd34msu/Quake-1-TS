@@ -68,16 +68,29 @@ ported; G_VECTOR/E_VECTOR allocate a fresh subarray view per call):
       }
       return (int)(s - pr_strings);
     }
-  This is the same shape as PORTING.md's string_t ruling (non-negative =
-  offset into the strings block, negative = engine-string table index) with
-  two C-specific quirks this port does not reproduce: the table dedups by
+  This is the same shape as PORTING.md's string_t ruling (offset into the
+  strings block, plus a separate engine-string table index space) with three
+  C-specific quirks this port does not reproduce: the table dedups by
   raw pointer identity, not string content (JS has no pointer identity for
-  strings, and two calls with equal content are the same value here), and
-  the scan is off-by-one (`pr_strtbl[0]` is never populated; `num_prstr`
-  starts at 0 and is pre-incremented). `PR_SetString` below dedups by
-  content instead (a `Map<string, number>`, same as src/progs/progs.ts's
-  `PR_SetEngineString`) and enforces the same `MAX_PRSTR - 1` usable-slot
-  cap with a `SysError("PR_SetString: MAX_PRSTR")` in place of `Sys_Error`.
+  strings, and two calls with equal content are the same value here); the
+  scan is off-by-one (`pr_strtbl[0]` is never populated; `num_prstr`
+  starts at 0 and is pre-incremented); and the table index is *negative* in
+  the C. `PR_SetString` below dedups by content instead (a
+  `Map<string, number>`, same as src/progs/progs.ts's `PR_SetEngineString`)
+  and enforces the same `MAX_PRSTR - 1` usable-slot cap with a
+  `SysError("PR_SetString: MAX_PRSTR")` in place of `Sys_Error`.
+  The negative index does not survive this port. QW's C stores `-num_prstr`
+  in `int`-typed union slots and never copies one through a float, but this
+  port's globals and entvars are one ArrayBuffer viewed as both Int32Array
+  and Float32Array, and qcc moves every builtin argument with `OP_STORE_V`
+  -- a three-word float copy. Every negative int32 in [-0x7FFFFF, -1] is a
+  float32 NaN bit pattern, and JavaScript does not preserve NaN payloads
+  across a float read/write (`f[b] = f[a]` canonicalises to 0x7FC00000), so
+  a negative string_t is destroyed in transit. Engine strings therefore get
+  *positive* indices based at `ENGINE_STRING_BASE`, above every progs string
+  offset and below 0x7F800000 (the first NaN bit pattern), exactly as
+  src/progs/progs.ts does and for the same reason -- see that file's header
+  for the full derivation and the retail-data proof.
   `PR_ClearEngineStrings` has no C name (num_prstr is just reset to 0 inline
   inside PR_LoadProgs) -- it is this port's reload hook, named to match
   src/progs/progs.ts's identical-purpose function.
@@ -242,11 +255,17 @@ export function RETURN_EDICT(e: QwEdictT): void {
 
 //============================================================================
 // string_t resolution (see file header's PR_GetString/PR_SetString deviation
-// note): non-negative `n` is an offset into `qwpr.strings`; negative `n` is
-// a 1-based index (C's `-num_prstr`) into this module's own engine-string
-// table, content-deduplicated instead of the C's pointer-identity scan.
+// note): `n` below `ENGINE_STRING_BASE` is an offset into `qwpr.strings`;
+// `n` at or above it is an index into this module's own engine-string table,
+// content-deduplicated instead of the C's pointer-identity scan, and
+// positive rather than the C's `-num_prstr` so that a float-view copy of the
+// shared globals/entvars buffer cannot canonicalise it into a NaN.
 
 export const MAX_PRSTR = 1024;
+
+// See src/progs/progs.ts's identically-named constant; the two hosts never
+// run in the same process, but they share the hazard and the reasoning.
+export const ENGINE_STRING_BASE = 0x40000000;
 
 const engineStrings: string[] = [];
 const engineStringIndex = new Map<string, number>();
@@ -260,20 +279,22 @@ function readNulTerminated(bytes: Uint8Array, offset: number): string {
 }
 
 export function PR_GetString(n: StringT): string {
-  if (n >= 0) {
-    if (qwpr.strings === null) throw new SysError("PR_GetString: qwpr.strings not set (PR_LoadProgs not called)");
-    return readNulTerminated(qwpr.strings, n);
+  if (n >= ENGINE_STRING_BASE) {
+    const index = n - ENGINE_STRING_BASE;
+    if (index >= engineStrings.length) throw new SysError(`PR_GetString: bad engine string index ${n}`);
+    return engineStrings[index];
   }
-  const index = -n - 1;
-  if (index < 0 || index >= engineStrings.length) throw new SysError(`PR_GetString: bad engine string index ${n}`);
-  return engineStrings[index];
+  if (n < 0) throw new SysError(`PR_GetString: bad string offset ${n}`);
+  if (qwpr.strings === null) throw new SysError("PR_GetString: qwpr.strings not set (PR_LoadProgs not called)");
+  if (n >= qwpr.strings.length) throw new SysError(`PR_GetString: bad string offset ${n}`);
+  return readNulTerminated(qwpr.strings, n);
 }
 
 export function PR_SetString(s: string): StringT {
   const existing = engineStringIndex.get(s);
   if (existing !== undefined) return existing;
   if (engineStrings.length >= MAX_PRSTR - 1) throw new SysError("PR_SetString: MAX_PRSTR");
-  const index = -(engineStrings.length + 1);
+  const index = ENGINE_STRING_BASE + engineStrings.length;
   engineStrings.push(s);
   engineStringIndex.set(s, index);
   return index;

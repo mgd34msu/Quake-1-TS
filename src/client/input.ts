@@ -24,10 +24,18 @@ Deviations from PORTING.md / the C source:
   the holder is `{ current: InputBackend | null }` rather than a getter that
   errors; host.c calls IN_Init/IN_Shutdown/IN_Commands/IN_Move unconditionally
   in a client build only.
+- `qwInputHooks` (below) has no counterpart in either C tree, for the same
+  reason `IN_MoveQw` does not: the C's two `IN_Move` bodies are byte-identical
+  but each reads its own binary's file-scope `in_strafe`/`in_mlook` and its own
+  `sensitivity`/`m_pitch`/`m_yaw`/`m_forward`/`m_side`/`lookstrafe`. One
+  process compiles both trees here, so the shared body needs to be told which
+  set is live. Same composition-time idiom as console.ts's `qwConsoleHooks`.
 */
 
 import type { UsercmdT } from "../server/server";
 import type { QwUsercmdT } from "../qw/protocol";
+import type { KbuttonT } from "./client";
+import type { CvarT } from "../common/cvar";
 
 export interface InputBackend {
   IN_Init(): void;
@@ -52,3 +60,20 @@ export interface InputBackend {
 }
 
 export const inputBackend: { current: InputBackend | null } = { current: null };
+
+// the eight file-scope globals QW/client/vid_x.c:1071's IN_Move reads out of
+// QW's own cl_input.c / cl_main.c -- see this file's header. QW's
+// CL_InitInput installs them; a WinQuake process leaves `current` null and the
+// backend keeps reading its own tree's objects.
+export interface QwInputRefs {
+  in_strafe: KbuttonT;
+  in_mlook: KbuttonT;
+  lookstrafe: CvarT;
+  sensitivity: CvarT;
+  m_pitch: CvarT;
+  m_yaw: CvarT;
+  m_forward: CvarT;
+  m_side: CvarT;
+}
+
+export const qwInputHooks: { current: QwInputRefs | null } = { current: null };
