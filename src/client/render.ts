@@ -404,6 +404,12 @@ export interface Renderer {
   D_UpdateRects(rects: VrectT | null): void;
   GL_Set2D(): void;
   SCR_TileClear(): void;
+  // The four screen.c Draw_TileClear sites that gl_screen.c has no
+  // counterpart for (SCR_UpdateScreen's scr_fullupdate clear,
+  // SCR_EraseCenterString, SCR_SetUpToDrawConsole's two clears). The
+  // software renderer forwards to Draw_TileClear; the GL renderer's body is
+  // empty, matching gl_screen.c dropping them.
+  SCR_SoftwareTileClear(x: number, y: number, w: number, h: number): void;
   SCR_DrawCrosshair(): void;
   SCR_ScreenShot_f(): void;
 }

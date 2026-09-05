@@ -131,6 +131,7 @@ function makeFakeRenderer(): Renderer {
     D_UpdateRects(_rects: VrectT | null): void {},
     GL_Set2D(): void {},
     SCR_TileClear(): void {},
+    SCR_SoftwareTileClear(): void {},
     SCR_DrawCrosshair(): void {},
     SCR_ScreenShot_f(): void {},
   };

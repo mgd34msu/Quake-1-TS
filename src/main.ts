@@ -81,6 +81,23 @@ import { LINUX_VERSION, QuakeParmsT } from "./common/quakedef";
 import { registerLandriver, vcrState } from "./common/net_main";
 import { udpLandriver } from "./platform/net_udp";
 import { Sys_FloatTime, Sys_Init, Sys_Printf, SysError, sysState } from "./platform/sys";
+// The client subsystems host.c links against. Each registers its
+// hostClientHooks members at module load, so importing them here is the
+// port's equivalent of the C link step; a dedicated server still runs with
+// every hook absent because Host_Init only calls them on the client path.
+import "./client/cl_main";
+import "./client/cl_input";
+import "./client/cl_parse";
+import "./client/cl_tent";
+import "./client/cl_demo";
+import "./client/chase";
+import "./client/keys";
+import "./client/menu";
+import "./client/sbar";
+import "./client/screen";
+import "./client/view";
+import "./client/r_part";
+import "./client/snd_dma";
 
 let landriverRegistered = false;
 

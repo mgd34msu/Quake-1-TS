@@ -105,7 +105,7 @@ Deviations from PORTING.md / the C source:
 
 import { CvarT, Cvar_RegisterVariable, Cvar_SetValue, Cvar_WriteVariables, setCvarServerHooks } from "./cvar";
 import { Com_sprintf } from "./sprintf";
-import { Con_Printf, Con_DPrintf, setDeveloper } from "../client/console";
+import { Con_Printf, Con_DPrintf, Con_Init, setDeveloper } from "../client/console";
 import {
   Sys_Error,
   Sys_FileClose,
@@ -1100,7 +1100,7 @@ export function Host_Init(parms: QuakeParmsT): void {
   Host_InitLocal();
   W_LoadWadFile("gfx.wad");
   hostClientHooks.keyInit?.(); // Key_Init
-  hostClientHooks.conInit?.(); // Con_Init
+  Con_Init(); // console.ts is a load-time leaf and cannot register a hook; called directly as host.c does
   hostClientHooks.mInit?.(); // M_Init
   prEdictMod().PR_Init();
   Mod_Init();

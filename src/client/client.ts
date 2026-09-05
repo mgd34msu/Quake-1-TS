@@ -65,7 +65,8 @@ import { VID_GRADES } from "./vid";
 export { UsercmdT };
 
 // sound.h's `sfx_t`, narrowed by src/client/snd_dma.ts (U054)
-export type SfxT = unknown;
+import type { SfxT } from "./sound";
+export type { SfxT };
 
 export class LightstyleT {
   length = 0;
