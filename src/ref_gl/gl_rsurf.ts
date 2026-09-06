@@ -1399,6 +1399,39 @@ export function GL_CreateSurfaceLightmap(surf: MsurfaceT): void {
 
 /*
 ==================
+GL_ClearLightmapState
+
+This port's own addition, called from gl_rmisc.ts's GL_ClearTextureState
+when `vid_restart` throws the GL context away. gl_rsurf.c keeps
+lightmap_modified[], lightmap_rectchange[], lightmap_polys[] and allocated[]
+in file-scope storage that a real GLQuake process only ever sees
+zero-initialized, and GL_BuildLightmaps only rewinds the entries below the
+first unallocated block -- so a map that used fewer lightmap blocks than the
+one before it would leave `lightmap_modified[i]` set for blocks the new
+context has never been uploaded, and R_UploadLightmap would glTexSubImage2D
+into a texture id that was never given a glTexImage2D. Putting the four
+arrays back to their process-start values is the fresh-process equivalent.
+==================
+*/
+export function GL_ClearLightmapState(): void {
+  allocated.fill(0);
+  lightmaps.fill(0);
+  for (let i = 0; i < MAX_LIGHTMAPS; i++) {
+    lightmap_polys[i] = null;
+    lightmap_modified[i] = false;
+    lightmap_rectchange[i].l = 0;
+    lightmap_rectchange[i].t = 0;
+    lightmap_rectchange[i].w = 0;
+    lightmap_rectchange[i].h = 0;
+  }
+  glRsurfState.lightmap_bytes = 0;
+  glRsurfState.active_lightmaps = 0;
+  glRsurfState.skychain = null;
+  glRsurfState.waterchain = null;
+}
+
+/*
+==================
 GL_BuildLightmaps
 
 Builds the lightmap texture

@@ -52,18 +52,37 @@ exec("cl_yawspeed 140", 1);
 // ---- mouse seam ----------------------------------------------------------
 // IN_Move in src/platform/sdl.ts reads its deltas straight from
 // SDL_GetRelativeMouseState and bails out at `if (!l || !mouse_active) return;`.
-// mouse_active only becomes true inside IN_ActivateMouse, which needs a real
-// SDL window with relative-mouse mode; under SDL_VIDEODRIVER=dummy/offscreen
-// it never does. sdl.ts exports no mouse_x/mouse_y holder and no injection
-// hook, so a headless harness cannot feed synthetic motion through the real
-// backend. Report the exported surface so the gap is on the record.
+// mouse_active DOES become true headlessly (SDL_SetRelativeMouseMode(1)
+// returns 0 under SDL_VIDEODRIVER=dummy and the port ignores that return
+// value), so the corner this used to flag is closed -- see
+// test/e2e/g_s2_mouse.ts (owned by the SDL-input agent) for the full
+// arithmetic path driven end to end under the dummy driver. What genuinely
+// cannot be fed headlessly is SDL's own relative-motion accumulator (gate
+// G-G1 in .orch/e2e/G.md): a pushed SDL_MOUSEMOTION does not move it, so raw
+// mouse deltas still need that agent's SDL_SetRelativeDeltaForTests seam,
+// which is outside this file's SCOPE.
+//
+// Capture policy (sdl.ts's wantMouseCapture/_windowed_mouse header
+// comments): captured while the window is focused and (fullscreen ||
+// key_dest === key_game); released for the console, a menu, chat entry, or
+// lost focus. _windowed_mouse stays registered for config-file
+// compatibility only -- it no longer decides this.
 const sdlExports = Object.keys(sdl).filter((k) => /mouse|delta|rel|motion/i.test(k));
 console.log("  src/platform/sdl.ts mouse-related exports:", sdlExports.join(", ") || "(none)");
-check("a synthetic-mouse-delta seam exists in src/platform/sdl.ts", sdlExports.some((k) => /^(mouse_x|mouse_y|mouseState|injectMouse)/.test(k)), `exports=${sdlExports.join(",") || "(none)"} -- IN_Move returns early while mouse_active is false`);
+check("a synthetic-mouse-delta seam exists in src/platform/sdl.ts (SDL_SetRelativeDeltaForTests, gate G-G1)", sdlExports.includes("SDL_SetRelativeDeltaForTests"), `exports=${sdlExports.join(",") || "(none)"}`);
 check("inputBackend.current is installed", inputBackend.current !== null, "");
 
+keyState.key_dest = KeydestT.key_console;
+sdl.IN_Commands();
+check("windowed + key_dest key_console: mouse stays released", sdl.SDL_InputStateForTests().mouse_active === false, `mouse_active=${sdl.SDL_InputStateForTests().mouse_active}`);
+keyState.key_dest = KeydestT.key_game;
+sdl.IN_Commands();
+check("windowed + key_dest key_game: mouse is captured", sdl.SDL_InputStateForTests().mouse_active === true, `mouse_active=${sdl.SDL_InputStateForTests().mouse_active}`);
+
 // The cvars IN_Move reads are all registered and settable, which is as far as
-// a headless run can go.
+// a headless run can go. _windowed_mouse's own default moved to "1" (config
+// compatibility only, per its sdl.ts header comment) -- no longer asserted
+// to gate anything here.
 for (const n of ["sensitivity", "m_pitch", "m_yaw", "m_forward", "m_side", "m_filter", "lookspring", "lookstrafe", "_windowed_mouse"]) {
   const { Cvar_FindVar } = require("../../src/common/cvar");
   check(`IN_Move cvar ${n} registered`, Cvar_FindVar(n) !== null, `value=${Cvar_VariableValue(n)}`);

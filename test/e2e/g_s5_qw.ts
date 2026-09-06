@@ -206,9 +206,14 @@ async function main(): Promise<void> {
   check("QW: SDL mouse button up releases +attack", (qw_in_attack.state & 1) === 0, `qw=${qw_in_attack.state}`);
 
   // ---- 5d: IN_MoveQw ----------------------------------------------------
-  Cvar_SetValue("_windowed_mouse", 1);
+  // Capture is driven by focus + key_dest/fullscreen (sdl.ts's
+  // wantMouseCapture), the same policy and the same module for both trees;
+  // _windowed_mouse no longer gates it, only round-trips through config
+  // files. key_dest is key_game here (set above), which is why this
+  // captures -- setting the cvar to 0 shows it makes no difference.
+  Cvar_SetValue("_windowed_mouse", 0);
   IN_Commands();
-  check("QW: mouse captured out of a normal qwcl boot", SDL_InputStateForTests().mouse_active, `mouse_active=${SDL_InputStateForTests().mouse_active}`);
+  check("QW: mouse captured out of a normal qwcl boot (key_dest is key_game, regardless of _windowed_mouse)", SDL_InputStateForTests().mouse_active, `mouse_active=${SDL_InputStateForTests().mouse_active}`);
 
   Cvar_SetValue("sensitivity", 3);
   Cvar_SetValue("m_pitch", 0.022);

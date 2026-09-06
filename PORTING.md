@@ -74,6 +74,19 @@ scope entirely.
   directly; if a future unit finds an *unbounded* synchronous loop reachable
   from a running server, that loop is the bug to fix (restore the missing
   `await`), not this handler.
+- Mouse capture is a documented deviation from `vid_x.c` (`src/platform/sdl.ts`):
+  the reference file grabs/ungrabs the X11 pointer only on an edge of
+  `_windowed_mouse`'s value, with no `key_dest` or window-focus check at all,
+  so a window left at that cvar's faithful 1999 default (`"0"`, X11's opt-in
+  etiquette) never captures the mouse in or out of a level -- the reported
+  defect this port fixes. `wantMouseCapture` now grabs the mouse (SDL relative
+  mode, cursor hidden via `SDL_ShowCursor`) whenever the window has focus and
+  either the view is fullscreen or `key_dest == key_game`, and releases it for
+  the console, a menu, chat entry, or a lost window focus (SDL's
+  `SDL_WINDOWEVENT_FOCUS_LOST`/`GAINED` re-captures on refocus), matching what
+  every maintained Quake engine does today. `_windowed_mouse` stays registered
+  for config-file compatibility but no longer gates capture, and its default
+  moves from `"0"` to `"1"`.
 
 ## Directory and file mapping (WinQuake)
 

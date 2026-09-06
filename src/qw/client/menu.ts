@@ -512,6 +512,13 @@ export function M_AdjustSliders(dir: number): void {
     // 14 - Video Options - is only ever handled by M_Options_Key's own
     // K_ENTER dispatch, never through M_AdjustSliders), so falling through
     // here lands directly on case 15, exactly as the C does.
+    // src/platform/sdl.ts's mouse-capture policy no longer reads this cvar
+    // (capture now follows window focus + key_dest/fullscreen -- see
+    // `_windowed_mouse`'s own header comment in sdl.ts). This menu item still
+    // toggles and displays the cvar exactly as the C does, for config-file
+    // compatibility with a saved `_windowed_mouse "0"|"1"`; it is otherwise
+    // inert. Not fixed/removed here -- bug-for-bug fidelity to the C, per
+    // standing order 4.
     case 15: // _windowed_mouse
       Cvar_SetValue("_windowed_mouse", _windowed_mouse.value ? 0 : 1);
       break;

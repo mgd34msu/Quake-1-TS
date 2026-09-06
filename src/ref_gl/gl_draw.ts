@@ -1433,19 +1433,29 @@ export function GL_SelectTexture(target: number): void {
 ================
 GL_ClearTextureCaches
 
-This port's own addition (see ref_gl.ts's Renderer.Shutdown), with no C
+This port's own addition (see ref_gl.ts's Renderer.Shutdown and
+gl_rmisc.ts's GL_ClearTextureState, which calls this one), with no C
 counterpart because GLQUAKE is a compile-time #define and no build of it ever
-tears its refresh down: `vid_restart` here destroys the GL context, and every
-texture name gltextures[]/menu_cachepics[] and glState.texture_extension_number
-hand out was minted against that context. Left alone, the next
+tears its refresh down: `vid_restart` here runs sdl.ts's SDLGL_Shutdown
+(SDL_GL_DeleteContext plus SDL_DestroyWindow) and glimp.ts's GLimp_SetMode
+then builds a brand new window and context, so every texture OBJECT the names
+in gltextures[]/menu_cachepics[]/picGl refer to is gone. Left alone, the next
 `vid_ref gl; vid_restart` would find "conchars" already in gltextures[] and
 "gfx/box_tl.lmp" already in menu_cachepics[] and hand back the dead names
 instead of uploading anything.
 
-Draw_Init and R_Init re-derive translate_texture, scrap_texnum and
-playertextures from texture_extension_number, and GL_BuildLightmaps
-(R_NewMap) does the same for lightmap_textures, so putting the counter back
-to its glquake.ts initializer is all those three need.
+This half clears the caches and the texture ids gl_draw.c itself keeps
+(char_texture, translate_texture, QW's cs_texture, scrap_texnum, and the
+picGl side table that stands in for the C's glpic_t-over-qpic_t->data
+overlay). gl_rmisc.ts's GL_ClearTextureState clears the rest of the renderer's
+retained ids and is the function ref_gl.ts's Shutdown actually calls.
+
+glState.texture_extension_number is deliberately NOT put back to its
+glquake.ts initializer -- see GL_ClearTextureState's own comment for why.
+gl_filter_min/gl_filter_max are not reset either: they are the live
+`gl_texturemode` setting, not a texture id, and every reload reads them in
+GL_Upload32/GL_Upload8, so keeping them is what carries the user's choice
+across the restart.
 ================
 */
 export function GL_ClearTextureCaches(): void {
@@ -1464,12 +1474,29 @@ export function GL_ClearTextureCaches(): void {
   pic_texels = 0;
   pic_count = 0;
 
+  // Every GlpicT here holds a texnum minted against the destroyed context,
+  // and the QpicT keys are reachable from sbar.ts/screen.ts/menu.ts until
+  // their own Sbar_Init/SCR_Init run again.
+  picGl.clear();
+
   for (const a of scrap_allocated) a.fill(0);
   for (const t of scrap_texels) t.fill(0);
   scrap_dirty = false;
   scrap_texnum = 0;
   scrap_uploads = 0;
 
-  glState.texture_extension_number = 1;
+  // Draw_Init reassigns all four unconditionally; zeroing them means nothing
+  // can bind a dead id in the window between Shutdown and the next Draw_Init.
+  translate_texture = 0;
+  char_texture = 0;
+  cs_texture = 0;
+  conback.width = 0;
+  conback.height = 0;
+
   glState.currenttexture = -1; // GL_Bind's "already bound" short-circuit
+  // GL_SelectTexture's own cache of the per-unit binding, glquake.ts's
+  // initializers: a fresh context has neither unit bound to anything.
+  glState.oldtarget = TEXTURE0_SGIS;
+  cnttextures[0] = -1;
+  cnttextures[1] = -1;
 }

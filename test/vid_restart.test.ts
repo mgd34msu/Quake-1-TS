@@ -57,8 +57,14 @@ import {
   static_registered,
 } from "../src/common/common";
 import {
+  MedgeT,
+  ModelT as ModelClassT,
+  MsurfaceT,
+  MtexinfoT,
+  MvertexT,
   Mod_ForName,
   Mod_Init,
+  TextureT as TextureClassT,
   getModelLoaderHooks,
   setModelLoaderHooks,
   type ModelLoaderHooks,
@@ -100,6 +106,20 @@ import { R_TimeRefresh_f } from "../src/ref_soft/r_misc";
 import { CvarT, Cvar_RegisterVariable } from "../src/common/cvar";
 import * as consoleModule from "../src/client/console";
 import { rState } from "../src/ref_soft/r_shared";
+import { MplaneT } from "../src/common/mathlib";
+import { d_8to24table } from "../src/client/vid";
+import {
+  MAX_LIGHTMAPS,
+  TEXTURE0_SGIS,
+  cnttextures,
+  glState,
+  setSurfPolys,
+} from "../src/ref_gl/glquake";
+import { QGLRecording, qglHolder } from "../src/ref_gl/qgl";
+import { GL_ClearTextureState } from "../src/ref_gl/gl_rmisc";
+import { GL_BuildLightmaps, allocated, glRsurfState, lightmap_modified, lightmap_polys, lightmap_rectchange, lightmaps } from "../src/ref_gl/gl_rsurf";
+import { R_InitSky, glWarpState } from "../src/ref_gl/gl_warp";
+import { ngraphState } from "../src/ref_gl/gl_ngraph";
 import { BSP_MIPTEX_NAME, buildBsp, buildMdl, buildSpr, ensureDir, writeGameFile } from "./support/bsp_builder";
 import { writePakToDisk } from "./support/pak_builder";
 
@@ -729,5 +749,289 @@ describe("a vid_ref switch with a level loaded", () => {
       cmdHost.rendererSwitch = savedRendererSwitch;
       spy.mockRestore();
     }
+  });
+});
+
+//============================================================================
+// The GL renderer's own restart reset (src/ref_gl/gl_rmisc.ts's
+// GL_ClearTextureState, which ref_gl.ts's Renderer.Shutdown calls from
+// teardownActiveRenderer above).
+//
+// The switch exercised earlier in this file runs under the dummy video
+// driver, where there is no GL context at all and VID_CheckChanges's
+// `name === "gl"` branch falls straight back to soft -- so it never reaches
+// the real gl_* modules. This block drives them directly.
+//
+// What broke: GL_ClearTextureCaches cleared gltextures[]/menu_cachepics[] and
+// rewound glState.texture_extension_number to 1, but GLQuake mints several
+// texture ids ONCE and keeps them behind an `if (!x)` guard so a level change
+// does not re-mint them -- gl_rsurf.c's GL_BuildLightmaps
+// (`if (!lightmap_textures) { lightmap_textures = texture_extension_number;
+// texture_extension_number += MAX_LIGHTMAPS; }`) and gl_warp.c's R_InitSky
+// (`if (!solidskytexture) solidskytexture = texture_extension_number++;`).
+// Those two survived the reset, so the world textures uploaded after the
+// restart were handed the very numbers they still pointed at: binding a wall
+// sampled the lightmap atlas, binding the sky sampled another texture.
+//
+// Every process-wide singleton this block writes (qglHolder, glState,
+// glWarpState, ngraphState, glRsurfState, the lightmap arrays, cl.worldmodel/
+// cl.model_precache, d_8to24table) is saved and restored here, per standing
+// orders 13 and 15.
+//============================================================================
+
+describe("GL_ClearTextureState (the GL renderer's restart reset)", () => {
+  const rec = new QGLRecording();
+
+  const glSaved = {
+    qgl: qglHolder.current,
+    texExt: glState.texture_extension_number,
+    lightmap_textures: glState.lightmap_textures,
+    particletexture: glState.particletexture,
+    playertextures: glState.playertextures,
+    mirrortexturenum: glState.mirrortexturenum,
+    skytexturenum: glState.skytexturenum,
+    currenttexture: glState.currenttexture,
+    oldtarget: glState.oldtarget,
+    cnt0: cnttextures[0],
+    cnt1: cnttextures[1],
+    solidsky: glWarpState.solidskytexture,
+    alphasky: glWarpState.alphaskytexture,
+    ngraph: ngraphState.texture,
+    lightmap_bytes: glRsurfState.lightmap_bytes,
+    active_lightmaps: glRsurfState.active_lightmaps,
+    worldmodel: cl.worldmodel,
+    precache: cl.model_precache.slice(),
+    palette: Array.from(d_8to24table),
+    allocated: Int32Array.from(allocated),
+    lightmaps: Uint8Array.from(lightmaps),
+    modified: lightmap_modified.slice(),
+    polys: lightmap_polys.slice(),
+    rects: lightmap_rectchange.map((r) => ({ l: r.l, t: r.t, w: r.w, h: r.h })),
+  };
+
+  beforeAll(() => {
+    qglHolder.current = rec;
+  });
+
+  afterAll(() => {
+    qglHolder.current = glSaved.qgl;
+    glState.texture_extension_number = glSaved.texExt;
+    glState.lightmap_textures = glSaved.lightmap_textures;
+    glState.particletexture = glSaved.particletexture;
+    glState.playertextures = glSaved.playertextures;
+    glState.mirrortexturenum = glSaved.mirrortexturenum;
+    glState.skytexturenum = glSaved.skytexturenum;
+    glState.currenttexture = glSaved.currenttexture;
+    glState.oldtarget = glSaved.oldtarget;
+    cnttextures[0] = glSaved.cnt0;
+    cnttextures[1] = glSaved.cnt1;
+    glWarpState.solidskytexture = glSaved.solidsky;
+    glWarpState.alphaskytexture = glSaved.alphasky;
+    ngraphState.texture = glSaved.ngraph;
+    glRsurfState.lightmap_bytes = glSaved.lightmap_bytes;
+    glRsurfState.active_lightmaps = glSaved.active_lightmaps;
+    glRsurfState.currentmodel = null;
+    glRsurfState.r_pcurrentvertbase = null;
+    cl.worldmodel = glSaved.worldmodel;
+    for (let i = 0; i < cl.model_precache.length; i++) cl.model_precache[i] = glSaved.precache[i] ?? null;
+    for (let i = 0; i < 256; i++) d_8to24table[i] = glSaved.palette[i];
+    allocated.set(glSaved.allocated);
+    lightmaps.set(glSaved.lightmaps);
+    for (let i = 0; i < MAX_LIGHTMAPS; i++) {
+      lightmap_modified[i] = glSaved.modified[i];
+      lightmap_polys[i] = glSaved.polys[i];
+      lightmap_rectchange[i].l = glSaved.rects[i].l;
+      lightmap_rectchange[i].t = glSaved.rects[i].t;
+      lightmap_rectchange[i].w = glSaved.rects[i].w;
+      lightmap_rectchange[i].h = glSaved.rects[i].h;
+    }
+  });
+
+  // A 256x128 sky miptex, the shape gl_model.c hands R_InitSky.
+  function makeSkyTexture(): TextureT {
+    const mt = new TextureClassT();
+    mt.name = "sky1";
+    mt.width = 256;
+    mt.height = 128;
+    mt.offsets[0] = 0;
+    mt.data = new Uint8Array(256 * 128);
+    for (let i = 0; i < 128; i++)
+      for (let j = 0; j < 128; j++) {
+        mt.data[i * 256 + j] = 0;
+        mt.data[i * 256 + j + 128] = 1;
+      }
+    return mt;
+  }
+
+  // One axis-aligned quad face, walked surfedges -> edges -> vertexes exactly
+  // as GL_BuildLightmaps -> BuildSurfaceDisplayList does.
+  function makeQuadWorld(): ModelT {
+    const model = new ModelClassT();
+    model.name = "maps/glrestart.bsp";
+    const corners: Array<[number, number]> = [
+      [0, 0],
+      [32, 0],
+      [32, 32],
+      [0, 32],
+    ];
+    model.vertexes = corners.map((c) => {
+      const v = new MvertexT();
+      v.position[0] = c[0];
+      v.position[1] = c[1];
+      v.position[2] = 0;
+      return v;
+    });
+    model.numvertexes = model.vertexes.length;
+
+    model.edges = [new MedgeT()];
+    for (let i = 0; i < 4; i++) {
+      const e = new MedgeT();
+      e.v[0] = i;
+      e.v[1] = (i + 1) % 4;
+      model.edges.push(e);
+    }
+    model.numedges = model.edges.length;
+    model.surfedges = new Int32Array([1, 2, 3, 4]);
+    model.numsurfedges = 4;
+
+    const texture = new TextureClassT();
+    texture.name = "wall";
+    texture.width = 16;
+    texture.height = 16;
+    const ti = new MtexinfoT();
+    ti.vecs[0].set([1, 0, 0, 0]);
+    ti.vecs[1].set([0, 1, 0, 0]);
+    ti.texture = texture;
+
+    const face = new MsurfaceT();
+    face.firstedge = 0;
+    face.numedges = 4;
+    face.texinfo = ti;
+    face.extents[0] = 32;
+    face.extents[1] = 32;
+    face.texturemins[0] = 0;
+    face.texturemins[1] = 0;
+    face.styles[0] = 255;
+    face.samples = null;
+    face.plane = new MplaneT();
+    face.plane.normal[2] = 1;
+    face.plane.dist = 0;
+    setSurfPolys(face, null);
+
+    model.surfaces = [face];
+    model.numsurfaces = 1;
+    model.lightdata = null;
+    return model;
+  }
+
+  /* The exact statics the previous, caches-only reset left behind. */
+  test("puts every retained texture id back to its initializer", () => {
+    // a plausible post-boot state: Draw_Init/R_Init/R_InitSky/GL_BuildLightmaps
+    // have all run and the counter has walked past everything they claimed.
+    glState.lightmap_textures = 155;
+    glWarpState.solidskytexture = 46;
+    glWarpState.alphaskytexture = 47;
+    glState.particletexture = 7;
+    glState.playertextures = 8;
+    ngraphState.texture = 6;
+    glState.mirrortexturenum = 12;
+    glState.skytexturenum = 3;
+    glState.currenttexture = 46;
+    glState.oldtarget = TEXTURE0_SGIS + 1;
+    cnttextures[0] = 46;
+    cnttextures[1] = 155;
+    glState.texture_extension_number = 307;
+
+    GL_ClearTextureState();
+
+    // glquake.ts / gl_warp.ts / gl_ngraph.ts initializers, so every `if (!x)`
+    // guard allocates again
+    expect(glState.lightmap_textures).toBe(0);
+    expect(glWarpState.solidskytexture).toBe(0);
+    expect(glWarpState.alphaskytexture).toBe(0);
+    expect(glState.particletexture).toBe(0);
+    expect(glState.playertextures).toBe(0);
+    expect(ngraphState.texture).toBe(0);
+    expect(glState.mirrortexturenum).toBe(0);
+    expect(glState.skytexturenum).toBe(0);
+
+    // GL_Bind's and GL_SelectTexture's caches, so the first bind after the
+    // restart really issues its glBindTexture
+    expect(glState.currenttexture).toBe(-1);
+    expect(glState.oldtarget).toBe(TEXTURE0_SGIS);
+    expect(cnttextures[0]).toBe(-1);
+    expect(cnttextures[1]).toBe(-1);
+  });
+
+  /* Contract point 2: the counter stays monotonic. */
+  test("leaves texture_extension_number alone, so no name is ever re-issued", () => {
+    glState.texture_extension_number = 307;
+    GL_ClearTextureState();
+    expect(glState.texture_extension_number).toBe(307);
+  });
+
+  test("clears the lightmap page bookkeeping a shorter map would otherwise inherit", () => {
+    allocated[3 * 256] = 17;
+    lightmap_modified[3] = true;
+    lightmap_rectchange[3].l = 5;
+    lightmap_rectchange[3].w = 9;
+    glRsurfState.lightmap_bytes = 4;
+
+    GL_ClearTextureState();
+
+    expect(allocated[3 * 256]).toBe(0);
+    expect(lightmap_modified[3]).toBe(false);
+    expect(lightmap_rectchange[3].l).toBe(0);
+    expect(lightmap_rectchange[3].w).toBe(0);
+    expect(glRsurfState.lightmap_bytes).toBe(0);
+  });
+
+  /*
+  The defect itself: after the reset, the guards must hand out ids that
+  cannot collide with anything the pre-restart context held.
+  */
+  test("R_InitSky and GL_BuildLightmaps re-allocate above every pre-restart id", () => {
+    d_8to24table[0] = 0xffffffff;
+    d_8to24table[1] = 0x00030201;
+
+    // pre-restart: the sky and the lightmap atlas own ids inside the range a
+    // rewound counter would hand straight back out to the world textures.
+    glWarpState.solidskytexture = 46;
+    glWarpState.alphaskytexture = 47;
+    glState.lightmap_textures = 155;
+    glState.texture_extension_number = 307;
+    const preRestartHighWater = glState.texture_extension_number;
+
+    GL_ClearTextureState();
+
+    const world = makeQuadWorld();
+    cl.worldmodel = world;
+    for (let i = 0; i < cl.model_precache.length; i++) cl.model_precache[i] = null;
+    cl.model_precache[1] = world;
+
+    R_InitSky(makeSkyTexture());
+    GL_BuildLightmaps();
+
+    // both guards fired again...
+    expect(glWarpState.solidskytexture).not.toBe(0);
+    expect(glWarpState.alphaskytexture).not.toBe(0);
+    expect(glState.lightmap_textures).not.toBe(0);
+
+    // ...and every id they minted is one the destroyed context never used
+    expect(glWarpState.solidskytexture).toBeGreaterThanOrEqual(preRestartHighWater);
+    expect(glWarpState.alphaskytexture).toBeGreaterThanOrEqual(preRestartHighWater);
+    expect(glState.lightmap_textures).toBeGreaterThanOrEqual(preRestartHighWater);
+    expect(glState.texture_extension_number).toBe(glState.lightmap_textures + MAX_LIGHTMAPS);
+
+    // the two sky ids and the MAX_LIGHTMAPS lightmap block do not overlap
+    const lmLo = glState.lightmap_textures;
+    const lmHi = lmLo + MAX_LIGHTMAPS;
+    expect(glWarpState.solidskytexture < lmLo || glWarpState.solidskytexture >= lmHi).toBe(true);
+    expect(glWarpState.alphaskytexture < lmLo || glWarpState.alphaskytexture >= lmHi).toBe(true);
+    expect(glWarpState.alphaskytexture).toBe(glWarpState.solidskytexture + 1);
+
+    // and both really were uploaded into the new context
+    const skyUploads = rec.calls.filter((c) => c.name === "qglTexImage2D" && c.args[3] === 128 && c.args[4] === 128);
+    expect(skyUploads.length).toBeGreaterThanOrEqual(2);
   });
 });

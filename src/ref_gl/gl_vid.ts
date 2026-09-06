@@ -139,7 +139,8 @@ Deviations from PORTING.md / the C source:
 */
 
 import { CString } from "bun:ffi";
-import { Con_Printf, Con_SafePrintf } from "../client/console";
+import { Con_DPrintf, Con_Printf, Con_SafePrintf } from "../client/console";
+import { cmdHost } from "../common/cmd";
 import { COM_CheckParm, com_gamedir } from "../common/common";
 import { host_basepal } from "../common/host";
 import { qw } from "../common/quakedef";
@@ -288,6 +289,22 @@ export function CheckMultiTextureExtensions(): void {
 }
 
 /*
+The four glGetString banner lines. GLQuake prints them once: the C reaches
+GL_Init only from VID_Init, which runs once at startup (GLQUAKE is a
+compile-time #define and the GLX context is created exactly once, with no
+runtime way back into this function). This port's `vid_restart` and the video
+menu's Apply DO re-enter GL_Init, and re-printing GL_EXTENSIONS there dumps
+the whole extension string -- three rows of the notify overlay -- over the
+frame after every Apply. Past host_initialized (cmdHost.initialized, this
+port's host_initialized), the four lines therefore drop to Con_DPrintf: still
+in the log under `developer 1`, no longer painted over the game.
+*/
+function GL_PrintBanner(fmt: string, value: string): void {
+  if (cmdHost.initialized) Con_DPrintf(fmt, value);
+  else Con_Printf(fmt, value);
+}
+
+/*
 ===============
 GL_Init
 ===============
@@ -296,14 +313,14 @@ export function GL_Init(): void {
   const gl = qgl();
 
   glState.gl_vendor = glGetStringText(GL_VENDOR);
-  Con_Printf("GL_VENDOR: %s\n", glState.gl_vendor);
+  GL_PrintBanner("GL_VENDOR: %s\n", glState.gl_vendor);
   glState.gl_renderer = glGetStringText(GL_RENDERER);
-  Con_Printf("GL_RENDERER: %s\n", glState.gl_renderer);
+  GL_PrintBanner("GL_RENDERER: %s\n", glState.gl_renderer);
 
   glState.gl_version = glGetStringText(GL_VERSION);
-  Con_Printf("GL_VERSION: %s\n", glState.gl_version);
+  GL_PrintBanner("GL_VERSION: %s\n", glState.gl_version);
   glState.gl_extensions = glGetStringText(GL_EXTENSIONS);
-  Con_Printf("GL_EXTENSIONS: %s\n", glState.gl_extensions);
+  GL_PrintBanner("GL_EXTENSIONS: %s\n", glState.gl_extensions);
 
   CheckMultiTextureExtensions();
 

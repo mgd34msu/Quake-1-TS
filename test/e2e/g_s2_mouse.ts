@@ -36,9 +36,13 @@ drain();
 const st0 = inputState();
 check("after Host_Init: SDL is armed", st0.libraryLoaded && st0.videoSubsystem, JSON.stringify(st0));
 check("after Host_Init: mouse_avail is true (IN_Init runs before VID_Init)", st0.mouse_avail === true, `mouse_avail=${st0.mouse_avail}`);
-Cvar_SetValue("_windowed_mouse", 1);
+// Capture policy (sdl.ts's wantMouseCapture/_windowed_mouse header comments):
+// captured while the window is focused and (fullscreen || key_dest ===
+// key_game); _windowed_mouse no longer gates this, only config-file
+// round-tripping. key_dest is key_game here (set above), so this captures
+// on that basis alone -- section 2b below proves the cvar is irrelevant.
 IN_Commands();
-check("IN_Commands captures the mouse straight out of a normal boot", inputState().mouse_active === true, `mouse_active=${inputState().mouse_active}`);
+check("IN_Commands captures the mouse straight out of a normal boot (key_dest is key_game)", inputState().mouse_active === true, `mouse_active=${inputState().mouse_active}`);
 {
   const cmd = new UsercmdT();
   IN_ClearStates();
@@ -55,17 +59,30 @@ const st1 = inputState();
 check("re-running IN_Init after VID_Init leaves mouse_avail set", st1.mouse_avail === true, `mouse_avail=${st1.mouse_avail}`);
 
 // ---- 2b: IN_Commands / IN_ActivateMouse gating ---------------------------
-Cvar_SetValue("_windowed_mouse", 0);
+// Capture policy: captured while windowActive and (fullscreen || key_dest
+// === key_game); released for the console, a menu, chat entry, unfocused
+// windowed play, or IN_ModeChanged. _windowed_mouse stays registered for
+// config-file compatibility but no longer participates -- each check below
+// flips it to prove it has no effect on the outcome.
 SDL_SetFullscreenHint(false);
+keyState.key_dest = KeydestT.key_console;
+Cvar_SetValue("_windowed_mouse", 0);
 IN_Commands();
-check("_windowed_mouse 0 + windowed: mouse stays inactive", inputState().mouse_active === false, `mouse_active=${inputState().mouse_active}`);
+check("windowed + key_dest key_console: mouse stays inactive", inputState().mouse_active === false, `mouse_active=${inputState().mouse_active}`);
 Cvar_SetValue("_windowed_mouse", 1);
 IN_Commands();
-check("_windowed_mouse 1 activates the mouse under SDL_VIDEODRIVER=dummy", inputState().mouse_active === true, `mouse_active=${inputState().mouse_active}`);
+check("_windowed_mouse no longer gates capture: still inactive in the console with the cvar at 1", inputState().mouse_active === false, `mouse_active=${inputState().mouse_active}`);
+keyState.key_dest = KeydestT.key_game;
+IN_Commands();
+check("windowed + key_dest key_game captures the mouse under SDL_VIDEODRIVER=dummy", inputState().mouse_active === true, `mouse_active=${inputState().mouse_active}`);
 Cvar_SetValue("_windowed_mouse", 0);
+IN_Commands();
+check("_windowed_mouse 0 no longer releases capture while key_dest is key_game", inputState().mouse_active === true, `mouse_active=${inputState().mouse_active}`);
+keyState.key_dest = KeydestT.key_console;
 SDL_SetFullscreenHint(true);
 IN_Commands();
-check("fullscreen always captures regardless of _windowed_mouse", inputState().mouse_active === true, `mouse_active=${inputState().mouse_active}`);
+check("fullscreen always captures regardless of _windowed_mouse or key_dest", inputState().mouse_active === true, `mouse_active=${inputState().mouse_active}`);
+keyState.key_dest = KeydestT.key_game;
 SDL_AppActivate(false);
 check("focus loss deactivates the mouse (SDL_AppActivate false)", inputState().mouse_active === false, `mouse_active=${inputState().mouse_active}`);
 IN_Commands();
@@ -77,9 +94,12 @@ IN_ModeChanged();
 check("IN_ModeChanged drops the capture", inputState().mouse_active === false, `mouse_active=${inputState().mouse_active}`);
 IN_Commands();
 SDL_SetFullscreenHint(false);
+// key_dest is still key_game here (never changed since the block above), so
+// this recaptures on that basis; the cvar set is left in for config-file
+// realism but no longer does anything to the outcome.
 Cvar_SetValue("_windowed_mouse", 1);
 IN_Commands();
-check("mouse re-captured for the arithmetic tests", inputState().mouse_active === true, `mouse_active=${inputState().mouse_active}`);
+check("mouse re-captured for the arithmetic tests (windowed, key_dest key_game)", inputState().mouse_active === true, `mouse_active=${inputState().mouse_active}`);
 
 // ---- 2c: a pushed SDL_MOUSEMOTION drives the whole path ------------------
 // SDL_PumpInput decodes xrel/yrel into mouse_x/mouse_y the way vid_x.c's

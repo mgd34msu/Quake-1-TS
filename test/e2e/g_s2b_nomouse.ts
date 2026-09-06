@@ -21,9 +21,16 @@ check("-nomouse is present on the command line", COM_CheckParm("-nomouse") !== 0
 const st = SDL_InputStateForTests();
 check("-nomouse keeps mouse_avail false (vid_x.c's own early return)", st.mouse_avail === false, `mouse_avail=${st.mouse_avail}`);
 
+// _windowed_mouse no longer gates capture at all (see sdl.ts's
+// wantMouseCapture/_windowed_mouse header comments): capture now follows
+// window focus + key_dest/fullscreen, and -nomouse pre-empts all of that by
+// leaving mouse_avail false, so IN_Commands returns at its very first line
+// regardless of the cvar or key_dest (key_dest is key_game here, the
+// default -- see keys.ts's initial keyState). Setting the cvar to 1 is kept
+// only to prove it still cannot force a capture -nomouse has disabled.
 Cvar_SetValue("_windowed_mouse", 1);
 IN_Commands();
-check("-nomouse keeps the mouse uncaptured (vid_x.c's own early return)", inputState().mouse_active === false, `mouse_active=${inputState().mouse_active}`);
+check("-nomouse keeps the mouse uncaptured regardless of _windowed_mouse or key_dest (vid_x.c's own early return)", inputState().mouse_active === false, `mouse_active=${inputState().mouse_active}`);
 
 cl.viewangles[YAW] = 0;
 const cmd = new UsercmdT();

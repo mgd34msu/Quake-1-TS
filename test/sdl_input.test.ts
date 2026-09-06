@@ -50,11 +50,17 @@ import {
   SDL_TEST_WINDOWEVENT_FOCUS_GAINED,
   SDL_TEST_WINDOWEVENT_FOCUS_LOST,
   SDL_MakeWindowEvent,
+  SDL_MakeWindowSizeChangedEvent,
+  SDL_SetWindowSizeChangedHandler,
+  SDL_TEST_WINDOWEVENT_SIZE_CHANGED,
   SDLVID_Init,
   _windowed_mouse,
   m_filter,
 } from "../src/platform/sdl";
 import { Sys_SendKeyEvents } from "../src/platform/sys";
+// the handler platform/vid.ts registers at module scope, restored by the
+// SIZE_CHANGED tests below after they swap in a stub
+import { VID_SizeChanged } from "../src/platform/vid";
 import { Cbuf_Init } from "../src/common/cmd";
 import { Key_Init, KeydestT, keyState, key_lines, keybindings, K_MOUSE1, K_MOUSE2, K_MOUSE3 } from "../src/client/keys";
 import { cl } from "../src/client/client";
@@ -258,9 +264,12 @@ describe("src/platform/sdl.ts -- pushed SDL key events reach Key_Event", () => {
 
 // IN_Commands is the engine's own per-frame capture gate; every mouse test
 // below needs it to have taken the pointer, exactly as a running Host_Frame
-// would have.
+// would have. key_dest is what actually drives capture now (see sdl.ts's
+// wantMouseCapture); _windowed_mouse is set too only to prove it no longer
+// matters (a stray "0" left over from another test must not defeat capture).
 function captureMouse(): void {
   _windowed_mouse.value = 1;
+  keyState.key_dest = KeydestT.key_game;
   SDL_SetFullscreenHint(false);
   IN_Commands();
   expect(SDL_InputStateForTests().mouse_active).toBe(true);
@@ -468,5 +477,131 @@ describe("src/platform/sdl.ts -- IN_Init, -nomouse and mouse_avail", () => {
 
     reInit(["quake"]);
     expect(SDL_InputStateForTests().mouse_avail).toBe(true);
+  });
+});
+
+// Defect: "you are not capturing the mouse" -- windowed play never grabbed
+// the mouse because wantMouseCapture gated on _windowed_mouse (faithfully
+// defaulted to "0", vid_x.c's 1999 opt-in), and the user's own archived
+// config.cfg carries that same "0" forward. The fix moves capture onto
+// key_dest (see sdl.ts's own header comment on the deviation from vid_x.c,
+// which has no such check at all): captured while playing with the window
+// focused, released for the console/menu/message line or a loss of focus,
+// forced on in fullscreen regardless. _windowed_mouse stays registered (for
+// config compatibility) but is proven inert below.
+describe("src/platform/sdl.ts -- mouse capture follows key_dest and window focus, not _windowed_mouse", () => {
+  // the previous describe block's last call, reInit(["quake"]), already left
+  // mouse_avail true and mouse_active false -- nothing further to arm here.
+  afterAll(() => {
+    keyState.key_dest = KeydestT.key_game;
+    SDL_SetFullscreenHint(false);
+    IN_Commands();
+  });
+
+  test("windowed + key_dest key_game captures the mouse and hides the cursor, even with _windowed_mouse 0", () => {
+    _windowed_mouse.value = 0; // the reported defect's exact archived config value
+    SDL_SetFullscreenHint(false);
+    keyState.key_dest = KeydestT.key_game;
+    IN_Commands();
+    const st = SDL_InputStateForTests();
+    expect(st.mouse_active).toBe(true);
+    expect(st.cursorVisible).toBe(false);
+  });
+
+  test("switching key_dest to key_console releases the mouse and shows the cursor", () => {
+    keyState.key_dest = KeydestT.key_console;
+    IN_Commands();
+    const st = SDL_InputStateForTests();
+    expect(st.mouse_active).toBe(false);
+    expect(st.cursorVisible).toBe(true);
+  });
+
+  test("key_menu and key_message also release the mouse", () => {
+    for (const dest of [KeydestT.key_menu, KeydestT.key_message]) {
+      keyState.key_dest = KeydestT.key_game;
+      IN_Commands();
+      expect(SDL_InputStateForTests().mouse_active).toBe(true);
+
+      keyState.key_dest = dest;
+      IN_Commands();
+      expect(SDL_InputStateForTests().mouse_active).toBe(false);
+    }
+  });
+
+  test("losing window focus releases the mouse regardless of key_dest, and it re-captures on refocus", () => {
+    keyState.key_dest = KeydestT.key_game;
+    IN_Commands();
+    expect(SDL_InputStateForTests().mouse_active).toBe(true);
+
+    SDL_DrainEventsForTests();
+    expect(SDL_PushTestEvent(SDL_MakeWindowEvent(SDL_TEST_WINDOWEVENT_FOCUS_LOST))).toBe(1);
+    Sys_SendKeyEvents();
+    expect(SDL_InputStateForTests().windowActive).toBe(false);
+    expect(SDL_InputStateForTests().mouse_active).toBe(false);
+    expect(SDL_InputStateForTests().cursorVisible).toBe(true);
+
+    // still released while unfocused even though key_dest never left key_game
+    IN_Commands();
+    expect(SDL_InputStateForTests().mouse_active).toBe(false);
+
+    SDL_DrainEventsForTests();
+    expect(SDL_PushTestEvent(SDL_MakeWindowEvent(SDL_TEST_WINDOWEVENT_FOCUS_GAINED))).toBe(1);
+    Sys_SendKeyEvents();
+    expect(SDL_InputStateForTests().windowActive).toBe(true);
+    IN_Commands();
+    expect(SDL_InputStateForTests().mouse_active).toBe(true);
+  });
+
+  test("fullscreen forces capture even with the console up, windowed does not", () => {
+    keyState.key_dest = KeydestT.key_console;
+    SDL_SetFullscreenHint(true);
+    IN_Commands();
+    expect(SDL_InputStateForTests().mouse_active).toBe(true);
+
+    SDL_SetFullscreenHint(false);
+    IN_Commands();
+    expect(SDL_InputStateForTests().mouse_active).toBe(false);
+  });
+});
+
+/*
+SDL_WINDOWEVENT_SIZE_CHANGED, the one window event the pump used to drop:
+vid_x.c ignores ConfigureNotify (its X11 window is fixed-size), which left a
+window a compositor had resized rendering the old mode's resolution into a
+differently sized drawable. The pump now decodes data1/data2 and hands them
+to whatever handler src/platform/vid.ts registered.
+*/
+describe("SDL_PumpInput -- SDL_WINDOWEVENT_SIZE_CHANGED", () => {
+  test("decodes data1/data2 and calls the registered size handler", () => {
+    const seen: Array<{ width: number; height: number }> = [];
+    SDL_DrainEventsForTests();
+    SDL_SetWindowSizeChangedHandler((width, height) => {
+      seen.push({ width, height });
+    });
+    try {
+      expect(SDL_PushTestEvent(SDL_MakeWindowSizeChangedEvent(1181, 502))).toBe(1);
+      Sys_SendKeyEvents();
+      expect(seen).toEqual([{ width: 1181, height: 502 }]);
+    } finally {
+      // platform/vid.ts installs VID_SizeChanged at module scope; put it back
+      // rather than leaving a later suite with this file's stub (rule 15).
+      SDL_SetWindowSizeChangedHandler(VID_SizeChanged);
+    }
+  });
+
+  test("a window event that is not SIZE_CHANGED never reaches the size handler", () => {
+    const seen: number[] = [];
+    SDL_DrainEventsForTests();
+    SDL_SetWindowSizeChangedHandler((width) => {
+      seen.push(width);
+    });
+    try {
+      expect(SDL_PushTestEvent(SDL_MakeWindowEvent(SDL_TEST_WINDOWEVENT_FOCUS_GAINED))).toBe(1);
+      Sys_SendKeyEvents();
+      expect(seen).toEqual([]);
+      expect(SDL_TEST_WINDOWEVENT_SIZE_CHANGED).toBe(6);
+    } finally {
+      SDL_SetWindowSizeChangedHandler(VID_SizeChanged);
+    }
   });
 });

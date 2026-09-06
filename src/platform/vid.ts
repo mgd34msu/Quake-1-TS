@@ -140,7 +140,7 @@ import { Mod_ClearAll, Mod_ForName, setModelLoaderHooks } from "../common/model"
 import { cl, cl_static_entities } from "../client/client";
 import { Cache_Flush } from "../common/zone";
 import { inputBackend } from "../client/input";
-import { SDL_BackendEnabled, SDL_SetBackendEnabled, SDLVID_Init, SDLVID_Present, SDLVID_SetWindowTitle, SDLVID_Shutdown, SDL_SetFullscreenHint } from "./sdl";
+import { SDL_BackendEnabled, SDL_SetBackendEnabled, SDL_SetWindowSizeChangedHandler, SDLVID_Init, SDLVID_Present, SDLVID_Resize, SDLVID_SetWindowTitle, SDLVID_Shutdown, SDL_SetFullscreenHint } from "./sdl";
 import { CreateGLimp, glimpHolder } from "./glimp";
 import { VID_MenuDraw, VID_MenuKey } from "./vid_menu";
 // ref_soft's own r_main.ts (R_Init, registerRenderer, hostClientHooks.rInit)
@@ -580,6 +580,82 @@ export function VID_Restart_f(): void {
   VID_CheckChanges();
 }
 
+/*
+VID_SizeChanged -- the window was resized out from under the running mode
+(SDL_WINDOWEVENT_SIZE_CHANGED; src/platform/sdl.ts's pump decodes it and
+calls this through the handler it registers below).
+
+There is no C precedent to port: vid_x.c never asks for a resizable window
+and ignores ConfigureNotify, and gl_vidlinuxglx.c's window is likewise
+created once at the size VID_Init picked, so neither file has any code path
+that reacts to the window changing size. On a compositor that resizes the
+window anyway (the Wayland report this was written for: a 640x480 mode left
+rendering into an 1181x502 drawable, so the frame was cropped and the status
+bar and weapon fell off the bottom), the faithful-to-nothing options are to
+letterbox or to adopt the new size; this port adopts it, which is the same
+thing vid_restart to a new mode already does -- minus the parts of
+VID_CheckChanges that cannot be justified here:
+
+  - the renderer is NOT torn down and re-created. The window and, under GL,
+    the context are the same objects they were a moment ago, so every
+    texture name, every cached pic and the loaded level all stay valid.
+    That is what makes this cheap enough to run on the (many) SIZE_CHANGED
+    events a drag-resize delivers.
+  - `vid_mode` is NOT rewritten. It stays the mode the USER asked for, so
+    the video menu keeps showing that selection and the next `vid_restart`
+    (or menu Apply) goes back to it. The live size may differ from the
+    cvar's, exactly as it already may under SDL_WINDOW_FULLSCREEN_DESKTOP.
+
+What IS redone is everything VID_CheckChanges_ derives from the resolution:
+the 8-bit framebuffer and its con* aliases, `vid.aspect`, and -- software
+only, matching vid_x.c's ResetFrameBuffer, which is the one C function that
+does re-allocate these for a new resolution -- the z-buffer and the surface
+cache through D_FlushCaches/D_InitCaches. `vid.recalc_refdef` then makes
+screen.c's SCR_UpdateScreen re-run SCR_CalcRefdef (which re-derives
+r_refdef.vrect and calls Con_CheckResize, so the console reformats to the new
+width) and `scr_fullupdate = 0` makes it clear and re-draw the whole screen,
+status bar included, instead of leaving the old frame's pixels around the
+edges.
+*/
+export function VID_SizeChanged(width: number, height: number): void {
+  if (width < 1 || height < 1) return;
+  // nothing is up yet (VID_Init has not run, or the renderer was torn down):
+  // the next VID_CheckChanges will size everything from the cvars anyway.
+  const renderer = re.current;
+  if (renderer === null || activeRendererKind === null) return;
+  // SDL sends SIZE_CHANGED once for the window's creation too, and once more
+  // per compositor frame during a drag; anything that does not actually
+  // change the resolution is dropped rather than re-allocating the world.
+  if (width === vid.width && height === vid.height) return;
+
+  vid.width = width;
+  vid.height = height;
+  vid.rowbytes = width;
+  vid.buffer = new Uint8Array(width * height);
+  vid.conbuffer = vid.buffer;
+  vid.conrowbytes = vid.rowbytes;
+  vid.conwidth = width;
+  vid.conheight = height;
+  vid.aspect = (vid.height / vid.width) * (320.0 / 240.0);
+
+  if (activeRendererKind === "soft") {
+    // vid_x.c's ResetFrameBuffer, in order: flush the caches that are sized
+    // for the old resolution, then re-allocate the z-buffer and hand the
+    // rasterizer a surface-cache heap sized for the new one.
+    renderer.D_FlushCaches();
+    rState.d_pzbuffer = new Int16Array(width * height);
+    const cacheSize = renderer.D_SurfaceCacheForRes(width, height);
+    renderer.D_InitCaches(new Uint8Array(cacheSize), cacheSize);
+    // and the SDL streaming texture the framebuffer is presented through,
+    // whose dimensions are fixed at creation (SDLVID_Present drops any frame
+    // that does not match them).
+    SDLVID_Resize(width, height);
+  }
+
+  vid.recalc_refdef = 1;
+  scrState.scr_fullupdate = 0;
+}
+
 //=============================================================================
 // VidBackend
 
@@ -708,6 +784,7 @@ const vidBackendImpl: VidBackend = {
 vidBackend.current = vidBackendImpl;
 hostClientHooks.vidInit = VID_Init;
 hostClientHooks.vidShutdown = VID_Shutdown;
+SDL_SetWindowSizeChangedHandler(VID_SizeChanged);
 
 // test seam: undo everything VID_Init/VID_CheckChanges armed, so a suite can
 // exercise a fresh vid_ref switch without a real renderer registered.

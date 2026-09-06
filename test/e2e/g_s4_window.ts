@@ -18,9 +18,13 @@ keyState.key_dest = KeydestT.key_game;
 frames(5);
 drain();
 
-Cvar_SetValue("_windowed_mouse", 1);
+// Capture is now driven by focus + key_dest/fullscreen, not this cvar (see
+// sdl.ts's wantMouseCapture/_windowed_mouse header comments); key_dest is
+// key_game (set above), which is why this captures. The Cvar_SetValue call
+// is kept only to show it does not need to be anything in particular.
+Cvar_SetValue("_windowed_mouse", 0);
 IN_Commands();
-check("mouse captured before the focus tests", inputState().mouse_active, `mouse_active=${inputState().mouse_active}`);
+check("mouse captured before the focus tests (key_dest is key_game, regardless of _windowed_mouse)", inputState().mouse_active, `mouse_active=${inputState().mouse_active}`);
 
 // ---- 4a: SDL_WINDOWEVENT focus lost / gained ----------------------------
 drain();

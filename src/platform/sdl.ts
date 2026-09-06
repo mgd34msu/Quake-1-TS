@@ -104,6 +104,13 @@ const SDL_INIT_NOPARACHUTE = 0x00100000;
 
 const SDL_WINDOWPOS_CENTERED = 0x2fff0000;
 const SDL_WINDOW_SHOWN = 0x00000004;
+// The window the user can resize. vid_x.c's window is fixed-size (it never
+// sets WM size hints for anything else and ignores ConfigureNotify), but a
+// tiling Wayland/X11 compositor resizes a window whether or not the hint
+// allows it -- which is the case the SDL_WINDOWEVENT_SIZE_CHANGED handling
+// below exists for -- and with the engine now adopting whatever size it is
+// handed, refusing a deliberate drag-resize would be the odd behaviour.
+const SDL_WINDOW_RESIZABLE = 0x00000020;
 // FULLSCREEN | 0x1000: borderless "desktop" fullscreen. The plain
 // FULLSCREEN flag asks for a video-mode change, which Wayland cannot do --
 // SDL's wayland backend then leaves the surface in a state some compositors
@@ -136,6 +143,12 @@ const SDL_MOUSEBUTTONDOWN = 0x401;
 const SDL_MOUSEBUTTONUP = 0x402;
 const SDL_MOUSEWHEEL = 0x403;
 
+// SDL_WINDOWEVENT_RESIZED (5) is sent only for a resize the application did
+// not itself request; SDL_WINDOWEVENT_SIZE_CHANGED (6) is sent for EVERY size
+// change, including the one that follows a compositor-side resize on Wayland,
+// and is always sent before RESIZED when both apply. Decoding SIZE_CHANGED
+// alone therefore covers both without handling the same resize twice.
+const SDL_WINDOWEVENT_SIZE_CHANGED = 6;
 const SDL_WINDOWEVENT_FOCUS_GAINED = 12;
 const SDL_WINDOWEVENT_FOCUS_LOST = 13;
 const SDL_WINDOWEVENT_CLOSE = 14;
@@ -162,8 +175,11 @@ const MOTIONEVENT_YREL = 32;
 const BUTTONEVENT_BUTTON = 16;
 // SDL_MouseWheelEvent: x 16, y 20.
 const WHEELEVENT_Y = 20;
-// SDL_WindowEvent: event 12.
+// SDL_WindowEvent: event 12, data1 16, data2 20 (the new width/height for
+// SDL_WINDOWEVENT_SIZE_CHANGED, in window coordinates).
 const WINDOWEVENT_EVENT = 12;
+const WINDOWEVENT_DATA1 = 16;
+const WINDOWEVENT_DATA2 = 20;
 
 // SDL_AudioSpec: freq 0, format 4, channels 6, silence 7, samples 8,
 // padding 10, size 12, callback 16, userdata 24 (32 bytes total).
@@ -188,6 +204,7 @@ const symbols = {
   SDL_DestroyWindow: { args: ["ptr"], returns: "void" },
   SDL_SetWindowTitle: { args: ["ptr", "cstring"], returns: "void" },
   SDL_GetWindowSize: { args: ["ptr", "ptr", "ptr"], returns: "void" },
+  SDL_SetWindowSize: { args: ["ptr", "i32", "i32"], returns: "void" },
 
   SDL_CreateRenderer: { args: ["ptr", "i32", "u32"], returns: "ptr" },
   SDL_DestroyRenderer: { args: ["ptr"], returns: "void" },
@@ -199,6 +216,7 @@ const symbols = {
   SDL_DestroyTexture: { args: ["ptr"], returns: "void" },
   SDL_UpdateTexture: { args: ["ptr", "ptr", "ptr", "i32"], returns: "i32" },
 
+  SDL_GL_GetDrawableSize: { args: ["ptr", "ptr", "ptr"], returns: "void" },
   SDL_GL_SetAttribute: { args: ["i32", "i32"], returns: "i32" },
   SDL_GL_CreateContext: { args: ["ptr"], returns: "ptr" },
   SDL_GL_DeleteContext: { args: ["ptr"], returns: "void" },
@@ -355,6 +373,19 @@ export function SDLGL_GetWindowSize(): { width: number; height: number } {
   return querySDLWindowSize(window);
 }
 
+// The GL drawable's size in PIXELS, which is not the window's size in window
+// coordinates whenever the compositor applies a scale factor (Wayland
+// fractional scaling, macOS Retina). gl_vidlinuxglx.c never needs this
+// distinction -- X11 had no scaling -- but it is exactly what a resized
+// window on a scaling compositor renders into, so it is what the GL path
+// adopts on SDL_WINDOWEVENT_SIZE_CHANGED.
+export function SDLGL_GetDrawableSize(): { width: number; height: number } {
+  const l = lib();
+  if (!l || !window) return { width: 0, height: 0 };
+  l.symbols.SDL_GL_GetDrawableSize(window, winWidthBuf, winHeightBuf);
+  return { width: winWidthBuf[0], height: winHeightBuf[0] };
+}
+
 export function SDLVID_Active(): boolean {
   return texture !== null;
 }
@@ -392,7 +423,7 @@ export function SDLVID_Init(width: number, height: number, fullscreen: boolean):
 
   SDLVID_Shutdown();
 
-  const flags = SDL_WINDOW_SHOWN | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+  const flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
   window = l.symbols.SDL_CreateWindow(cstr("Quake"), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, flags);
   if (!window) {
     Con_Printf("SDL: SDL_CreateWindow failed: %s\n", sdlError(l));
@@ -432,6 +463,40 @@ export function SDLVID_Init(width: number, height: number, fullscreen: boolean):
   }
   rgba = new Uint8Array(width * height * 4);
   framesPresented = 0;
+  return true;
+}
+
+/*
+SDLVID_Resize -- re-size the software present surface in place, for a window
+the user (or the compositor) resized under a running mode. Everything
+SDLVID_Init makes EXCEPT the streaming texture survives: the same window and
+the same SDL_Renderer stay live, so no GL context and no renderer-owned state
+is destroyed. Only the texture (whose width/height are fixed at creation) and
+the RGBA expansion scratch have to be rebuilt for the new resolution.
+*/
+export function SDLVID_Resize(width: number, height: number): boolean {
+  const l = lib();
+  if (!l || !renderer) return false;
+  if (width < 1 || height < 1) return false;
+
+  if (texture) {
+    l.symbols.SDL_DestroyTexture(texture);
+    texture = null;
+  }
+  texture = l.symbols.SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, width, height);
+  if (!texture) {
+    Con_Printf("SDL: SDL_CreateTexture failed: %s\n", sdlError(l));
+    return false;
+  }
+
+  texWidth = width;
+  texHeight = height;
+  // the framebuffer now IS the drawable size the resize reported, so the
+  // blit rect fills it exactly -- no letterbox bars, unlike the
+  // fullscreen-desktop case SDLVID_Init queries the real size for.
+  dispWidth = width;
+  dispHeight = height;
+  rgba = new Uint8Array(width * height * 4);
   return true;
 }
 
@@ -516,7 +581,7 @@ export function SDLGL_CreateWindow(width: number, height: number, fullscreen: bo
   l.symbols.SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   l.symbols.SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
-  const flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+  const flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
   window = l.symbols.SDL_CreateWindow(cstr("Quake"), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, flags);
   if (!window) {
     Con_Printf("SDL: SDL_CreateWindow failed: %s\n", sdlError(l));
@@ -633,14 +698,28 @@ let old_mouse_y = 0;
 let windowActive = true;
 
 // vid_x.c's own cvars (IN_Init: `Cvar_RegisterVariable (&_windowed_mouse);
-// Cvar_RegisterVariable (&m_filter);`), not quake-2-ts's -- _windowed_mouse
-// gates whether the mouse is captured while windowed (its whole point under
-// X11's manual warp-to-center scheme); SDL's SDL_SetRelativeMouseMode is the
-// portable stand-in for that warp-to-center + delta-from-center dance, so
-// this cvar now gates SDL_SetRelativeMouseMode instead of an XGrabPointer
-// call, and only while not fullscreen (fullscreen always captures: there is
-// nowhere else for the pointer to usefully go).
-export const _windowed_mouse = new CvarT("_windowed_mouse", "0", true);
+// Cvar_RegisterVariable (&m_filter);`), not quake-2-ts's.
+//
+// DEVIATION (see PORTING.md): vid_x.c, grepped in full, grabs/ungrabs the X11
+// pointer only on an edge of this cvar's *value* (GetEvent's `if
+// (old_windowed_mouse != _windowed_mouse.value)`) -- there is no key_dest or
+// window-focus check anywhere in the file. A player who leaves the cvar at
+// its faithful 1999 default ("0", opt-in, matching the era's X11 etiquette)
+// therefore never gets the pointer grabbed at all, in or out of a level --
+// this is the reported defect ("you are not capturing the mouse"), also
+// reproduced by an archived config.cfg that carries `_windowed_mouse "0"`
+// forward from the original engine. Every maintained Quake engine today
+// (QuakeSpasm's IN_UpdateGrabs is the clearest example) instead grabs based
+// on whether the game currently has key focus, independent of this cvar.
+// This port follows that modern behaviour: wantMouseCapture below grabs
+// whenever the window is focused and either the view is fullscreen or
+// key_dest is key_game (hostClientHooks.keyDestIsGame, the same seam
+// host.ts's SV_Physics gate already reads), and releases for the console, a
+// menu, chat entry, or loss of window focus. `_windowed_mouse` stays
+// registered for config-file compatibility (a saved "0" is not an error) but
+// no longer gates capture; its default moves from vid_x.c's "0" to "1" so a
+// freshly written config reads as "on" the way the new behaviour actually is.
+export const _windowed_mouse = new CvarT("_windowed_mouse", "1", true);
 export const m_filter = new CvarT("m_filter", "0", true);
 
 function IN_ActivateMouse(): void {
@@ -651,6 +730,13 @@ function IN_ActivateMouse(): void {
   // two drop whatever the pump had already accumulated into the engine's own
   // accumulator while the mouse was released.
   l.symbols.SDL_SetRelativeMouseMode(1);
+  // in_win.c's IN_ActivateMouse always pairs the grab with IN_HideMouse (its
+  // own ShowCursor(FALSE) call) rather than relying on relative-mode's
+  // implicit cursor hide; mirrored explicitly here for the same reason it's
+  // explicit there -- a released grab must leave the pointer visible again,
+  // and an explicit pair on both ends is what proves that, not an assumption
+  // about SDL_SetRelativeMouseMode's side effects.
+  l.symbols.SDL_ShowCursor(0); // SDL_DISABLE
   mouse_x = 0;
   mouse_y = 0;
   mouse_active = true;
@@ -660,13 +746,19 @@ function IN_DeactivateMouse(): void {
   const l = lib();
   if (!l || !mouse_active) return;
   l.symbols.SDL_SetRelativeMouseMode(0);
+  l.symbols.SDL_ShowCursor(1); // SDL_ENABLE -- in_win.c's IN_ShowMouse pairing
   mouse_active = false;
 }
 
+// The per-frame capture policy -- see _windowed_mouse's header comment above
+// for the C behaviour this deviates from and why. Captured while the window
+// is focused and either fullscreen or the game has key focus (key_dest ==
+// key_game); released for the console, a menu, chat entry, windowed play
+// that isn't focused, or loss of window focus outright.
 function wantMouseCapture(fullscreen: boolean): boolean {
   if (!windowActive) return false;
-  if (fullscreen) return true; // see _windowed_mouse's header comment
-  return !!_windowed_mouse.value;
+  if (fullscreen) return true; // nowhere else for the pointer to usefully go
+  return hostClientHooks.keyDestIsGame?.() ?? true;
 }
 
 // this port's own module-scope fullscreen flag, set by vid.ts on every mode
@@ -716,7 +808,9 @@ calls; this backend delivers mouse buttons directly from SDL's own
 button-down/button-up events instead (SDL_PumpInput below), so there is
 nothing left to poll here. Repurposed as this port's per-frame mouse-capture
 gate instead (vid_x.c has no such gate: X11's grab is driven entirely by the
-_windowed_mouse cvar's edge in GetEvent; SDL's relative-mouse-mode needs an
+_windowed_mouse cvar's edge in GetEvent, with no key_dest or focus awareness
+at all -- see wantMouseCapture's and _windowed_mouse's own header comments
+for the deviation this port takes instead; SDL's relative-mouse-mode needs an
 explicit enable/disable call, which host.c's per-frame `IN_Commands` is the
 only interface entry point left to make it from).
 */
@@ -910,6 +1004,9 @@ export function SDL_PumpInput(): void {
         if (ev === SDL_WINDOWEVENT_FOCUS_GAINED) SDL_AppActivate(true);
         else if (ev === SDL_WINDOWEVENT_FOCUS_LOST) SDL_AppActivate(false);
         else if (ev === SDL_WINDOWEVENT_CLOSE) Sys_Quit();
+        else if (ev === SDL_WINDOWEVENT_SIZE_CHANGED) {
+          SDL_WindowSizeChanged(eventView.getInt32(WINDOWEVENT_DATA1, true), eventView.getInt32(WINDOWEVENT_DATA2, true));
+        }
         break;
       }
       case SDL_QUIT:
@@ -933,6 +1030,45 @@ export function SDL_AppActivate(active: boolean): void {
 
 export function SDL_WindowActive(): boolean {
   return windowActive;
+}
+
+/*
+The window's new size, delivered to whoever owns the engine's idea of the
+mode. vid_x.c ignores ConfigureNotify entirely -- its window is created once
+at a fixed size and can never be resized by the user -- so this is the port's
+own feature, and it is kept on the same shape as sys.ts's key-event pump
+hook: platform/vid.ts registers VID_SizeChanged here, and nothing in this
+file has to import it (which would close a cycle -- vid.ts imports this
+file).
+*/
+let windowSizeChangedHandler: ((width: number, height: number) => void) | null = null;
+
+export function SDL_SetWindowSizeChangedHandler(fn: ((width: number, height: number) => void) | null): void {
+  windowSizeChangedHandler = fn;
+}
+
+/*
+`evWidth`/`evHeight` are SDL_WindowEvent's data1/data2: the new size in WINDOW
+coordinates. Under GL that is not what is rendered into on a scaling
+compositor, so the drawable's pixel size is queried and preferred whenever a
+GL context is up; under the software path the window size IS the resolution
+adopted, deliberately -- the 8-bit framebuffer is rasterized on the CPU and
+SDL_RenderCopy scales it into the output for free, so following a compositor
+scale factor there would only cost fill rate for pixels the blit would have
+produced anyway.
+*/
+export function SDL_WindowSizeChanged(evWidth: number, evHeight: number): void {
+  let width = evWidth;
+  let height = evHeight;
+  if (glContext) {
+    const drawable = SDLGL_GetDrawableSize();
+    if (drawable.width > 0 && drawable.height > 0) {
+      width = drawable.width;
+      height = drawable.height;
+    }
+  }
+  if (width < 1 || height < 1) return;
+  windowSizeChangedHandler?.(width, height);
 }
 
 //=============================================================================
@@ -1112,6 +1248,7 @@ const EVENT_WINDOWID = 8;
 export const SDL_TEST_BUTTON_LEFT = SDL_BUTTON_LEFT;
 export const SDL_TEST_BUTTON_MIDDLE = SDL_BUTTON_MIDDLE;
 export const SDL_TEST_BUTTON_RIGHT = SDL_BUTTON_RIGHT;
+export const SDL_TEST_WINDOWEVENT_SIZE_CHANGED = SDL_WINDOWEVENT_SIZE_CHANGED;
 export const SDL_TEST_WINDOWEVENT_FOCUS_GAINED = SDL_WINDOWEVENT_FOCUS_GAINED;
 export const SDL_TEST_WINDOWEVENT_FOCUS_LOST = SDL_WINDOWEVENT_FOCUS_LOST;
 export const SDL_TEST_WINDOWEVENT_CLOSE = SDL_WINDOWEVENT_CLOSE;
@@ -1165,11 +1302,21 @@ export function SDL_MakeMouseWheelEvent(y: number, x = 0): Uint8Array {
   return bytes;
 }
 
-/* SDL_WindowEvent -- `event` is SDL_WINDOWEVENT_FOCUS_GAINED/LOST/CLOSE. */
-export function SDL_MakeWindowEvent(event: number): Uint8Array {
-  const { bytes } = newEvent(SDL_WINDOWEVENT);
+/* SDL_WindowEvent -- `event` is SDL_WINDOWEVENT_FOCUS_GAINED/LOST/CLOSE, or
+   SDL_WINDOWEVENT_SIZE_CHANGED, whose data1/data2 carry the new width and
+   height. Both round-trip push -> poll on this host. */
+export function SDL_MakeWindowEvent(event: number, data1 = 0, data2 = 0): Uint8Array {
+  const { bytes, view } = newEvent(SDL_WINDOWEVENT);
   bytes[WINDOWEVENT_EVENT] = event;
+  view.setInt32(WINDOWEVENT_DATA1, data1, true);
+  view.setInt32(WINDOWEVENT_DATA2, data2, true);
   return bytes;
+}
+
+/* SDL_WINDOWEVENT_SIZE_CHANGED with a new window size, the event a
+   compositor-side resize delivers. */
+export function SDL_MakeWindowSizeChangedEvent(width: number, height: number): Uint8Array {
+  return SDL_MakeWindowEvent(SDL_WINDOWEVENT_SIZE_CHANGED, width, height);
 }
 
 export function SDL_MakeQuitEvent(): Uint8Array {
@@ -1206,9 +1353,11 @@ export interface SdlInputStateForTests {
   fullscreen: boolean;
   videoSubsystem: boolean;
   libraryLoaded: boolean;
+  cursorVisible: boolean;
 }
 
 export function SDL_InputStateForTests(): SdlInputStateForTests {
+  const l = lib();
   return {
     mouse_avail,
     mouse_active,
@@ -1220,7 +1369,24 @@ export function SDL_InputStateForTests(): SdlInputStateForTests {
     fullscreen: currentlyFullscreen,
     videoSubsystem: (subsystems & SDL_INIT_VIDEO) !== 0,
     libraryLoaded: library !== null,
+    // SDL_ShowCursor(-1) is SDL_QUERY -- reads back the current state without
+    // changing it (see IN_ActivateMouse/IN_DeactivateMouse's SDL_ShowCursor
+    // pairing above).
+    cursorVisible: l ? l.symbols.SDL_ShowCursor(-1) === 1 : true,
   };
+}
+
+/* Ask SDL to resize the live window, which is what an e2e driver uses in
+   place of a compositor drag: the X11/Wayland backend resizes the surface and
+   sends back the same SDL_WINDOWEVENT_SIZE_CHANGED a user's resize would, so
+   the whole path (pump -> SDL_WindowSizeChanged -> VID_SizeChanged) runs for
+   real rather than off a synthesized event. Returns false when there is no
+   window up. */
+export function SDL_SetWindowSizeForTests(width: number, height: number): boolean {
+  const l = lib();
+  if (!l || !window) return false;
+  l.symbols.SDL_SetWindowSize(window, width, height);
+  return true;
 }
 
 /* Drop everything still queued, so one scenario's leftovers cannot leak into

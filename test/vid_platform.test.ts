@@ -19,7 +19,7 @@ inputBackend.current, cmdHost.initialized, the model-loader hooks, the
 platform/vid.ts renderer registry, rState.d_pzbuffer) is saved and restored.
 */
 
-import { describe, test, expect, afterAll } from "bun:test";
+import { describe, test, expect, afterAll, spyOn } from "bun:test";
 import type { ModelLoaderHooks } from "../src/common/model";
 import { getModelLoaderHooks, setModelLoaderHooks } from "../src/common/model";
 import type { Renderer } from "../src/client/render";
@@ -35,7 +35,19 @@ import { SCR_Init, SCR_UpdateScreen } from "../src/client/screen";
 import { scrState } from "../src/client/screen_types";
 import { cmdHost } from "../src/common/cmd";
 import { rState } from "../src/ref_soft/r_shared";
-import { SDL_ResetBackendForTests } from "../src/platform/sdl";
+import {
+  SDL_DrainEventsForTests,
+  SDL_MakeWindowSizeChangedEvent,
+  SDL_PumpInputForTests,
+  SDL_PushTestEvent,
+  SDL_ResetBackendForTests,
+  SDL_TEST_WINDOWEVENT_SIZE_CHANGED,
+  SDL_WindowSizeChanged,
+} from "../src/platform/sdl";
+import * as consoleMod from "../src/client/console";
+import { GL_Init } from "../src/ref_gl/gl_vid";
+import { glState } from "../src/ref_gl/glquake";
+import { QGLRecording, SetQGL, qglHolder } from "../src/ref_gl/qgl";
 import {
   getRegisteredRenderer,
   registerRenderer,
@@ -45,7 +57,9 @@ import {
   VID_Init,
   VID_MODES,
   VID_ResetForTests,
+  VID_SizeChanged,
   VID_Update,
+  vid_mode,
   vid_ref,
 } from "../src/platform/vid";
 
@@ -397,6 +411,170 @@ describe("VID_CheckChanges -- the vid_ref renderer registry", () => {
       cmdHost.initialized = savedCmdInit;
       restoreRenderer("gl", realGl);
       if (vid_ref.string !== "soft") vid_ref.string = original;
+    }
+  });
+});
+
+/*
+The Wayland window-resize defect: the compositor resized the game window to
+1181x502 while the engine kept rendering the 640x480 mode into it, so the
+frame was cropped and the status bar and weapon model fell off the bottom.
+src/platform/sdl.ts's pump ignored SDL_WINDOWEVENT_SIZE_CHANGED entirely
+(only FOCUS_GAINED/FOCUS_LOST/CLOSE were decoded), which is faithful to
+vid_x.c -- that file ignores ConfigureNotify too, because its X11 window
+could never be resized -- but leaves a resizable window mis-sized forever.
+*/
+describe("SDL_WINDOWEVENT_SIZE_CHANGED -- adopting a compositor-side resize", () => {
+  function bootSoft(): void {
+    cmdHost.initialized = false; // Cmd_AddCommand("vid_restart", ...) throws once this is true
+    registerRenderer("soft", () => fakeRenderer);
+    vid_ref.string = "soft";
+    vid_ref.value = 0;
+    VID_Init(new Uint8Array(768));
+    SDL_DrainEventsForTests(); // SDL queues its own SHOWN/EXPOSED/SIZE_CHANGED for a new window
+  }
+
+  test("VID_SizeChanged re-sizes the framebuffer, the con* aliases and the software z-buffer/surface cache, and forces a full redraw", () => {
+    bootSoft();
+    const modeWidth = vid.width;
+    const modeHeight = vid.height;
+    expect(modeWidth).toBeGreaterThan(0);
+    expect(modeWidth === 1181 && modeHeight === 502).toBe(false);
+
+    cacheForResCalls = 0;
+    vid.recalc_refdef = 0;
+    scrState.scr_fullupdate = 7;
+
+    VID_SizeChanged(1181, 502);
+
+    expect(vid.width).toBe(1181);
+    expect(vid.height).toBe(502);
+    expect(vid.rowbytes).toBe(1181);
+    expect(vid.buffer?.length).toBe(1181 * 502);
+    // draw.c writes every console line and status-bar digit through these
+    expect(vid.conbuffer).toBe(vid.buffer);
+    expect(vid.conrowbytes).toBe(1181);
+    expect(vid.conwidth).toBe(1181);
+    expect(vid.conheight).toBe(502);
+    expect(vid.aspect).toBeCloseTo((502 / 1181) * (320 / 240), 6);
+
+    // vid_x.c's ResetFrameBuffer: the z-buffer and the surface cache are
+    // sized off the resolution, so both are rebuilt for the new one
+    expect(rState.d_pzbuffer?.length).toBe(1181 * 502);
+    expect(cacheForResCalls).toBeGreaterThan(0);
+    expect(initCachesArgs?.size).toBe(4096);
+
+    // screen.c's SCR_UpdateScreen: recalc_refdef re-runs SCR_CalcRefdef
+    // (which re-derives r_refdef.vrect and calls Con_CheckResize, so the
+    // console reformats), scr_fullupdate = 0 re-clears and re-draws the whole
+    // screen including the status bar
+    expect(vid.recalc_refdef).toBe(1);
+    expect(scrState.scr_fullupdate).toBe(0);
+
+    // vid_mode stays the mode the USER asked for -- the live size may differ
+    expect(VID_GetModeInfo(Math.trunc(vid_mode.value))).toEqual({ width: modeWidth, height: modeHeight });
+  });
+
+  test("a size that did not actually change, and a degenerate one, are both dropped", () => {
+    bootSoft();
+    const buffer = vid.buffer;
+    vid.recalc_refdef = 0;
+
+    VID_SizeChanged(vid.width, vid.height);
+    expect(vid.buffer).toBe(buffer); // not re-allocated
+    expect(vid.recalc_refdef).toBe(0);
+
+    VID_SizeChanged(0, 502);
+    VID_SizeChanged(1181, -1);
+    expect(vid.buffer).toBe(buffer);
+    expect(vid.recalc_refdef).toBe(0);
+  });
+
+  test("a SIZE_CHANGED event pushed onto SDL's own queue drives the same path through SDL_PumpInput", () => {
+    bootSoft();
+    vid.recalc_refdef = 0;
+
+    expect(SDL_PushTestEvent(SDL_MakeWindowSizeChangedEvent(1181, 502))).toBe(1);
+    SDL_PumpInputForTests();
+
+    expect(vid.width).toBe(1181);
+    expect(vid.height).toBe(502);
+    expect(vid.buffer?.length).toBe(1181 * 502);
+    expect(vid.recalc_refdef).toBe(1);
+  });
+
+  test("the event builder writes SDL_WindowEvent's event/data1/data2 where the pump reads them", () => {
+    const bytes = SDL_MakeWindowSizeChangedEvent(1181, 502);
+    const view = new DataView(bytes.buffer);
+    expect(view.getUint32(0, true)).toBe(0x200); // SDL_WINDOWEVENT
+    expect(bytes[12]).toBe(SDL_TEST_WINDOWEVENT_SIZE_CHANGED);
+    expect(view.getInt32(16, true)).toBe(1181);
+    expect(view.getInt32(20, true)).toBe(502);
+  });
+
+  test("SDL_WindowSizeChanged with no GL context up takes the event's own window size", () => {
+    bootSoft();
+    vid.recalc_refdef = 0;
+    SDL_WindowSizeChanged(800, 600);
+    expect(vid.width).toBe(800);
+    expect(vid.height).toBe(600);
+    expect(vid.recalc_refdef).toBe(1);
+  });
+});
+
+/*
+`vid_restart` (and the video menu's Apply, which goes through the same
+VID_CheckChanges) re-enters GL_Init, which re-printed all four glGetString
+banner lines -- GL_EXTENSIONS being a several-hundred-character string that
+fills three rows of the notify overlay over the frame. GLQuake prints them
+once, from the GL_Init inside VID_Init at startup; the C has no runtime path
+back into GL_Init at all.
+*/
+describe("GL_Init -- the glGetString banner on a re-init", () => {
+  const BANNER = ["GL_VENDOR: %s\n", "GL_RENDERER: %s\n", "GL_VERSION: %s\n", "GL_EXTENSIONS: %s\n"];
+
+  function bannerLines(calls: ReadonlyArray<readonly unknown[]>): string[] {
+    return calls.map((args) => String(args[0])).filter((fmt) => BANNER.includes(fmt));
+  }
+
+  test("prints the four lines at startup and only Con_DPrintf's them once host_initialized", () => {
+    const savedQgl = qglHolder.current;
+    const savedCmdInit = cmdHost.initialized;
+    const savedGl = {
+      vendor: glState.gl_vendor,
+      renderer: glState.gl_renderer,
+      version: glState.gl_version,
+      extensions: glState.gl_extensions,
+      mtexable: glState.gl_mtexable,
+    };
+    SetQGL(new QGLRecording());
+    // bare call-through spy (rule 15): Con_Printf still does its real work,
+    // this only records what it was asked to print
+    const printSpy = spyOn(consoleMod, "Con_Printf");
+    const dprintSpy = spyOn(consoleMod, "Con_DPrintf");
+    try {
+      cmdHost.initialized = false; // host.c's Host_Init, before host_initialized is set
+      printSpy.mockClear();
+      dprintSpy.mockClear();
+      GL_Init();
+      expect(bannerLines(printSpy.mock.calls)).toEqual(BANNER);
+
+      cmdHost.initialized = true; // the `vid_restart` / video-menu Apply window
+      printSpy.mockClear();
+      dprintSpy.mockClear();
+      GL_Init();
+      expect(bannerLines(printSpy.mock.calls)).toEqual([]);
+      expect(bannerLines(dprintSpy.mock.calls)).toEqual(BANNER);
+    } finally {
+      printSpy.mockRestore();
+      dprintSpy.mockRestore();
+      SetQGL(savedQgl);
+      cmdHost.initialized = savedCmdInit;
+      glState.gl_vendor = savedGl.vendor;
+      glState.gl_renderer = savedGl.renderer;
+      glState.gl_version = savedGl.version;
+      glState.gl_extensions = savedGl.extensions;
+      glState.gl_mtexable = savedGl.mtexable;
     }
   });
 });

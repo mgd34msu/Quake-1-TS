@@ -19,6 +19,10 @@ QuakeWorld client and server.
 - Both renderers selectable at runtime through the one cvar this port
   adds: `vid_ref soft` (default) / `vid_ref gl`, seeded at startup by the
   `-vid_ref <name>` command-line parm
+- The mouse is captured (and the pointer hidden) while playing with the
+  window focused; opening the console or a menu, or losing window focus,
+  releases it -- a documented deviation from the original's
+  `_windowed_mouse`-gated capture, see `PORTING.md`
 
 ## Running
 

@@ -241,3 +241,13 @@ those files from this README's owning agent. See `.orch/e2e/G.md` for its own
 keyboard/mouse/modal/window/QuakeWorld scenarios (`g_s1_keyboard.ts` through
 `g_s5_qw.ts`), its `asDest()`/`asBool()` TypeScript-narrowing launder helpers in
 `g_lib.ts`, and its `qwsv -port 27842` scenario.
+
+**Mouse capture policy (affects `b_s3d_look.ts` and `g_s2_mouse.ts`/`g_s2b_nomouse.ts`/
+`g_s4_window.ts`/`g_s5_qw.ts`):** `src/platform/sdl.ts`'s `wantMouseCapture` now grabs the
+mouse whenever the window is focused and either fullscreen or `key_dest === key_game`, and
+releases it for the console, a menu, chat entry, or lost focus. `_windowed_mouse` stays
+registered (default now `"1"`) purely for config-file round-tripping and no longer gates
+capture at all — the harness files above assert on `key_dest`/focus/fullscreen instead of
+setting the cvar to predict the outcome. `-nomouse` is unaffected: it still disables the
+mouse outright by leaving `mouse_avail` false, which short-circuits `IN_Commands` before
+`wantMouseCapture` is ever reached.

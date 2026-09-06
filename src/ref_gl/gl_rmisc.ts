@@ -115,8 +115,9 @@ import {
   GL_UNSIGNED_BYTE,
   qgl,
 } from "./qgl";
-import { GL_Bind, GL_Upload8_EXT, gl_alpha_format, gl_max_size, gl_solid_format } from "./gl_draw";
-import { GL_BuildLightmaps, GL_DisableMultitexture } from "./gl_rsurf";
+import { GL_Bind, GL_ClearTextureCaches, GL_Upload8_EXT, gl_alpha_format, gl_max_size, gl_solid_format } from "./gl_draw";
+import { GL_BuildLightmaps, GL_ClearLightmapState, GL_DisableMultitexture } from "./gl_rsurf";
+import { glWarpState } from "./gl_warp";
 
 // gl_rmisc.c's R_InitTextures, defined in gl_model.ts with the notexture it
 // builds (see the header note); re-exported so this module still carries every
@@ -669,3 +670,88 @@ export function R_TimeRefresh_f(): void {
 }
 
 export function D_FlushCaches(): void {}
+
+/*
+===============
+GL_ClearTextureState
+
+This port's own addition (there is no C counterpart: GLQUAKE is a
+compile-time #define, so no build of it ever tears its own refresh down).
+Called from ref_gl.ts's Renderer.Shutdown, i.e. from vid.ts's
+teardownActiveRenderer, on `vid_restart`, on a vid_ref switch, and on the
+video menu's Apply.
+
+THE CONTEXT REALLY IS DESTROYED. teardownActiveRenderer calls
+glimpHolder.current.Shutdown() -> glimp.ts's GLimp_Shutdown -> sdl.ts's
+SDLGL_Shutdown, which is SDL_GL_DeleteContext followed by SDLVID_Shutdown's
+SDL_DestroyWindow; GLimp_SetMode then makes a new window and a new context.
+Every texture object in the old context dies with it, so every texture id
+this renderer minted is dangling afterwards and everything has to be
+uploaded again.
+
+The ids are not all in gl_draw.c's caches. GLQuake mints several ONCE and
+keeps them in file-scope storage guarded by an `if (!x)`, precisely so a
+level change does not re-mint them:
+
+  gl_rsurf.c  GL_BuildLightmaps   if (!lightmap_textures) { lightmap_textures
+                                  = texture_extension_number;
+                                  texture_extension_number += MAX_LIGHTMAPS; }
+  gl_warp.c   R_InitSky           if (!solidskytexture) solidskytexture =
+                                  texture_extension_number++;   (and alphasky)
+
+Those two guards are the whole defect this function exists to fix. With the
+caches cleared and the counter rewound but lightmap_textures and
+solidskytexture/alphaskytexture retained, the freshly uploaded world textures
+were handed the very numbers the retained statics still pointed at, so
+binding a wall sampled the lightmap atlas and binding the sky sampled
+whatever had landed on the sky's old number.
+
+The contract, which holds whether or not the context is recreated:
+
+ 1. Zero every retained texture id, so each `if (!x)` guard allocates a new
+    one and the R_InitSky / GL_BuildLightmaps / Draw_Init / R_Init /
+    R_InitParticleTexture / R_TranslatePlayerSkin upload that follows the
+    guard writes into a name this context has actually been given. The ids
+    R_Init assigns unconditionally (particletexture, netgraphtexture,
+    playertextures) are zeroed too, so nothing can bind a dead id in the
+    window between Shutdown and the next R_Init.
+ 2. Leave glState.texture_extension_number alone. Names stay monotonic
+    across the restart, exactly as a single GLQuake process's do across
+    level loads. Rewinding it to 1 is what makes a missed static fatal: a
+    rewound counter re-issues numbers that something else may still be
+    holding, while a monotonic one can never hand the same name out twice.
+    Together with (1) that is collision-free in both directions -- with the
+    context recreated nothing survives to collide with, and with the context
+    kept (a future GLimp_SetMode that only resizes) a name issued after the
+    restart is still one no live object has.
+ 3. Reset GL_Bind's `currenttexture` and GL_SelectTexture's cnttextures[]
+    (in GL_ClearTextureCaches) so the first bind after the restart really
+    issues its glBindTexture instead of short-circuiting on a cached id.
+
+Draw_Init, SCR_Init, R_Init and Sbar_Init are re-run by vid.ts's
+VID_CheckChanges_, and VID_RestartLevel's Cache_Flush/Mod_ClearAll/
+Mod_ForName + R_NewMap re-upload the world, sky, lightmaps and model skins,
+so every id zeroed here is re-minted before the next frame.
+===============
+*/
+export function GL_ClearTextureState(): void {
+  // gl_rsurf.c's GL_BuildLightmaps guard
+  glState.lightmap_textures = 0;
+  GL_ClearLightmapState();
+
+  // gl_warp.c's R_InitSky guards
+  glWarpState.solidskytexture = 0;
+  glWarpState.alphaskytexture = 0;
+
+  // gl_rmisc.c's R_InitParticleTexture / R_Init (netgraphtexture is QW's)
+  glState.particletexture = 0;
+  glState.playertextures = 0;
+  ngraphState.texture = 0;
+
+  // gl_rmisc.c's R_NewMap re-derives both from the reloaded worldmodel.
+  glState.skytexturenum = 0;
+  glState.mirrortexturenum = 0;
+
+  // gl_draw.c's own ids and caches, plus currenttexture/cnttextures.
+  GL_ClearTextureCaches();
+}

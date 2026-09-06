@@ -181,7 +181,7 @@ import { GL_BeginRendering, GL_EndRendering, glVidPaletteState, GL_VidInit } fro
 // siblings, each imported by its C name from the module its .c file maps to
 import { gl_subdivide_size, glModelHooks, R_InitTextures } from "./gl_model";
 import { D_DrawParticle, D_EndParticles, D_StartParticles, R_RenderView, V_CalcBlend, gl_ztrick, v_blend } from "./gl_rmain";
-import { D_FlushCaches, R_Init as R_Init_rmisc, R_NewMap, R_TranslatePlayerSkin } from "./gl_rmisc";
+import { D_FlushCaches, GL_ClearTextureState, R_Init as R_Init_rmisc, R_NewMap, R_TranslatePlayerSkin } from "./gl_rmisc";
 import { R_AddEfrags, R_RemoveEfrags } from "./gl_refrag";
 import { R_PushDlights } from "./gl_rlight";
 import { R_InitSky } from "./gl_warp";
@@ -206,7 +206,6 @@ import {
   Draw_TransPic,
   Draw_TransPicTranslate,
   GL_Set2D,
-  GL_ClearTextureCaches,
 } from "./gl_draw";
 import { R_NetGraph } from "./gl_ngraph";
 
@@ -612,10 +611,13 @@ export const glRenderer: Renderer = {
 
     d_8to24table[255] = glVidPaletteState.preMaskAlpha255;
 
-    // gl_draw.ts's own note: the texture names gltextures[]/menu_cachepics[]
-    // hold belong to the context QGL_Shutdown just dropped, so a later
-    // `vid_ref gl; vid_restart` must not find them and reuse them.
-    GL_ClearTextureCaches();
+    // gl_rmisc.ts's GL_ClearTextureState carries the whole contract: every
+    // texture id this renderer minted belongs to the context vid.ts is about
+    // to have SDL_GL_DeleteContext destroy, including the ones GLQuake keeps
+    // in `if (!x)`-guarded statics across a level change (lightmap_textures,
+    // solidskytexture/alphaskytexture), which are exactly the ones a
+    // caches-only reset left pointing at other textures' numbers.
+    GL_ClearTextureState();
   },
 };
 

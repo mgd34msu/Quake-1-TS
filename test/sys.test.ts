@@ -159,3 +159,51 @@ describe("Sys_Error", () => {
     expect(caught instanceof SysError && caught.message).toBe("bad thing: oops (42)");
   });
 });
+
+/*
+Sys_ConsoleInput's stdin reader starts lazily, on the first call with
+sysState.isDedicated set -- so the reader is armed long after the process
+started, and .orch/e2e/E.md's "Limitations" claimed that anything piped in
+before Sys_Init is therefore lost. It is not: sys_linux.c's own `read(0,
+text, sizeof(text))` sees whatever the pipe has buffered whenever it first
+runs, and so does the lazily-started reader here -- nothing in the port
+drains fd 0 before it. This is that claim's regression test: a child writes
+NOTHING until it has waited past the point a real boot would have printed its
+banner, the parent has already written a full line, and the line still comes
+back out of the first Sys_ConsoleInput.
+
+A child process, not an in-process test: Bun.stdin.stream() can be taken only
+once per process, and taking it in a suite would swallow the runner's own
+stdin.
+*/
+describe("Sys_ConsoleInput -- a line piped in before the reader starts", () => {
+  test("is still delivered by the first call, not dropped", async () => {
+    const sysPath = new URL("../src/platform/sys.ts", import.meta.url).pathname;
+    const child = `
+      const { Sys_ConsoleInput, sysState } = await import(${JSON.stringify(sysPath)});
+      sysState.isDedicated = true;
+      // stand in for everything a real boot does before Host_Frame's first
+      // Sys_ConsoleInput call: the writer's line is sitting in the pipe the
+      // whole time, and nothing here has read fd 0 yet.
+      await Bun.sleep(400);
+      for (let i = 0; i < 60; i++) {
+        const line = Sys_ConsoleInput();
+        if (line !== null) { console.log("GOT:" + line); process.exit(0); }
+        await Bun.sleep(25);
+      }
+      console.log("GOT:<nothing>");
+      process.exit(1);
+    `;
+
+    const proc = Bun.spawn(["bun", "-e", child], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    // written before the child has produced a single byte of output
+    proc.stdin.write("status\n");
+    proc.stdin.flush();
+
+    const out = await new Response(proc.stdout).text();
+    const err = await new Response(proc.stderr).text();
+    await proc.exited;
+
+    expect(`${out}${err}`).toContain("GOT:status");
+  }, 20000);
+});
