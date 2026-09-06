@@ -100,6 +100,7 @@ Deviations from PORTING.md / the C source:
 */
 
 import { Cbuf_AddText, Cbuf_Execute, Cbuf_Init, Cbuf_InsertText, Cmd_AddCommand, Cmd_Argc, Cmd_Argv, Cmd_ForwardToServer, Cmd_Init, cl_warncmd, qwCmdHooks } from "../cmd";
+import { cmdHost } from "../../common/cmd";
 import {
   COM_Init,
   COM_InitArgv,
@@ -1467,6 +1468,19 @@ export function Host_Init(parms: QuakeParmsT): void {
   clMainState.host_hunklevel = Hunk_LowMark();
 
   clMainState.host_initialized = true;
+  // ...and the same single C global's OTHER reader. QW/client/cmd.c:516's
+  // `if (host_initialized) Sys_Error ("Cmd_AddCommand after host_initialized")`
+  // reads the very `host_initialized` this line sets; src/common/cmd.ts holds
+  // that reader's half of the global as `cmdHost.initialized` (see its own
+  // header's ruling), so both have to be set here or qwcl runs with the guard
+  // permanently open -- which is also what left Cmd_AddCommand re-pointing a
+  // renderer switch's commands disabled (cmd.ts's `cmdHost.rendererSwitch`
+  // branch is reached only once `initialized` is true), so after a
+  // vid_restart every renderer command (timerefresh, gl_texturemode,
+  // screenshot, sizeup/sizedown, +showscores) still pointed at the destroyed
+  // renderer's function and every cvar re-registration printed "allready
+  // defined". host.c:918 sets the WinQuake binary's copy the same way.
+  cmdHost.initialized = true;
 
   Con_Printf("\nClient Version %4.2f (Build %04d)\n\n", VERSION, build_number());
 

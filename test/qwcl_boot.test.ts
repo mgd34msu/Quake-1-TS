@@ -45,6 +45,7 @@ import { re } from "./src/client/render";
 import { scrState } from "./src/client/screen_types";
 import { con_main, conState } from "./src/qw/client/console";
 import { clMainState } from "./src/qw/client/cl_main";
+import { cmdHost } from "./src/common/cmd";
 import { host } from "./src/common/host";
 import { Info_ValueForKey } from "./src/qw/common";
 
@@ -75,6 +76,7 @@ try {
 
   const snapshot = {
     hostInitialized: clMainState.host_initialized,
+    cmdHostInitialized: cmdHost.initialized,
     conInitialized: conState.con_initialized,
     clsStateName: CactiveT[cls.state],
     vidRef: Cvar_VariableString("vid_ref"),
@@ -149,8 +151,68 @@ try {
 process.exit(0);
 `;
 
+/*
+The same boot, then a `vid_restart`. QW's Host_Init sets host_initialized,
+which is what arms both Cmd_AddCommand's after-host-init guard AND (through
+VID_CheckChanges's `cmdHost.rendererSwitch = cmdHost.initialized`) the
+re-registration window that lets the incoming renderer replace the outgoing
+one's commands and re-link its own cvar_t objects quietly. With qwcl setting
+only its own clMainState.host_initialized, that window never opened and a
+vid_restart printed a screenful of "Can't register variable X, allready
+defined" / "Cmd_AddCommand: X already defined" while every renderer command
+went on pointing at the torn-down renderer.
+*/
+const VID_RESTART_SCRIPT = `
+import { buildQwclFixture, destroyQwclFixture } from "./test/support/qwcl_fixture";
+import { Sys_Main_Init, runFrames } from "./src/qw/main_cl";
+import { NET_Ready, NET_Shutdown } from "./src/qw/net_udp";
+import { Cbuf_AddText, Cmd_Exists, cmdHost } from "./src/common/cmd";
+import { con_main } from "./src/qw/client/console";
+import { re } from "./src/client/render";
+import { vid } from "./src/client/vid";
+
+function conText() {
+  let t = "";
+  for (let i = 0; i < con_main.text.length; i++) {
+    const c = con_main.text[i] & 0x7f;
+    t += c === 0 ? "\\n" : String.fromCharCode(c);
+  }
+  return t;
+}
+
+const fixture = buildQwclFixture("qwcl-vidrestart-child-");
+try {
+  Sys_Main_Init(["qwcl", "-basedir", fixture.baseDir]);
+  await NET_Ready();
+  runFrames(6, 0.1);
+
+  const before = conText();
+
+  Cbuf_AddText("vid_restart\\n");
+  runFrames(8, 0.1);
+
+  // only what the restart itself printed
+  const printed = conText().slice(before.length);
+
+  NET_Shutdown();
+  process.stdout.write("${JSON_MARKER}" + JSON.stringify({
+    cmdHostInitialized: cmdHost.initialized,
+    restartNoise: printed.includes("allready defined") || printed.includes("already defined"),
+    noisySample: (printed.match(/[^\\n]*all?ready defined[^\\n]*/) || [""])[0],
+    timerefreshExists: Cmd_Exists("timerefresh"),
+    rendererLoaded: re.current !== null,
+    vidWidth: vid.width,
+    vidHeight: vid.height,
+  }) + "\\n");
+} finally {
+  destroyQwclFixture(fixture);
+}
+process.exit(0);
+`;
+
 interface BootSnapshot {
   hostInitialized: boolean;
+  cmdHostInitialized: boolean;
   conInitialized: boolean;
   clsStateName: string;
   vidRef: string;
@@ -210,6 +272,7 @@ function parseSnapshot(value: unknown): BootSnapshot {
   const r = record(value);
   return {
     hostInitialized: bool(r, "hostInitialized"),
+    cmdHostInitialized: bool(r, "cmdHostInitialized"),
     conInitialized: bool(r, "conInitialized"),
     clsStateName: str(r, "clsStateName"),
     vidRef: str(r, "vidRef"),
@@ -270,12 +333,14 @@ function runChild(script: string): ChildRun {
 
 let boot: ChildRun | null = null;
 let nostdout: ChildRun | null = null;
+let vidRestart: ChildRun | null = null;
 let snapshot: BootSnapshot | null = null;
 
 beforeAll(() => {
   boot = runChild(CHILD_SCRIPT);
   if (boot.json !== null) snapshot = parseSnapshot(boot.json);
   nostdout = runChild(NOSTDOUT_SCRIPT);
+  vidRestart = runChild(VID_RESTART_SCRIPT);
 });
 
 function requireBoot(): ChildRun {
@@ -323,6 +388,18 @@ describe("Sys_Main_Init + runFrames -- a real qwcl boot", () => {
   test("Host_Init finishes with the client disconnected and initialized", () => {
     const s = requireSnapshot();
     expect(s.hostInitialized).toBe(true);
+    /*
+    QW/client/cl_main.c's Host_Init ends with `host_initialized = true`, and
+    QW/client/cmd.c:516 reads THAT SAME global in Cmd_AddCommand's
+    "after host_initialized" guard. This port splits the one C global across
+    two holders -- clMainState.host_initialized and src/common/cmd.ts's
+    cmdHost.initialized -- and qwcl used to set only the first, so the guard
+    never armed: Cmd_AddCommand's re-point branch (which cmd.ts reaches only
+    once `initialized` is true) stayed off, and after a vid_restart every
+    renderer command still pointed at the torn-down renderer's function while
+    every re-registered cvar printed "allready defined".
+    */
+    expect(s.cmdHostInitialized).toBe(true);
     expect(s.conInitialized).toBe(true);
     expect(s.clsStateName).toBe("ca_disconnected"); // by name -- CactiveT's QW values follow WinQuake's
   });
@@ -413,5 +490,29 @@ describe("Sys_Main_Init + runFrames -- a real qwcl boot", () => {
     const r = record(nostdout.json);
     expect(num(r, "nostdout")).toBe(1);
     expect(bool(r, "hostInitialized")).toBe(true);
+  });
+});
+
+describe("vid_restart under qwcl", () => {
+  test("the restart re-registers quietly and keeps the renderer's commands", () => {
+    if (vidRestart === null) throw new Error("the vid_restart boot never ran");
+    expect(vidRestart.exitCode).toBe(0);
+    expect(vidRestart.stderr).toBe("");
+
+    const r = record(vidRestart.json);
+    // the guard QW/client/cl_main.c's `host_initialized = true` arms, which is
+    // also what opens VID_CheckChanges's re-registration window
+    expect(bool(r, "cmdHostInitialized")).toBe(true);
+    // no "Can't register variable X, allready defined" / "Cmd_AddCommand: X
+    // already defined" from the re-run of Draw_Init/SCR_Init/R_Init/Sbar_Init
+    expect(str(r, "noisySample")).toBe("");
+    expect(bool(r, "restartNoise")).toBe(false);
+    // and the renderer's own commands are still reachable afterwards -- with
+    // the window open, Cmd_AddCommand re-points them at the incoming
+    // renderer's functions instead of refusing the name
+    expect(bool(r, "timerefreshExists")).toBe(true);
+    expect(bool(r, "rendererLoaded")).toBe(true);
+    expect(num(r, "vidWidth")).toBeGreaterThan(0);
+    expect(num(r, "vidHeight")).toBeGreaterThan(0);
   });
 });

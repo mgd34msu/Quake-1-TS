@@ -29,6 +29,7 @@ import { d_8to24table, vid, vidBackend, vidMenuHooks } from "../src/client/vid";
 import { inputBackend } from "../src/client/input";
 import { conState } from "../src/client/console";
 import { COM_InitArgv, com_argc, com_argv } from "../src/common/common";
+import { Cvar_Set } from "../src/common/cvar";
 import { cls, CactiveT } from "../src/client/client";
 import { hostClientHooks } from "../src/common/host";
 import { SCR_Init, SCR_UpdateScreen } from "../src/client/screen";
@@ -318,6 +319,99 @@ describe("VID_Init -- the -vid_ref command-line parm", () => {
     expect(vid_ref.string).toBe("soft");
     expect(re.current).toBe(fakeRenderer);
     expect(re.current?.isGL).toBe(false);
+  });
+});
+
+/*
+Q026 follow-up: `vid_ref` is archived (`new CvarT("vid_ref", "soft", true)`),
+so config.cfg's own `vid_ref "gl"` line re-executes on every boot and can
+overwrite whatever `-vid_ref soft` picked -- the live renderer does not
+change just because the cvar's string did, so without this the menu and a
+later `vid_restart` would disagree with what is actually running (and
+`vid_restart` would tear the live renderer down to match the wrong name).
+resolveMode() already re-applies `-width`/`-height`/`-window` every time the
+mode is resolved, not just at boot; `-vid_ref` gets the same treatment.
+*/
+describe("VID_CheckChanges -- `-vid_ref` stays sticky against an archived cvar", () => {
+  const savedArgv = com_argv.slice();
+  const savedArgc = com_argc;
+  const palette = new Uint8Array(768);
+
+  function restoreArgv(): void {
+    COM_InitArgv(["quake", ...savedArgv.slice(1, savedArgc)]);
+  }
+
+  afterAll(() => {
+    restoreArgv();
+    vid_ref.string = "soft";
+    vid_ref.value = 0;
+  });
+
+  // The dummy SDL video driver has no real GL, so a `vid_ref` of "gl" always
+  // ends up falling back to "soft" (see the "gl selection ... falls back to
+  // soft" test below) regardless of how it got set -- final `re.current`
+  // alone cannot tell these two tests apart. What DOES differ is whether the
+  // gl attempt is ever made at all: applyVidRefParm winning the cvar back to
+  // "soft" BEFORE VID_CheckChanges_ reads it means the gl branch (and its
+  // "mode set failed, falling back to soft" print) is never entered, whereas
+  // a bare cvar change with no parm present lets it actually try gl first.
+  // Con_Printf is a bare call-through spy (rule 15): it still prints, this
+  // only records whether that one message went out.
+  const FALLBACK_MSG = "vid_ref gl: mode set failed, falling back to soft\n";
+
+  test("with -vid_ref soft in com_argv, a config.cfg-style Cvar_Set(\"vid_ref\", \"gl\") is overridden back to soft on the next VID_CheckChanges, and the gl branch is never entered", () => {
+    registerRenderer("soft", () => fakeRenderer);
+    registerRenderer("gl", () => fakeGlRenderer);
+    cmdHost.initialized = false;
+
+    COM_InitArgv(["quake", "-vid_ref", "soft"]);
+    try {
+      VID_Init(palette);
+      expect(vid_ref.string).toBe("soft");
+      expect(re.current).toBe(fakeRenderer);
+
+      // config.cfg's archived `vid_ref "gl"` line re-executing after boot
+      // (or a user hand-editing config.cfg) -- exactly what VID_Init's own
+      // -vid_ref read cannot see, since it only runs once, before quake.rc.
+      Cvar_Set("vid_ref", "gl");
+      expect(vid_ref.string).toBe("gl"); // sanity: the archive really did overwrite it
+
+      const printSpy = spyOn(consoleMod, "Con_Printf");
+      printSpy.mockClear();
+      try {
+        VID_CheckChanges();
+        expect(printSpy.mock.calls.some((args) => args[0] === FALLBACK_MSG)).toBe(false);
+      } finally {
+        printSpy.mockRestore();
+      }
+
+      expect(vid_ref.string).toBe("soft"); // the parm won the cvar back
+      expect(re.current).toBe(fakeRenderer); // still the soft renderer; gl was never attempted
+      expect(re.current?.isGL).toBe(false);
+    } finally {
+      restoreArgv();
+    }
+  });
+
+  test("without the parm, the cvar drives the choice (existing behaviour): setting vid_ref to \"gl\" really is attempted before the dummy driver's own fallback takes over", () => {
+    registerRenderer("soft", () => fakeRenderer);
+    registerRenderer("gl", () => fakeGlRenderer);
+    vid_ref.string = "gl";
+
+    const printSpy = spyOn(consoleMod, "Con_Printf");
+    printSpy.mockClear();
+    try {
+      VID_CheckChanges();
+      expect(printSpy.mock.calls.some((args) => args[0] === FALLBACK_MSG)).toBe(true);
+    } finally {
+      printSpy.mockRestore();
+    }
+
+    // the dummy driver has no gl, so this still ends on soft -- the point of
+    // this test is that it got there via an actual attempt, not a pre-empt
+    expect(re.current).toBe(fakeRenderer);
+    expect(re.current?.isGL).toBe(false);
+    expect(vid_ref.string).toBe("soft");
   });
 });
 

@@ -52,11 +52,50 @@ import { getRenderer } from "../client/render";
 import type { QpicT } from "../common/wad";
 import { Sys_Error } from "./sys";
 import { host } from "../common/host";
+import { qw } from "../common/quakedef";
 import { Cvar_Set, Cvar_SetValue } from "../common/cvar";
 import { S_LocalSound } from "../client/snd_dma";
-import { M_DrawCharacter, M_DrawCheckbox, M_DrawTransPic, M_Menu_Options_f, M_Print } from "../client/menu";
 import { K_DOWNARROW, K_ENTER, K_ESCAPE, K_LEFTARROW, K_RIGHTARROW, K_UPARROW } from "../client/keys";
 import { VID_CheckChanges, VID_MODES, vid_fullscreen, vid_mode, vid_ref } from "./vid";
+import type * as NqMenuModule from "../client/menu";
+import type * as QwMenuModule from "../qw/client/menu";
+
+/*
+menu.c is the one file this port has TWO of -- WinQuake's src/client/menu.ts
+and QuakeWorld's src/qw/client/menu.ts -- each with its own `m_state`, and
+each dispatching `m_video` to the `vidMenuHooks` this single file installs.
+So every name this file reaches into menu.c for has to come from whichever of
+the two the running binary's M_Keydown just dispatched from, not from a fixed
+import: with WinQuake's `M_Menu_Options_f` hard-imported, ESC in qwcl's video
+menu set the WinQuake `m_state` to m_options and left QW's still reading
+m_video, so the video menu never closed and every subsequent key went on
+adjusting video settings (which is how a 640x480 windowed mode walked itself
+up to 1920x1080 fullscreen while the user was trying to back out).
+
+Same lazy-`require` idiom src/platform/vid.ts already uses for QW's
+`host_colormap`: the read happens inside a function body, so neither menu
+module's evaluation order matters and no import cycle is created.
+`vidMenuHooks` itself is set from vid.ts's VID_Init in both binaries, so this
+file is reached identically either way -- only the module it calls BACK into
+differs.
+*/
+interface MenuModule {
+  M_Menu_Options_f(): void;
+  M_Print(cx: number, cy: number, str: string): void;
+  M_DrawCharacter(cx: number, line: number, num: number): void;
+  M_DrawCheckbox(x: number, y: number, on: boolean): void;
+  M_DrawTransPic(x: number, y: number, pic: QpicT): void;
+}
+
+function nqMenuMod(): typeof NqMenuModule {
+  return require("../client/menu");
+}
+function qwMenuMod(): typeof QwMenuModule {
+  return require("../qw/client/menu");
+}
+function menu(): MenuModule {
+  return qw.active ? qwMenuMod() : nqMenuMod();
+}
 
 function cachePic(path: string): QpicT {
   const p = getRenderer().Draw_CachePic(path);
@@ -76,21 +115,22 @@ const ROWS = [32, 40, 48, 64];
 let cursor = 0;
 
 export function VID_MenuDraw(): void {
-  M_DrawTransPic(16, 4, cachePic("gfx/qplaque.lmp"));
+  const m = menu();
+  m.M_DrawTransPic(16, 4, cachePic("gfx/qplaque.lmp"));
 
-  M_Print(16, ROWS[ROW_MODE], "           Video mode");
+  m.M_Print(16, ROWS[ROW_MODE], "           Video mode");
   const mode = VID_MODES[Math.trunc(vid_mode.value)];
-  M_Print(220, ROWS[ROW_MODE], mode ? mode.description : "?");
+  m.M_Print(220, ROWS[ROW_MODE], mode ? mode.description : "?");
 
-  M_Print(16, ROWS[ROW_FULLSCREEN], "           Fullscreen");
-  M_DrawCheckbox(220, ROWS[ROW_FULLSCREEN], vid_fullscreen.value !== 0);
+  m.M_Print(16, ROWS[ROW_FULLSCREEN], "           Fullscreen");
+  m.M_DrawCheckbox(220, ROWS[ROW_FULLSCREEN], vid_fullscreen.value !== 0);
 
-  M_Print(16, ROWS[ROW_RENDERER], "             Renderer");
-  M_Print(220, ROWS[ROW_RENDERER], vid_ref.string);
+  m.M_Print(16, ROWS[ROW_RENDERER], "             Renderer");
+  m.M_Print(220, ROWS[ROW_RENDERER], vid_ref.string);
 
-  M_Print(16, ROWS[ROW_APPLY], "                Apply");
+  m.M_Print(16, ROWS[ROW_APPLY], "                Apply");
 
-  M_DrawCharacter(200, ROWS[cursor], 12 + (Math.trunc(host.realtime * 4) & 1));
+  m.M_DrawCharacter(200, ROWS[cursor], 12 + (Math.trunc(host.realtime * 4) & 1));
 }
 
 function adjustCursorValue(dir: number): void {
@@ -119,7 +159,7 @@ function adjustCursorValue(dir: number): void {
 export function VID_MenuKey(key: number): void {
   switch (key) {
     case K_ESCAPE:
-      M_Menu_Options_f();
+      menu().M_Menu_Options_f();
       return;
 
     case K_UPARROW:

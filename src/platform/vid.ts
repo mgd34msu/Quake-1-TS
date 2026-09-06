@@ -126,9 +126,17 @@ import { qw } from "../common/quakedef";
 import { S_Init } from "../client/snd_dma";
 import { hostClientHooks, host_colormap } from "../common/host";
 import type * as QwClMainModule from "../qw/client/cl_main";
+import type * as QwScreenModule from "../qw/client/screen";
+import type * as QwSbarModule from "../qw/client/sbar";
 
 function qwClMainMod(): typeof QwClMainModule {
   return require("../qw/client/cl_main");
+}
+function qwScreenMod(): typeof QwScreenModule {
+  return require("../qw/client/screen");
+}
+function qwSbarMod(): typeof QwSbarModule {
+  return require("../qw/client/sbar");
 }
 import { COM_CheckParm, Q_atoi, com_argc, com_argv } from "../common/common";
 import { CvarT, Cvar_RegisterVariable, Cvar_Set } from "../common/cvar";
@@ -304,6 +312,36 @@ function resolveMode(): { width: number; height: number; fullscreen: boolean } {
 }
 
 //=============================================================================
+// `-vid_ref <name>` stickiness. `+vid_ref gl` on the command line cannot pick
+// the renderer: the "+" arguments only run once something executes
+// `stuffcmds`, which quake.rc does long after Host_Init has called VID_Init
+// and a renderer has already been created. `-vid_ref <name>` is the
+// pre-init parm form WinQuake uses for every option VID_Init/Host_Init must
+// see before the console exists (`-dedicated`, `-mem`, and vid_x.c's own
+// `-width`/`-height`/`-winsize` resolveMode() reads above); vid_ref is this
+// port's own added cvar, so the parm that seeds it is the port's own
+// convention too.
+//
+// Reading it once at boot is not enough, though: `vid_ref` is archived
+// (`new CvarT("vid_ref", "soft", true)` above), so config.cfg's own
+// `vid_ref "soft"` line re-executes on every boot and overwrites whatever
+// `-vid_ref gl` just selected -- the live renderer stays GL (VID_Init has
+// already created it by the time config.cfg runs), but the cvar now says
+// "soft", so the video menu shows the wrong renderer and a `vid_restart` (or
+// menu Apply) tears GL down and switches to soft out from under the parm.
+// resolveMode() already treats `-width`/`-height`/`-window` as winning over
+// whatever the mode/fullscreen cvars say every single time the mode is
+// resolved, not just at boot; `-vid_ref` gets the same treatment here, called
+// from both VID_Init and every VID_CheckChanges so the parm always wins back.
+function applyVidRefParm(): void {
+  const refParm = COM_CheckParm("-vid_ref");
+  if (refParm) {
+    if (refParm >= com_argc - 1) Sys_Error("VID: -vid_ref <name>\n");
+    Cvar_Set("vid_ref", com_argv[refParm + 1]);
+  }
+}
+
+//=============================================================================
 // VID_Update -- the software framebuffer's own presentation path (the
 // GL renderer, when it lands, presents through glimp.ts's EndFrame instead;
 // see render.ts's header table on why VID_Update is a software-only call
@@ -360,6 +398,14 @@ Host_Init calls in sequence) -- if VID_Init's own call into this function
 also triggered R_Init, the very first boot would run it twice.
 */
 export function VID_CheckChanges(runRInit: boolean = true): void {
+  // see applyVidRefParm's own comment: re-applied on every call (vid_restart,
+  // the video menu's Apply, and VID_Init's own call below) so a session
+  // started with `-vid_ref <name>` cannot be silently overridden by
+  // config.cfg's archived `vid_ref` cvar re-executing under it. Not called
+  // from VID_CheckChanges_'s own gl-fallback recursion below: that recursion
+  // is what sets the cvar to "soft" after a `-vid_ref gl` attempt fails, and
+  // re-applying the parm there would immediately undo the fallback.
+  applyVidRefParm();
   // Both screen.c's (WinQuake screen.c:SCR_UpdateScreen, QW screen.c/
   // gl_screen.c likewise) return early while `scr_disabled_for_loading` is
   // set, which is how the C keeps a Con_Printf issued mid-mode-change from
@@ -569,9 +615,31 @@ function VID_CheckChanges_(runRInit: boolean, restartLevel: boolean): void {
     // Sbar_Init's Draw_PicFromWad calls need gl_draw.c's scrap atlas.
     hostClientHooks.rInitTextures?.(); // R_InitTextures
     hostClientHooks.drawInit?.(); // Draw_Init
-    hostClientHooks.scrInit?.(); // SCR_Init
+    // screen.c and sbar.c are two of the files this port has BOTH trees'
+    // copies of, and only WinQuake's install themselves into
+    // `hostClientHooks.scrInit`/`sbarInit` (src/client/screen.ts's and
+    // src/client/sbar.ts's module-load side effects). Both trees load into
+    // one module registry here, so QW's own copies deliberately do not
+    // register -- src/qw/client/sbar.ts's header flags exactly this as a
+    // follow-up ("a future qw.active-gated second hook slot") and qwcl's
+    // Host_Init calls SCR_Init/Sbar_Init directly at boot instead.
+    //
+    // A renderer switch is the one place that boot-time call is not enough:
+    // the hooks are what re-run them, so qwcl was re-running WINQUAKE's
+    // SCR_Init and Sbar_Init -- which re-registered a second set of
+    // scr_conspeed/showram/showturtle/showpause/scr_centertime/
+    // scr_printspeed cvar_t objects over QW's (the "Can't register variable
+    // X, allready defined" flood, since these are different objects under
+    // the same names, not the same-object re-link Cvar_RegisterVariable's
+    // rendererSwitch branch forgives) and, worse, left QW's OWN screen and
+    // status-bar qpic_t pointing into the renderer that was just destroyed.
+    // Routed here rather than by adding a second hook slot, matching this
+    // file's own `qw.active ? qwClMainMod().host_colormap.data : ...`.
+    if (qw.active) qwScreenMod().SCR_Init();
+    else hostClientHooks.scrInit?.(); // SCR_Init
     hostClientHooks.rInit?.(); // R_Init
-    hostClientHooks.sbarInit?.(); // Sbar_Init
+    if (qw.active) qwSbarMod().Sbar_Init();
+    else hostClientHooks.sbarInit?.(); // Sbar_Init
     if (restartLevel) VID_RestartLevel();
   }
 }
@@ -652,6 +720,46 @@ export function VID_SizeChanged(width: number, height: number): void {
     SDLVID_Resize(width, height);
   }
 
+  /*
+  ref_gl's `conback` (gl_draw.ts) is the one renderer-owned object whose SIZE
+  is baked in at Draw_Init -- `conback.width = vid.conwidth; conback.height =
+  vid.conheight` -- rather than read back per draw, and gl_draw.c's
+  Draw_ConsoleBackground then draws it at exactly that size. So after a resize
+  the full console (the whole screen, whenever cls.state != ca_active) painted
+  only the OLD mode's rectangle and every pixel outside it kept whatever the
+  renderer last drew there: the reported "ghosting when the client can't
+  render", which a tiling compositor makes the default case by handing a
+  640x480 mode a desktop-sized window the moment it is mapped. Measured on a
+  live 640x480 -> 1280x720 resize before this call existed: the console
+  covered the top-left 640x480 and the remaining 67% of the frame was never
+  written.
+
+  ref_soft's Draw_ConsoleBackground re-reads vid.conwidth on every call and
+  needs nothing, so this is a GL-only staleness -- but Draw_Init is a
+  per-renderer hook (ref_soft.ts installs `() => re.current?.Draw_Init()` for
+  both), so re-running it simply re-derives the size against whichever
+  renderer is live, with no teardown: the window, the context and every
+  loaded model stay exactly as they are, which is what keeps this cheap
+  enough for the size events a drag-resize delivers (VID_SizeChanged has
+  already dropped every event that does not actually change the resolution).
+
+  Draw_Init registers its own cvars and commands (gl_draw.ts's gl_nobind /
+  gl_max_size / gl_picmip / `gl_texturemode`), so the same two windows
+  VID_CheckChanges opens around its own re-init have to be open here too, or
+  a resize prints the "allready defined" flood and trips Cmd_AddCommand's
+  after-host_initialized guard.
+  */
+  const savedScrDisabled = scrState.scr_disabled_for_loading;
+  const savedRendererSwitch = cmdHost.rendererSwitch;
+  scrState.scr_disabled_for_loading = true;
+  cmdHost.rendererSwitch = cmdHost.initialized;
+  try {
+    hostClientHooks.drawInit?.();
+  } finally {
+    scrState.scr_disabled_for_loading = savedScrDisabled;
+    cmdHost.rendererSwitch = savedRendererSwitch;
+  }
+
   vid.recalc_refdef = 1;
   scrState.scr_fullupdate = 0;
 }
@@ -667,20 +775,12 @@ export function VID_Init(palette: Uint8Array): void {
   Cvar_RegisterVariable(vid_fullscreen);
   Cmd_AddCommand("vid_restart", VID_Restart_f);
 
-  // `+vid_ref gl` on the command line cannot pick the renderer: the "+"
-  // arguments only run once something executes `stuffcmds`, which quake.rc
-  // does long after Host_Init has called VID_Init and a renderer has already
-  // been created. `-vid_ref <name>` is the pre-init parm form WinQuake uses
-  // for every option VID_Init/Host_Init must see before the console exists
-  // (`-dedicated`, `-mem`, and vid_x.c's own `-width`/`-height`/`-winsize`
-  // read below); vid_ref is this port's own added cvar, so the parm that
-  // seeds it is the port's own convention too. `vid_restart` after setting
-  // the cvar stays the runtime path.
-  const refParm = COM_CheckParm("-vid_ref");
-  if (refParm) {
-    if (refParm >= com_argc - 1) Sys_Error("VID: -vid_ref <name>\n");
-    Cvar_Set("vid_ref", com_argv[refParm + 1]);
-  }
+  // see applyVidRefParm's own comment. `vid_restart` after setting the cvar
+  // stays the runtime path; VID_CheckChanges(false) below re-applies this
+  // same parm anyway, but it also has to be resolved here, before it, so the
+  // cvar (and thus resolveMode/the video menu) already agree with it on this
+  // very first call.
+  applyVidRefParm();
 
   vid.maxwarpwidth = WARP_WIDTH;
   vid.maxwarpheight = WARP_HEIGHT;

@@ -93,7 +93,31 @@ original client does.
 read once while the client starts up, before `quake.rc` runs, so `+vid_ref gl`
 on the command line comes too late: pick the renderer at startup with the
 `-vid_ref <soft|gl>` parm (all three binaries), or change it later from the
-video menu's Apply or a `vid_restart` at the console.
+video menu's Apply or a `vid_restart` at the console. A `-vid_ref` parm stays
+in effect for the whole session even if `config.cfg` archives a different
+`vid_ref` value: the parm is re-applied every time the renderer choice is
+re-resolved, so it always wins back.
+
+## Tiling compositors
+
+On Hyprland (and other tiling window managers), the game window is tiled
+into whatever free space is available on the workspace rather than floated
+at the size it asked for, which looks like fullscreen-in-a-window; the
+engine adopts whatever size the compositor hands it (window resizes are
+supported at runtime). To get the size you actually requested, add a float
+rule for the window, matched by its window class -- which is `bun` when
+running from source (`bun src/main.ts` / `bun run start:qwcl`, since `bun`
+is the actual process SDL sees) or the compiled binary's own name
+(`q1ts`, `qwsv`, `qwcl`) when running a `bun build --compile` binary, as
+neither case sets `SDL_VIDEO_X11_WMCLASS` to anything else; check with
+`hyprctl clients` or `xprop` if it doesn't match. For example:
+
+```
+windowrulev2 = float, class:^(bun)$, title:^(Quake)$
+windowrulev2 = size 1280 720, class:^(bun)$, title:^(Quake)$
+```
+
+Or set `vid_fullscreen 1` for real (non-tiled) fullscreen instead.
 
 ## License
 

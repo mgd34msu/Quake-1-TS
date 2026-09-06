@@ -24,6 +24,8 @@ import { re } from "../src/client/render";
 import type { QpicT } from "../src/common/wad";
 import { keyState, KeydestT, K_DOWNARROW, K_ENTER, K_ESCAPE, K_LEFTARROW, K_RIGHTARROW, K_UPARROW } from "../src/client/keys";
 import { menuState, MStateT } from "../src/client/menu";
+import { menuState as qwMenuState, MStateT as QwMStateT } from "../src/qw/client/menu";
+import { qw } from "../src/common/quakedef";
 import { getRegisteredRenderer, registerRenderer, unregisterRenderer, vid_fullscreen, vid_mode, vid_ref, VID_ResetForTests } from "../src/platform/vid";
 import { Cvar_RegisterVariable } from "../src/common/cvar";
 import { VID_MenuCursor, VID_MenuDraw, VID_MenuKey, VID_MenuSetCursorForTests } from "../src/platform/vid_menu";
@@ -116,6 +118,15 @@ const savedVidMode = vid_mode.value;
 const savedVidFullscreen = vid_fullscreen.value;
 const savedVidRef = vid_ref.string;
 const savedSoftFactory = getRegisteredRenderer("soft");
+const savedQwActive = qw.active;
+const savedQwMState = qwMenuState.m_state;
+
+function readQwMState(): QwMStateT {
+  return qwMenuState.m_state;
+}
+function readNqMState(): MStateT {
+  return menuState.m_state;
+}
 
 beforeAll(() => {
   // vid_mode/vid_fullscreen/vid_ref are normally registered by VID_Init
@@ -136,6 +147,8 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  qw.active = savedQwActive;
+  qwMenuState.m_state = savedQwMState;
   if (savedSoftFactory) registerRenderer("soft", savedSoftFactory);
   else unregisterRenderer("soft");
   VID_ResetForTests();
@@ -172,6 +185,44 @@ describe("VID_MenuKey -- cursor navigation", () => {
     VID_MenuKey(K_ESCAPE);
     expect(menuState.m_state).toBe(MStateT.m_options);
     expect(keyState.key_dest).toBe(KeydestT.key_menu);
+  });
+
+  /*
+  menu.c exists twice in this port -- src/client/menu.ts and
+  src/qw/client/menu.ts, each with its own m_state -- and both dispatch
+  m_video to this one file through vidMenuHooks. Escape has to come back out
+  into whichever one is running: with WinQuake's M_Menu_Options_f hard-called,
+  qwcl's video menu set the WinQuake m_state and left QW's still on m_video,
+  so the video menu could never be backed out of and every further key went on
+  changing video settings.
+  */
+  test("under qw.active, Escape returns to QUAKEWORLD's options menu", () => {
+    qw.active = true;
+    try {
+      keyState.key_dest = KeydestT.key_menu;
+      menuState.m_state = MStateT.m_none;
+      qwMenuState.m_state = QwMStateT.m_video;
+
+      VID_MenuKey(K_ESCAPE);
+
+      // read back through a call, so tsc does not narrow these to the literal
+      // types the two assignments above just gave them
+      expect(readQwMState()).toBe(QwMStateT.m_options);
+      expect(readNqMState()).toBe(MStateT.m_none); // WinQuake's copy untouched
+      expect(keyState.key_dest).toBe(KeydestT.key_menu);
+    } finally {
+      qw.active = savedQwActive;
+    }
+  });
+
+  test("under qw.active, the menu draws through QuakeWorld's own M_* helpers", () => {
+    qw.active = true;
+    try {
+      expect(() => VID_MenuDraw()).not.toThrow();
+      expect(drawCalls).toContain("Draw_TransPic");
+    } finally {
+      qw.active = savedQwActive;
+    }
   });
 });
 

@@ -38,7 +38,11 @@ scope entirely.
   `-vid_ref <soft|gl>`, read by `COM_CheckParm` inside `VID_Init` itself -- the same
   pre-init convention WinQuake uses for `-dedicated`, `-mem` and vid_x.c's
   `-width`/`-height`/`-winsize`; `vid_restart` after setting the cvar is the runtime
-  path. All three binaries honour it.
+  path. All three binaries honour it. Command-line parms override archived cvars
+  for the session, as the C's `-width`/`-height` do: `-vid_ref` is re-applied to
+  the `vid_ref` cvar on every `VID_CheckChanges`, not just at boot, so `vid_ref`
+  being archived (`config.cfg`'s own line re-executing on the next launch) can
+  never silently switch the renderer the parm asked for.
 - sys_linux.c/QW's sys_unix.c install no `signal(SIGINT, ...)`/`signal(SIGTERM,
   ...)` handler at all (grepped both C trees in full: absent) -- Ctrl-C/`kill`
   on the real engine is the OS default action, immediate termination, no

@@ -117,6 +117,7 @@ const SDL_WINDOW_RESIZABLE = 0x00000020;
 // eventually flag "not responding". Desktop fullscreen composites at the
 // native resolution; SDLVID_Present's explicit dstrect (VID_CalcBlitRect) is
 // what fits the mode's own resolution into it when they differ.
+const SDL_WINDOW_FULLSCREEN = 0x00000001;
 const SDL_WINDOW_FULLSCREEN_DESKTOP = 0x00001001;
 // window usable with an OpenGL context -- glimp.ts's SDLGL_CreateWindow
 const SDL_WINDOW_OPENGL = 0x00000002;
@@ -205,6 +206,7 @@ const symbols = {
   SDL_SetWindowTitle: { args: ["ptr", "cstring"], returns: "void" },
   SDL_GetWindowSize: { args: ["ptr", "ptr", "ptr"], returns: "void" },
   SDL_SetWindowSize: { args: ["ptr", "i32", "i32"], returns: "void" },
+  SDL_GetWindowFlags: { args: ["ptr"], returns: "u32" },
 
   SDL_CreateRenderer: { args: ["ptr", "i32", "u32"], returns: "ptr" },
   SDL_DestroyRenderer: { args: ["ptr"], returns: "void" },
@@ -388,6 +390,33 @@ export function SDLGL_GetDrawableSize(): { width: number; height: number } {
 
 export function SDLVID_Active(): boolean {
   return texture !== null;
+}
+
+/* The live window's real size and SDL_WindowFlags, straight from SDL -- what
+   an e2e driver asserts a mode change against instead of trusting the cvars
+   it just set. `null` when no window is up. */
+export interface SdlWindowStateForTests {
+  width: number;
+  height: number;
+  flags: number;
+  fullscreenDesktop: boolean;
+  fullscreenExclusive: boolean;
+}
+
+export function SDL_WindowStateForTests(): SdlWindowStateForTests | null {
+  const l = lib();
+  if (!l || !window) return null;
+  const size = querySDLWindowSize(window);
+  const flags = Number(l.symbols.SDL_GetWindowFlags(window));
+  return {
+    width: size.width,
+    height: size.height,
+    flags,
+    // FULLSCREEN_DESKTOP is FULLSCREEN|0x1000, so the desktop case has to be
+    // tested first and the exclusive case excludes it.
+    fullscreenDesktop: (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) === SDL_WINDOW_FULLSCREEN_DESKTOP,
+    fullscreenExclusive: (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) === SDL_WINDOW_FULLSCREEN,
+  };
 }
 
 // test seam: how many frames reached the window since the mode was set

@@ -44,6 +44,8 @@ let entNomonsters: EdictT; // SOLID_BBOX, column x=0,y=150
 let entTrigger: EdictT; // SOLID_TRIGGER, column x=0,y=-150
 let entFree: EdictT; // not linked, used only by SV_TestEntityPosition
 let entEmbedded: EdictT; // not linked, sits inside the world's solid half
+let entSlab: EdictT; // SOLID_BBOX, off-origin brush-shaped slab, column y=2064
+let entSlabOffset: EdictT; // the same world-space box expressed with a non-zero origin
 
 afterAll(() => {
   rmSync(scratchDir, { recursive: true, force: true });
@@ -125,7 +127,28 @@ beforeAll(() => {
   vec3CopyInto(entEmbedded.v.mins, -8, -8, -8);
   vec3CopyInto(entEmbedded.v.maxs, 8, 8, 8);
 
-  sv.edicts = [world, entLink, entMoveTarget, entNomonsters, entTrigger, entFree, entEmbedded];
+  // A shootable trigger_multiple as QuakeC leaves it: triggers.qc's
+  // multi_trigger sets solid = SOLID_BBOX and movetype = MOVETYPE_NONE, while
+  // InitTrigger's setmodel() gives it the brush's absolute mins/maxs and an
+  // origin of '0 0 0'. The start map's one shootable trigger has exactly this
+  // shape (x 928..936, a slab 8 units thin).
+  entSlab = new EdictT(7, ENTVARS_SIZE_WORDS);
+  entSlab.v.solid = SOLID_BBOX;
+  entSlab.v.movetype = MOVETYPE_NONE;
+  vec3CopyInto(entSlab.v.origin, 0, 0, 0);
+  vec3CopyInto(entSlab.v.mins, 928, 2032, 64);
+  vec3CopyInto(entSlab.v.maxs, 936, 2096, 128);
+
+  // The same world-space box, but centred on a real origin, so the pair pins
+  // down SV_ClipMoveToEntity's offset handling.
+  entSlabOffset = new EdictT(8, ENTVARS_SIZE_WORDS);
+  entSlabOffset.v.solid = SOLID_BBOX;
+  entSlabOffset.v.movetype = MOVETYPE_NONE;
+  vec3CopyInto(entSlabOffset.v.origin, 932, 2432, 96);
+  vec3CopyInto(entSlabOffset.v.mins, -4, -32, -32);
+  vec3CopyInto(entSlabOffset.v.maxs, 4, 32, 32);
+
+  sv.edicts = [world, entLink, entMoveTarget, entNomonsters, entTrigger, entFree, entEmbedded, entSlab, entSlabOffset];
   sv.num_edicts = sv.edicts.length;
   sv.max_edicts = sv.edicts.length;
   setEdictTable(sv.edicts);
@@ -251,6 +274,57 @@ describe("SV_Move", () => {
 
     const trace = SV_Move(vec3(0, -150, 100), vec3(0, 0, 0), vec3(0, 0, 0), vec3(0, -150, -100), MOVE_NORMAL, null);
     expect(trace.ent).not.toBe(entTrigger);
+  });
+});
+
+// The reported "shooting the secret wall does nothing" case: FireBullets'
+// traceline is a 2048-unit point ray, and the thing it has to hit is a
+// bmodel-less SOLID_BBOX trigger, clipped through SV_HullForBox.
+describe("SV_Move against a brush-shaped SOLID_BBOX trigger", () => {
+  test("a 2048-unit ray stops on the near face of an off-origin slab", () => {
+    SV_LinkEdict(entSlab, false);
+
+    const start = vec3(996, 2064, 96);
+    const trace = SV_Move(start, vec3(0, 0, 0), vec3(0, 0, 0), vec3(996 - 2048, 2064, 96), MOVE_NORMAL, null);
+
+    expect(trace.ent).toBe(entSlab);
+    expect(trace.startsolid).toBe(false);
+    expect(trace.allsolid).toBe(false);
+    // impact sits on maxs[0] = 936, held DIST_EPSILON (1/32) short of the plane
+    expect(trace.endpos[0]).toBeGreaterThan(936);
+    expect(trace.endpos[0]).toBeLessThan(936.1);
+    expect(trace.fraction).toBeCloseTo((996 - trace.endpos[0]) / 2048, 5);
+  });
+
+  test("the same ray above and below the slab passes it by", () => {
+    SV_LinkEdict(entSlab, false);
+
+    // slab spans z 64..128; 32 is under it and 192 is over it
+    for (const z of [32, 192]) {
+      const trace = SV_Move(vec3(996, 2064, z), vec3(0, 0, 0), vec3(0, 0, 0), vec3(996 - 2048, 2064, z), MOVE_NORMAL, null);
+      expect(trace.ent).not.toBe(entSlab);
+      expect(trace.fraction).toBe(1);
+    }
+  });
+
+  test("the offset form of the same box gives the same impact point", () => {
+    SV_LinkEdict(entSlabOffset, false);
+
+    const trace = SV_Move(vec3(996, 2432, 96), vec3(0, 0, 0), vec3(0, 0, 0), vec3(996 - 2048, 2432, 96), MOVE_NORMAL, null);
+
+    expect(trace.ent).toBe(entSlabOffset);
+    // origin 932 + maxs 4 = 936, the same world-space face as entSlab
+    expect(trace.endpos[0]).toBeGreaterThan(936);
+    expect(trace.endpos[0]).toBeLessThan(936.1);
+  });
+
+  test("MOVE_NOMONSTERS passes straight through it", () => {
+    SV_LinkEdict(entSlab, false);
+
+    const trace = SV_Move(vec3(996, 2064, 96), vec3(0, 0, 0), vec3(0, 0, 0), vec3(996 - 2048, 2064, 96), MOVE_NOMONSTERS, null);
+
+    expect(trace.ent).not.toBe(entSlab);
+    expect(trace.fraction).toBe(1);
   });
 });
 
