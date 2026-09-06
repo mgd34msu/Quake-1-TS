@@ -62,7 +62,7 @@ Deviations from PORTING.md / the C source:
 - `strncmp(name, "maps/", 6)` in SV_BeginDownload_f's `allow_download_maps`
   arm compares six bytes of a five-byte literal, i.e. it also compares the
   terminating NUL: it is true only when `name` is exactly "maps/". Preserved
-  exactly as the original as `name === "maps/"`; the neighbouring `strncmp(name,
+  kept as the C has it, `name === "maps/"`; the neighbouring `strncmp(name,
   "maps/", 5)` (pak check) really is a prefix test and is ported as one.
 - The C lowercases `name` in place, mutating `Cmd_Argv(1)`'s own buffer.
   `Cmd_Argv` returns an immutable string here, so a lowercased copy is used.
