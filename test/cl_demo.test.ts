@@ -34,6 +34,7 @@ import { cls, cl, CactiveT, SIGNONS } from "../src/client/client";
 import { host } from "../src/common/host";
 import * as cl_main from "../src/client/cl_main";
 import { CL_GetMessage, CL_PlayDemo_f, CL_Record_f, CL_Stop_f, CL_StopPlayback, CL_TimeDemo_f, CL_FinishTimeDemo, CL_WriteDemoMessage } from "../src/client/cl_demo";
+import { HAVE_PROGS106 } from "./support/fixture_availability";
 
 const disconnectSpy = spyOn(cl_main, "CL_Disconnect");
 
@@ -152,7 +153,7 @@ describe("CL_Record_f", () => {
     expect(cls.demorecording).toBe(false);
   });
 
-  test("a forced track number becomes cls.forcetrack and demorecording turns on", () => {
+  test.skipIf(!HAVE_PROGS106)("a forced track number becomes cls.forcetrack and demorecording turns on", () => {
     initGamedir("forcetrack-", { withProgs: true });
     cmdState.source = CmdSourceT.src_command;
     Cmd_TokenizeString("record demoX somemap 7");

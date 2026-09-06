@@ -25,7 +25,7 @@ Standing order 13 / rule 15 hygiene, all done by this file itself:
 */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { sysState } from "../src/platform/sys";
@@ -69,6 +69,7 @@ import {
   watervis,
   zombietime,
 } from "../src/qw/server/sv_main";
+import { HAVE_QWPROGS } from "./support/fixture_availability";
 
 const QWPROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/QW/progs/qwprogs.dat`;
 
@@ -188,7 +189,11 @@ function wireServerBuffers(): void {
 beforeAll(() => {
   sysState.nostdout = 1;
 
-  if (!existsSync(QWPROGS_DAT)) throw new Error(`missing test fixture ${QWPROGS_DAT}`);
+  // No throw: a missing QW/progs/qwprogs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_QWPROGS), so this beforeAll simply has
+  // nothing to set up for tests that never run. afterAll below guards its
+  // own restoration of the five fields this would otherwise have set.
+  if (!HAVE_QWPROGS) return;
 
   savedNetMessageData = net_message.data;
   savedNetMessageMaxsize = net_message.maxsize;
@@ -246,12 +251,17 @@ afterAll(() => {
   qw.active = savedQwActive;
   sysState.nostdout = savedNostdout;
 
-  net_message.data = savedNetMessageData;
-  net_message.maxsize = savedNetMessageMaxsize;
-  net_message.cursize = savedNetMessageCursize;
+  // These five are only assigned inside the beforeAll above, which returns
+  // early (without touching net_message/netchanState at all) when
+  // QW/progs/qwprogs.dat is missing -- nothing to restore in that case.
+  if (HAVE_QWPROGS) {
+    net_message.data = savedNetMessageData;
+    net_message.maxsize = savedNetMessageMaxsize;
+    net_message.cursize = savedNetMessageCursize;
 
-  netchanState.isClient = savedNetchanIsClient;
-  netchanState.realtime = savedNetchanRealtime;
+    netchanState.isClient = savedNetchanIsClient;
+    netchanState.realtime = savedNetchanRealtime;
+  }
 
   setComSearchpaths(null);
   setComModified(false);
@@ -290,7 +300,7 @@ beforeEach(() => {
 
 //============================================================================
 
-describe("StringToFilter", () => {
+describe.skipIf(!HAVE_QWPROGS)("StringToFilter", () => {
   test("a full dotted quad masks every octet", () => {
     const f = new IpfilterT();
     expect(StringToFilter("192.246.40.70", f)).toBe(true);
@@ -320,7 +330,7 @@ describe("StringToFilter", () => {
   });
 });
 
-describe("SV_AddIP_f / SV_RemoveIP_f / SV_FilterPacket", () => {
+describe.skipIf(!HAVE_QWPROGS)("SV_AddIP_f / SV_RemoveIP_f / SV_FilterPacket", () => {
   afterEach(() => {
     Cmd_TokenizeString("removeip 192.168.1");
     SV_RemoveIP_f();
@@ -366,7 +376,7 @@ describe("SV_AddIP_f / SV_RemoveIP_f / SV_FilterPacket", () => {
   });
 });
 
-describe("SV_CalcPing", () => {
+describe.skipIf(!HAVE_QWPROGS)("SV_CalcPing", () => {
   test("returns 9999 with no timed frames", () => {
     const cl = new ClientT();
     expect(SV_CalcPing(cl)).toBe(9999);
@@ -381,7 +391,7 @@ describe("SV_CalcPing", () => {
   });
 });
 
-describe("SV_CheckTimeouts", () => {
+describe.skipIf(!HAVE_QWPROGS)("SV_CheckTimeouts", () => {
   test("drops a cs_connected client whose netchan has gone quiet past timeout", () => {
     const cl = svs.clients[0];
     cl.state = ClientStateT.cs_connected;
@@ -420,7 +430,7 @@ describe("SV_CheckTimeouts", () => {
   });
 });
 
-describe("SV_ConnectionlessPacket -> SVC_GetChallenge", () => {
+describe.skipIf(!HAVE_QWPROGS)("SV_ConnectionlessPacket -> SVC_GetChallenge", () => {
   test("stores a challenge for the sender and echoes it back out of band", () => {
     setNetFrom("192.168.1.20:27001");
     setNetMessage("\xff\xff\xff\xffgetchallenge\n");
@@ -467,7 +477,7 @@ describe("SV_ConnectionlessPacket -> SVC_GetChallenge", () => {
   });
 });
 
-describe("SV_ConnectionlessPacket -> SVC_Ping / unknown", () => {
+describe.skipIf(!HAVE_QWPROGS)("SV_ConnectionlessPacket -> SVC_Ping / unknown", () => {
   test("ping is acknowledged with a single A2A_ACK byte", () => {
     setNetFrom("192.168.1.20:27001");
     setNetMessage("\xff\xff\xff\xffping\n");
@@ -489,7 +499,7 @@ describe("SV_ConnectionlessPacket -> SVC_Ping / unknown", () => {
   });
 });
 
-describe("SV_ConnectionlessPacket -> SVC_DirectConnect", () => {
+describe.skipIf(!HAVE_QWPROGS)("SV_ConnectionlessPacket -> SVC_DirectConnect", () => {
   function getChallengeFor(adr: string): number {
     setNetFrom(adr);
     setNetMessage("\xff\xff\xff\xffgetchallenge\n");
@@ -612,7 +622,7 @@ describe("SV_ConnectionlessPacket -> SVC_DirectConnect", () => {
   });
 });
 
-describe("SV_ExtractFromUserinfo", () => {
+describe.skipIf(!HAVE_QWPROGS)("SV_ExtractFromUserinfo", () => {
   test("an absent name becomes unnamed", () => {
     const cl = new ClientT();
     cl.userinfo = "";
@@ -683,7 +693,7 @@ describe("SV_ExtractFromUserinfo", () => {
   });
 });
 
-describe("SV_CheckVars", () => {
+describe.skipIf(!HAVE_QWPROGS)("SV_CheckVars", () => {
   test("a game password alone sets needpass 1", () => {
     password.string = "hunter2";
     spectator_password.string = "";
@@ -719,7 +729,7 @@ describe("SV_CheckVars", () => {
 // SV_SendServerInfoChange is sv_ccmds.c-owned (src/qw/server/sv_ccmds.ts)
 // but exercised here too: SV_CvarInfoHook (this file) calls it, and this
 // suite already builds the fixture SV_CvarInfoHook's own tests need.
-describe("SV_SendServerInfoChange", () => {
+describe.skipIf(!HAVE_QWPROGS)("SV_SendServerInfoChange", () => {
   test("writes svc_serverinfo to the reliable datagram once a map is running", () => {
     sv.state = ServerStateT.ss_active;
     sv.reliable_datagram.cursize = 0;
@@ -741,7 +751,7 @@ describe("SV_SendServerInfoChange", () => {
   });
 });
 
-describe("info cvar -> svs.info propagation through Cvar_Set", () => {
+describe.skipIf(!HAVE_QWPROGS)("info cvar -> svs.info propagation through Cvar_Set", () => {
   beforeEach(() => {
     qw.active = true;
     setCvarInfoHook(SV_CvarInfoHook);

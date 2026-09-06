@@ -30,7 +30,12 @@ import {
   COM_CloseFile,
   COM_CheckRegistered,
   com_filesize,
+  com_modified,
+  com_searchpaths,
   static_registered,
+  setComModified,
+  setComSearchpaths,
+  setStaticRegistered,
   va,
 } from "../src/common/common";
 import { buildPak, writePakToDisk, ensureDir } from "./support/pak_builder";
@@ -307,23 +312,46 @@ describe("COM_InitArgv argv truncation at MAX_NUM_ARGVS=50 (D4)", () => {
 // filesystem / PAK tests
 
 describe("filesystem: synthetic paks", () => {
-  // Runs first in this describe block, deliberately: com_modified is
-  // sticky module state that only -game/-path (never -basedir) set, and
-  // once true it never resets. Every test below this one uses -path (or a
-  // synthetic pak0.pak whose file count differs from PAK0_COUNT, which
-  // COM_LoadPackFile itself flags as modified), so this is the only test in
-  // the file that can observe com_modified still false: id1/ deliberately
-  // has no pak0.pak at all, so COM_LoadPackFile never runs its
-  // numpackfiles/CRC check.
+  // com_modified is sticky module state that only -game/-path (never
+  // -basedir) sets, and once true it never resets on its own; every other
+  // test in this describe block uses -path (or a synthetic pak0.pak whose
+  // file count differs from PAK0_COUNT, which COM_LoadPackFile itself flags
+  // as modified). `bun test` runs every file in one process, so some other
+  // suite -- in this file or another one entirely -- may have already left
+  // com_modified true by the time this test runs, depending on which
+  // suites are present in a given run (this test used to rely on running
+  // first in this describe block to see it still false, which does not
+  // hold across every subset of suites CI can run). COM_CheckRegistered
+  // throws when com_modified is true and no gfx/pop.lmp is found, which is
+  // not what this test is about, so set up the precondition explicitly
+  // instead of assuming it, and restore both flags afterward.
   test("COM_CheckRegistered: no gfx/pop.lmp on the search path -> shareware, no throw", () => {
     const baseDir = join(scratchDir, "noregistered");
     ensureDir(join(baseDir, "id1")); // no pak0.pak, no gfx/pop.lmp
 
-    COM_InitArgv(["quake", "-basedir", baseDir]);
-    COM_InitFilesystem();
+    // COM_InitFilesystem's -basedir branch only PREPENDS a search path node
+    // (unlike -path, which resets com_searchpaths to null first); some other
+    // suite in this shared bun test process may have left a real,
+    // checksum-valid gfx/pop.lmp reachable further back on the chain, which
+    // would make COM_OpenFile below find it and defeat the "no gfx/pop.lmp
+    // on the search path" this test is named for. Reset com_searchpaths (and
+    // com_modified) to a known-empty state first, and restore both after.
+    const savedModified = com_modified;
+    const savedRegistered = static_registered;
+    const savedSearchpaths = com_searchpaths;
+    setComModified(false);
+    setComSearchpaths(null);
+    try {
+      COM_InitArgv(["quake", "-basedir", baseDir]);
+      COM_InitFilesystem();
 
-    expect(() => COM_CheckRegistered()).not.toThrow();
-    expect(static_registered).toBe(0);
+      expect(() => COM_CheckRegistered()).not.toThrow();
+      expect(static_registered).toBe(0);
+    } finally {
+      setComModified(savedModified);
+      setStaticRegistered(savedRegistered);
+      setComSearchpaths(savedSearchpaths);
+    }
   });
 
   test("COM_LoadFile finds a file inside a synthetic pak, sets com_filesize", () => {

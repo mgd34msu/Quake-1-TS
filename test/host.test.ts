@@ -37,6 +37,7 @@ import {
 import { ClientT, sv, svState, svs } from "../src/server/server";
 import { pr_builtin } from "../src/progs/pr_cmds";
 import { setBuiltins } from "../src/progs/pr_exec";
+import { HAVE_PROGS106 } from "./support/fixture_availability";
 import {
   HostError,
   Host_FilterTime,
@@ -150,7 +151,10 @@ beforeAll(() => {
   // pr_cmds.c table back (standing order 13: initialize what this suite reads).
   setBuiltins(pr_builtin);
 
-  if (!existsSync(PROGS_DAT)) throw new Error(`missing test fixture ${PROGS_DAT}`);
+  // No throw: a missing progs106/progs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_PROGS106), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_PROGS106) return;
 
   // gfx/pop.lmp: the registered-version check's 128 big-endian shorts, as
   // test/sv_main.test.ts's recipe.
@@ -206,7 +210,7 @@ function stringAt(buf: SizeBuf, offset: number): string {
 
 //============================================================================
 
-describe("Host_Init (-dedicated)", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_Init (-dedicated)", () => {
   test("reaches host.initialized and locks the command table", () => {
     expect(host.initialized).toBe(true);
     expect(cmdHost.initialized).toBe(true);
@@ -252,7 +256,7 @@ describe("Host_Init (-dedicated)", () => {
 
 //============================================================================
 
-describe("Host_FilterTime", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_FilterTime", () => {
   // host.c's Host_FilterTime has no sys_ticrate handling; sys_linux.c's
   // main() is what compares `time < sys_ticrate.value` for a dedicated
   // server, and that loop belongs to src/main.ts (U036).
@@ -305,7 +309,7 @@ describe("Host_FilterTime", () => {
 
 //============================================================================
 
-describe("Host_Frame", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_Frame", () => {
   test("runs a frame with no server active and does not throw", () => {
     const wasDedicated = sysState.isDedicated;
     sysState.isDedicated = false; // Sys_ConsoleInput only pumps stdin when dedicated
@@ -372,7 +376,7 @@ describe("Host_Frame", () => {
 
 //============================================================================
 
-describe("SV_ClientPrintf / SV_BroadcastPrintf", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_ClientPrintf / SV_BroadcastPrintf", () => {
   test("SV_ClientPrintf writes svc_print + the formatted string to host_client", () => {
     const c = freshClient();
     svState.host_client = c;
@@ -407,7 +411,7 @@ describe("SV_ClientPrintf / SV_BroadcastPrintf", () => {
 
 //============================================================================
 
-describe("SV_DropClient", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_DropClient", () => {
   test("frees the client and broadcasts updatename/updatefrags/updatecolors", () => {
     const saveClients = svs.clients;
     const saveMax = svs.maxclients;
@@ -458,7 +462,7 @@ describe("SV_DropClient", () => {
 
 //============================================================================
 
-describe("Host_ShutdownServer", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_ShutdownServer", () => {
   const fakeHooks: NetHostHooks = {
     svActive: () => sv.active,
     svName: () => sv.name,

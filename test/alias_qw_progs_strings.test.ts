@@ -18,7 +18,7 @@ recipe. Resets com_searchpaths/com_modified and sysState.nostdout itself.
 */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sysState } from "../src/platform/sys";
 import { setComSearchpaths, setComModified } from "../src/common/common";
@@ -32,6 +32,7 @@ import { sv } from "../src/qw/server/server";
 import { pr_builtin } from "../src/qw/server/pr_cmds";
 import { NetadrT } from "../src/qw/net_udp";
 import { NetchanT, Netchan_Setup } from "../src/qw/net_chan";
+import { HAVE_QWPROGS } from "./support/fixture_availability";
 
 const QWPROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/QW/progs/qwprogs.dat`;
 
@@ -58,7 +59,10 @@ afterAll(() => {
 
 beforeAll(() => {
   sysState.nostdout = 1;
-  if (!existsSync(QWPROGS_DAT)) throw new Error(`missing test fixture ${QWPROGS_DAT}`);
+  // No throw: a missing QW/progs/qwprogs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_QWPROGS), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_QWPROGS) return;
 
   setComSearchpaths(null);
   setComModified(false);
@@ -84,7 +88,7 @@ beforeAll(() => {
   sv.time = 0;
 });
 
-describe("alias_ QW PF_ftos and PF_vtos share one pr_string_temp buffer", () => {
+describe.skipIf(!HAVE_QWPROGS)("alias_ QW PF_ftos and PF_vtos share one pr_string_temp buffer", () => {
   test("consecutive ftos results are the same string_t and read the later value", () => {
     globals().f[OFS_PARM0] = 5;
     pr_builtin[26]();
@@ -132,7 +136,7 @@ describe("alias_ QW PF_ftos and PF_vtos share one pr_string_temp buffer", () => 
 // port's table is keyed on content and holds them all, so the C's 1024 cap
 // would fire where the C never does. PF_infokey's "ping" branch alone mints a
 // fresh string per distinct value.
-describe("alias_ QW PR_SetString does not charge content strings against MAX_PRSTR", () => {
+describe.skipIf(!HAVE_QWPROGS)("alias_ QW PR_SetString does not charge content strings against MAX_PRSTR", () => {
   test("more than MAX_PRSTR distinct content strings are accepted", () => {
     for (let i = 0; i < MAX_PRSTR * 2; i++) {
       const s = `alias_prstr_${i}`;
@@ -162,7 +166,7 @@ describe("alias_ QW PR_SetString does not charge content strings against MAX_PRS
 // sizebuf_t, so &chan->message is stable across a re-setup. src/qw/cmd.ts
 // caches this SizeBuf as qwCmdHooks.netchanMessage and CL_PlayDemo_f's
 // Netchan_Setup call does not re-point it.
-describe("alias_ Netchan_Setup zeroes the message SizeBuf in place", () => {
+describe.skipIf(!HAVE_QWPROGS)("alias_ Netchan_Setup zeroes the message SizeBuf in place", () => {
   test("chan.message keeps its identity across a re-setup", () => {
     const chan = new NetchanT();
     const adr = new NetadrT();

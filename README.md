@@ -58,7 +58,7 @@ Per-OS package names and install commands are in
 ## Getting the game data
 
 No game data ships here and none can: the pak files remain id Software /
-Bethesda property. See [NOTICE](NOTICE) for the details. Bring your own copy —
+Bethesda property. Bring your own copy —
 the shareware `pak0.pak`, a retail install from Steam or GOG, or the original
 CD.
 
@@ -226,7 +226,6 @@ Each is a `bun build --compile` single-file executable that still needs SDL2
 [PORTING.md](PORTING.md) is the contract: the file-by-file mapping to the C, the
 type discipline, the renderer seam, how the QuakeC VM and the engine string
 table work, and every documented deviation with its reasoning.
-[CONTRIBUTING.md](CONTRIBUTING.md) is the short version.
 
 - `bun run check` — `tsc --noEmit` plus the gate that rejects `any` anywhere in
   `src/` or `test/`. It must print `CHECK OK`.
@@ -279,8 +278,7 @@ The engine is id Software's. This is a port, not a new game.
 
 Released by id Software on 21 December 1999 under the GNU General Public
 License, version 2. This port is a derivative work distributed under the same
-terms, GPL-2.0-or-later; the full text is in [LICENSE](LICENSE) and the
-attribution details are in [NOTICE](NOTICE).
+terms, GPL-2.0-or-later; the full text is in [LICENSE](LICENSE).
 
 Game data is not included and remains under its own, non-GPL terms. Quake is a
 registered trademark of id Software LLC; this project is not affiliated with or

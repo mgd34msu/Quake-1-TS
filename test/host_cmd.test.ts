@@ -30,6 +30,7 @@ import { EDICT_NUM } from "../src/progs/progs";
 import { pr_builtin } from "../src/progs/pr_cmds";
 import { setBuiltins } from "../src/progs/pr_exec";
 import { Host_Init, host, hostClientHooks } from "../src/common/host";
+import { HAVE_PROGS106 } from "./support/fixture_availability";
 import {
   Host_Color_f,
   Host_Give_f,
@@ -136,7 +137,10 @@ beforeAll(() => {
   // pr_cmds.c table back (standing order 13: initialize what this suite reads).
   setBuiltins(pr_builtin);
 
-  if (!existsSync(PROGS_DAT)) throw new Error(`missing test fixture ${PROGS_DAT}`);
+  // No throw: a missing progs106/progs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_PROGS106), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_PROGS106) return;
 
   const popLmp = new Uint8Array(256);
   for (let i = 0; i < 128; i++) {
@@ -214,7 +218,7 @@ function runCommand(text: string, src: CmdSourceT, fn: () => void): void {
 
 //============================================================================
 
-describe("the dedicated map boot", () => {
+describe.skipIf(!HAVE_PROGS106)("the dedicated map boot", () => {
   test("`map world` spawns progs106's worldspawn on the synthetic level", () => {
     expect(host.initialized).toBe(true);
     expect(svs.maxclients).toBe(1);
@@ -237,7 +241,7 @@ describe("the dedicated map boot", () => {
 
 //============================================================================
 
-describe("Host_SavegameComment", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_SavegameComment", () => {
   test("levelname at 0, kills at 22, spaces turned into underscores", () => {
     hostClientHooks.clLevelname = () => "the Slipgate Complex";
     hostClientHooks.clStat = (n: number) => (n === STAT_MONSTERS ? 7 : n === STAT_TOTALMONSTERS ? 21 : 0);
@@ -261,7 +265,7 @@ describe("Host_SavegameComment", () => {
 
 //============================================================================
 
-describe("Host_Savegame_f / Host_Loadgame_f", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_Savegame_f / Host_Loadgame_f", () => {
   test("roundtrips sv.time, the map name, the edict count and a player origin", () => {
     expect(sv.active).toBe(true);
 
@@ -350,7 +354,7 @@ function withClients<T>(count: number, body: (clients: ClientT[]) => T): T {
   }
 }
 
-describe("Host_Name_f", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_Name_f", () => {
   test("caps the name at 15 characters and broadcasts svc_updatename", () => {
     withClients(1, (clients) => {
       const c = clients[0];
@@ -374,7 +378,7 @@ describe("Host_Name_f", () => {
   });
 });
 
-describe("Host_Color_f", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_Color_f", () => {
   test("masks to 4 bits, clamps to 13 and packs top*16+bottom", () => {
     withClients(1, (clients) => {
       const c = clients[0];
@@ -406,7 +410,7 @@ describe("Host_Color_f", () => {
   });
 });
 
-describe("Host_Say", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_Say", () => {
   test("a client's say is `\\x01name: text`", () => {
     withClients(1, (clients) => {
       const c = clients[0];
@@ -436,7 +440,7 @@ describe("Host_Say", () => {
   });
 });
 
-describe("Host_Kick_f", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_Kick_f", () => {
   test("kick # <n> drops that slot and prints the trailing message", () => {
     const saveConnections = net_activeconnections;
     withClients(2, (clients) => {
@@ -470,7 +474,7 @@ describe("Host_Kick_f", () => {
   });
 });
 
-describe("Host_Give_f", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_Give_f", () => {
   test("`give 2` sets IT_SHOTGUN", () => {
     withClients(1, (clients) => {
       const c = clients[0];
@@ -501,7 +505,7 @@ describe("Host_Give_f", () => {
   });
 });
 
-describe("Host_Status_f", () => {
+describe.skipIf(!HAVE_PROGS106)("Host_Status_f", () => {
   test("prints the header block and one #n line per active client", () => {
     withClients(1, (clients) => {
       const c = clients[0];

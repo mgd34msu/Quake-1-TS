@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { COM_InitArgv, COM_InitFilesystem, COM_CheckRegistered, pop } from "../src/common/common";
 import { writePakToDisk } from "./support/pak_builder";
@@ -44,6 +44,7 @@ import {
   SV_PushMove,
   SV_Physics,
 } from "../src/server/sv_phys";
+import { HAVE_PROGS106 } from "./support/fixture_availability";
 
 const PROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
 
@@ -84,6 +85,11 @@ let mod: ModelT;
 beforeAll(() => {
   sysState.nostdout = 1;
 
+  // No throw: a missing progs106/progs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_PROGS106), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_PROGS106) return;
+
   mkdirSync(join(baseDir, "id1"), { recursive: true });
   writeGameFile(baseDir, "id1/maps/world.bsp", buildBsp());
 
@@ -92,7 +98,6 @@ beforeAll(() => {
     popLmp[i * 2] = (pop[i] >> 8) & 0xff;
     popLmp[i * 2 + 1] = pop[i] & 0xff;
   }
-  if (!existsSync(PROGS_DAT)) throw new Error(`missing test fixture ${PROGS_DAT}`);
   const progsDat = new Uint8Array(readFileSync(PROGS_DAT));
   writePakToDisk(join(baseDir, "id1", "pak0.pak"), [
     { name: "gfx/pop.lmp", data: popLmp },
@@ -161,7 +166,7 @@ function box(index: number, x: number, y: number, z: number, half = 8): EdictT {
 
 //============================================================================
 
-describe("ClipVelocity", () => {
+describe.skipIf(!HAVE_PROGS106)("ClipVelocity", () => {
   test("a floor normal sets bit 1 and fully absorbs velocity into the plane", () => {
     const out = vec3();
     const blocked = ClipVelocity(vec3(0, 0, -100), vec3(0, 0, 1), out, 1);
@@ -189,7 +194,7 @@ describe("ClipVelocity", () => {
   });
 });
 
-describe("SV_CheckVelocity", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_CheckVelocity", () => {
   test("clamps velocity to +-sv_maxvelocity per axis", () => {
     const e = box(3, 0, 500, 100);
     e.v.velocity[0] = sv_maxvelocity.value + 500;
@@ -214,7 +219,7 @@ describe("SV_CheckVelocity", () => {
   });
 });
 
-describe("SV_AddGravity", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_AddGravity", () => {
   test("subtracts sv_gravity.value * host.frametime from velocity[2]", () => {
     const e = box(3, 0, 500, 100);
     e.v.velocity[2] = 0;
@@ -224,7 +229,7 @@ describe("SV_AddGravity", () => {
   });
 });
 
-describe("SV_FlyMove", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_FlyMove", () => {
   test("falling into the world's solid half returns blocked bit 1 and grounds on the world", () => {
     const e = box(4, 300, 0, 50);
     e.v.velocity[2] = -1000;
@@ -235,7 +240,7 @@ describe("SV_FlyMove", () => {
   });
 });
 
-describe("SV_Physics_Toss", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_Physics_Toss", () => {
   test("falls under gravity, losing sv_gravity*frametime of velocity[2] per step, then rests on the floor", () => {
     const e = box(5, 300, 100, 50);
     e.v.movetype = MOVETYPE_TOSS;
@@ -279,7 +284,7 @@ describe("SV_Physics_Toss", () => {
   });
 });
 
-describe("SV_WalkMove", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_WalkMove", () => {
   test("on flat ground moves the full distance (no step needed)", () => {
     // resting exactly on the world's floor already (see the SV_Physics_Toss
     // rest position above), so a purely horizontal move never touches the
@@ -305,7 +310,7 @@ describe("SV_WalkMove", () => {
   test.skip("stepping up an 8-unit ledge is out of reach with this synthetic map", () => {});
 });
 
-describe("SV_PushMove", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_PushMove", () => {
   test("moves a MOVETYPE_PUSH edict and carries a riding entity (groundentity = pusher) with it", () => {
     const pusher = sv.edicts[8];
     pusher.v.solid = SOLID_BSP;
@@ -380,7 +385,7 @@ describe("SV_PushMove", () => {
   });
 });
 
-describe("SV_CheckWater", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_CheckWater", () => {
   // bsp_builder.ts's BspBuildOptions has no way to make a leaf CONTENTS_WATER
   // (its two leafs are hardcoded CONTENTS_SOLID / CONTENTS_EMPTY -- grep
   // confirms), so this test is skipped and reported per the unit brief
@@ -388,7 +393,7 @@ describe("SV_CheckWater", () => {
   test.skip("a CONTENTS_WATER leaf sets waterlevel/watertype (skipped: bsp_builder.ts cannot emit one)", () => {});
 });
 
-describe("SV_Physics", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_Physics", () => {
   test("dispatches MOVETYPE_NONE/MOVETYPE_NOCLIP and advances sv.time by host.frametime", () => {
     // dedicated low indices, isolated from every other describe block's
     // edicts (some of which carry MOVETYPE_WALK, only valid inside

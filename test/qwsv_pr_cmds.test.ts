@@ -17,7 +17,7 @@ gfx/pop.lmp rather than relying on another test file's run.
 */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sysState } from "../src/platform/sys";
 import { setComSearchpaths, setComModified } from "../src/common/common";
@@ -39,6 +39,7 @@ import { SV_ClearWorld } from "../src/qw/server/world";
 import { SV_CalcPHS } from "../src/qw/server/sv_init";
 import { MSG_BROADCAST, MSG_ONE, pr_builtin, pr_numbuiltins, sv_aim } from "../src/qw/server/pr_cmds";
 import { svErrorState } from "../src/qw/server/sv_main";
+import { HAVE_QWPROGS } from "./support/fixture_availability";
 
 const QWPROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/QW/progs/qwprogs.dat`;
 
@@ -59,7 +60,10 @@ afterAll(() => {
 beforeAll(() => {
   sysState.nostdout = 1; // keep Con_Printf/Sys_Printf diagnostics quiet
 
-  if (!existsSync(QWPROGS_DAT)) throw new Error(`missing test fixture ${QWPROGS_DAT}`);
+  // No throw: a missing QW/progs/qwprogs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_QWPROGS), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_QWPROGS) return;
 
   setComSearchpaths(null);
   setComModified(false);
@@ -182,7 +186,7 @@ function spawnEdict(): QwEdictT {
 
 //============================================================================
 
-describe("pr_builtin table", () => {
+describe.skipIf(!HAVE_QWPROGS)("pr_builtin table", () => {
   test("table length is 83 (WinQuake's 79 + PF_logfrag/PF_infokey/PF_stof/PF_multicast)", () => {
     expect(pr_builtin.length).toBe(83);
     expect(pr_numbuiltins).toBe(83);
@@ -206,7 +210,7 @@ describe("pr_builtin table", () => {
   });
 });
 
-describe("PF_ftos / PF_vtos (Com_sprintf formatting)", () => {
+describe.skipIf(!HAVE_QWPROGS)("PF_ftos / PF_vtos (Com_sprintf formatting)", () => {
   test("ftos: whole numbers format as %d, fractional as %5.1f", () => {
     setParmFloat(OFS_PARM0, 5);
     pr_builtin[26]();
@@ -224,7 +228,7 @@ describe("PF_ftos / PF_vtos (Com_sprintf formatting)", () => {
   });
 });
 
-describe("PF_Find", () => {
+describe.skipIf(!HAVE_QWPROGS)("PF_Find", () => {
   // D.md Defect B: QW/server/pr_cmds.c's PF_Find is identical to WinQuake's
   // here -- G_STRING/E_STRING are (pr_strings + offset), never a NULL
   // pointer, so the C's `if (!s)`/`if (!t)` checks are dead code and an
@@ -265,7 +269,7 @@ describe("PF_Find", () => {
   });
 });
 
-describe("PF_infokey", () => {
+describe.skipIf(!HAVE_QWPROGS)("PF_infokey", () => {
   test("entity 0: svs.info, falling back to localinfo", () => {
     svs.info = "\\hostname\\Test Server\\";
 
@@ -295,7 +299,7 @@ describe("PF_infokey", () => {
   });
 });
 
-describe("PF_logfrag", () => {
+describe.skipIf(!HAVE_QWPROGS)("PF_logfrag", () => {
   test("appends '\\\\killer\\\\killee\\\\\\n' to svs.log[svs.logsequence & 1]", () => {
     svs.clients[0].name = "Alice";
     svs.clients[1].name = "Bob";
@@ -322,7 +326,7 @@ describe("PF_logfrag", () => {
   });
 });
 
-describe("WriteDest MSG_ONE (PF_WriteByte through the reliable back-buffer)", () => {
+describe.skipIf(!HAVE_QWPROGS)("WriteDest MSG_ONE (PF_WriteByte through the reliable back-buffer)", () => {
   test("a byte written with dest MSG_ONE lands in msg_entity's netchan.message, not sv.datagram", () => {
     const client = svs.clients[0];
     const startCursize = client.netchan.message.cursize;
@@ -351,7 +355,7 @@ describe("WriteDest MSG_ONE (PF_WriteByte through the reliable back-buffer)", ()
   });
 });
 
-describe("PF_bprint / PF_multicast (sv_send.ts)", () => {
+describe.skipIf(!HAVE_QWPROGS)("PF_bprint / PF_multicast (sv_send.ts)", () => {
   test("PF_bprint writes svc_print + level + the string into every spawned client's netchan.message", () => {
     const client = svs.clients[0];
     const startCursize = client.netchan.message.cursize;
@@ -374,7 +378,7 @@ describe("PF_bprint / PF_multicast (sv_send.ts)", () => {
   });
 });
 
-describe("PF_precache_model error outside ss_loading", () => {
+describe.skipIf(!HAVE_QWPROGS)("PF_precache_model error outside ss_loading", () => {
   test("throws PRRunError when sv.state is not ss_loading", () => {
     const saved = sv.state;
     try {
@@ -400,7 +404,7 @@ describe("PF_precache_model error outside ss_loading", () => {
   });
 });
 
-describe("PF_setorigin / PF_setsize (world.ts linking)", () => {
+describe.skipIf(!HAVE_QWPROGS)("PF_setorigin / PF_setsize (world.ts linking)", () => {
   test("PF_setsize then PF_setorigin link the edict into the world (area list becomes non-null)", () => {
     const ed = spawnEdict();
     ed.v.solid = SOLID_BBOX;
@@ -423,7 +427,7 @@ describe("PF_setorigin / PF_setsize (world.ts linking)", () => {
   });
 });
 
-describe("sv_aim", () => {
+describe.skipIf(!HAVE_QWPROGS)("sv_aim", () => {
   // Checked via `.string` (set unconditionally by CvarT's constructor), not
   // `.value` (only populated by a successful Cvar_RegisterVariable call):
   // src/progs/pr_cmds.ts (WinQuake) registers its own, separate CvarT also
@@ -439,7 +443,7 @@ describe("sv_aim", () => {
   });
 });
 
-describe("PF_cvar / PF_cvar_set (unchanged from WinQuake)", () => {
+describe.skipIf(!HAVE_QWPROGS)("PF_cvar / PF_cvar_set (unchanged from WinQuake)", () => {
   test("roundtrips a registered cvar's value", () => {
     const testCvar = new CvarT("qwsv_pr_cmds_test_cvar", "1");
     Cvar_RegisterVariable(testCvar);
@@ -455,7 +459,7 @@ describe("PF_cvar / PF_cvar_set (unchanged from WinQuake)", () => {
   });
 });
 
-describe("PR_ExecuteProgram with the real pr_cmds.ts builtin table installed", () => {
+describe.skipIf(!HAVE_QWPROGS)("PR_ExecuteProgram with the real pr_cmds.ts builtin table installed", () => {
   test("runs the retail qwprogs.dat's main() to completion", () => {
     sv.num_edicts = 1;
     sv.time = 0;

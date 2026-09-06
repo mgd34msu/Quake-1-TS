@@ -31,6 +31,7 @@ import { cdAudio } from "../src/client/cdaudio";
 import { S_Init } from "../src/client/snd_dma";
 import { COM_InitArgv, com_argc, com_argv } from "../src/common/common";
 import { buildDedicatedFixture, destroyDedicatedFixture, type DedicatedFixture } from "./support/dedicated_fixture";
+import { HAVE_PROGS106 } from "./support/fixture_availability";
 
 const savedNostdout = sysState.nostdout;
 const savedIsDedicated = sysState.isDedicated;
@@ -90,7 +91,7 @@ function bootDedicated(argv: string[]): void {
 }
 
 describe("Sys_Main_Init + runFrames -- a real dedicated boot", () => {
-  test("`+map world` spawns progs106's worldspawn and the server clock advances per frame", () => {
+  test.skipIf(!HAVE_PROGS106)("`+map world` spawns progs106's worldspawn and the server clock advances per frame", () => {
     const fixture = buildDedicatedFixture("main-boot-map-");
     builtFixtures.push(fixture);
 
@@ -123,7 +124,7 @@ describe("Sys_Main_Init + runFrames -- a real dedicated boot", () => {
     expect(() => Host_Shutdown()).not.toThrow(); // isdown guard, host.ts:1154 ("recursive shutdown")
   });
 
-  test("`-nostdout` sets sysState.nostdout", () => {
+  test.skipIf(!HAVE_PROGS106)("`-nostdout` sets sysState.nostdout", () => {
     const fixture = buildDedicatedFixture("main-boot-nostdout-");
     builtFixtures.push(fixture);
 
@@ -146,7 +147,7 @@ module first (bun shares one module registry), so the child process is what
 actually proves src/main.ts's own import graph installs them.
 */
 describe("the sound and CD backends src/main.ts links", () => {
-  test("sndDma.current and cdAudio.current are installed once src/main.ts is loaded", () => {
+  test.skipIf(!HAVE_PROGS106)("sndDma.current and cdAudio.current are installed once src/main.ts is loaded", () => {
     const fixture = buildDedicatedFixture("main-boot-snd-");
     builtFixtures.push(fixture);
 

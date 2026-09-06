@@ -8,7 +8,6 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { COM_CheckRegistered, COM_InitArgv, COM_InitFilesystem, pop } from "../src/common/common";
 import { writePakToDisk } from "./support/pak_builder";
@@ -24,6 +23,7 @@ import { ED_FindField, PR_AllocEdicts, PR_LoadProgs } from "../src/progs/pr_edic
 import { MSG_BROADCAST, pr_builtin, pr_numbuiltins } from "../src/progs/pr_cmds";
 import { ClientT, MOVETYPE_PUSH, ServerStateT, SOLID_BBOX, SOLID_BSP, sv, svs } from "../src/server/server";
 import { SV_ClearWorld } from "../src/server/world";
+import { HAVE_PROGS106 } from "./support/fixture_availability";
 
 const PROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
 
@@ -37,7 +37,10 @@ afterAll(() => {
 });
 
 beforeAll(() => {
-  if (!existsSync(PROGS_DAT)) throw new Error(`missing test fixture ${PROGS_DAT}`);
+  // No throw: a missing progs106/progs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_PROGS106), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_PROGS106) return;
   const progsDat = new Uint8Array(readFileSync(PROGS_DAT));
 
   mkdirSync(join(baseDir, "id1"), { recursive: true });
@@ -160,7 +163,7 @@ function spawnEdict(): EdictT {
 
 //============================================================================
 
-describe("PF_normalize / PF_vlen / PF_vectoyaw / PF_vectoangles", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_normalize / PF_vlen / PF_vectoyaw / PF_vectoangles", () => {
   test("PF_normalize normalizes a (3,4,0) vector to length 1", () => {
     setParmVector(OFS_PARM0, [3, 4, 0]);
     pr_builtin[9]();
@@ -198,7 +201,7 @@ describe("PF_normalize / PF_vlen / PF_vectoyaw / PF_vectoangles", () => {
   });
 });
 
-describe("PF_ftos / PF_vtos / PF_rint / PF_random", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_ftos / PF_vtos / PF_rint / PF_random", () => {
   test("PF_ftos formats an integer-valued float with %d", () => {
     setParmFloat(OFS_PARM0, 5);
     pr_builtin[26]();
@@ -237,7 +240,7 @@ describe("PF_ftos / PF_vtos / PF_rint / PF_random", () => {
   });
 });
 
-describe("PF_precache_sound / PF_precache_model", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_precache_sound / PF_precache_model", () => {
   test("PF_precache_sound inserts into sv.sound_precache", () => {
     setParmString(OFS_PARM0, "weapons/test_sound.wav");
     pr_builtin[19]();
@@ -284,7 +287,7 @@ describe("PF_precache_sound / PF_precache_model", () => {
   });
 });
 
-describe("PF_Spawn / PF_Remove", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_Spawn / PF_Remove", () => {
   test("PF_Spawn allocates a non-free edict, PF_Remove frees it", () => {
     const ed = spawnEdict();
     expect(ed.free).toBe(false);
@@ -295,7 +298,7 @@ describe("PF_Spawn / PF_Remove", () => {
   });
 });
 
-describe("PF_Find", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_Find", () => {
   test("finds an edict by classname, starting the search after the given edict", () => {
     const ed1 = spawnEdict();
     ed1.v.classname = PR_SetEngineString("pr_cmds_test_monster");
@@ -352,7 +355,7 @@ describe("PF_Find", () => {
   });
 });
 
-describe("PF_findradius", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_findradius", () => {
   test("chains every non-SOLID_NOT edict within the radius", () => {
     const a = spawnEdict();
     a.v.solid = SOLID_BBOX;
@@ -383,7 +386,7 @@ describe("PF_findradius", () => {
   });
 });
 
-describe("PF_setorigin", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_setorigin", () => {
   test("links the edict into the world (area list becomes non-null)", () => {
     const ed = spawnEdict();
     ed.v.solid = SOLID_BBOX;
@@ -397,7 +400,7 @@ describe("PF_setorigin", () => {
   });
 });
 
-describe("PF_WriteByte / PF_WriteShort (MSG_BROADCAST)", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_WriteByte / PF_WriteShort (MSG_BROADCAST)", () => {
   test("bytes land in sv.datagram", () => {
     const startCursize = sv.datagram.cursize;
 
@@ -415,7 +418,7 @@ describe("PF_WriteByte / PF_WriteShort (MSG_BROADCAST)", () => {
   });
 });
 
-describe("PF_sprint", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_sprint", () => {
   test("writes svc_print + the string into client 1's message", () => {
     const client = svs.clients[0];
     const startCursize = client.message.cursize;
@@ -430,7 +433,7 @@ describe("PF_sprint", () => {
   });
 });
 
-describe("PF_stuffcmd", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_stuffcmd", () => {
   test("writes svc_stufftext + the string into the client's message", () => {
     const client = svs.clients[0];
     const startCursize = client.message.cursize;
@@ -444,7 +447,7 @@ describe("PF_stuffcmd", () => {
   });
 });
 
-describe("PF_cvar / PF_cvar_set", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_cvar / PF_cvar_set", () => {
   test("roundtrips a registered cvar's value", () => {
     const testCvar = new CvarT("pr_cmds_test_cvar", "1");
     Cvar_RegisterVariable(testCvar);
@@ -460,7 +463,7 @@ describe("PF_cvar / PF_cvar_set", () => {
   });
 });
 
-describe("PF_makevectors", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_makevectors", () => {
   test("sets v_forward for yaw 90", () => {
     setParmVector(OFS_PARM0, [0, 90, 0]);
     pr_builtin[1]();
@@ -473,7 +476,7 @@ describe("PF_makevectors", () => {
   });
 });
 
-describe("PF_traceline", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_traceline", () => {
   test("traces against the synthetic world (split plane at z=0)", () => {
     setParmVector(OFS_PARM0, [0, 0, 100]);
     setParmVector(OFS_PARM1, [0, 0, -100]);
@@ -489,7 +492,7 @@ describe("PF_traceline", () => {
   });
 });
 
-describe("PF_Fixme / the builtin table", () => {
+describe.skipIf(!HAVE_PROGS106)("PF_Fixme / the builtin table", () => {
   test("PF_Fixme (slot 0) throws 'unimplemented bulitin'", () => {
     expect(() => pr_builtin[0]()).toThrow("unimplemented bulitin");
   });

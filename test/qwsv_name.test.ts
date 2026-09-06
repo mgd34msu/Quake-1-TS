@@ -42,6 +42,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
 import { PR_ClearEngineStrings, PR_GetString, PR_SetString, PR_SetStringRef, num_prstr } from "../src/qw/server/progs";
+import { HAVE_QWPROGS } from "./support/fixture_availability";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -230,7 +231,7 @@ describe("PR_SetStringRef aliases a holder the way QW's pr_strtbl[] aliases a ch
   });
 });
 
-describe("a real qwsv: netname follows a rename all the way into a QuakeC obituary", () => {
+describe.skipIf(!HAVE_QWPROGS)("a real qwsv: netname follows a rename all the way into a QuakeC obituary", () => {
   test("the child boot completes", async () => {
     const r = await runChild();
     expect(r.exitCode).toBe(0);

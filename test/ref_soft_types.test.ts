@@ -314,7 +314,43 @@ describe("D_ViewChanged's scanline tables", () => {
 });
 
 describe("rState", () => {
+  // rState and dState (src/ref_soft/r_shared.ts, d_local.ts) are module-level
+  // singletons that live for the whole `bun test` process; some other suite
+  // elsewhere in that process may run before this file and leave a field
+  // mutated without restoring it, which would otherwise make these two
+  // tests' pass/fail depend on which suites ran first and in what order.
+  // Reset every field to its documented pristine value right before
+  // asserting instead of relying on that -- every field's live type is fixed
+  // by RStateT (nothing else in the tree ever reassigns a field to a
+  // different JS type), so the currently-live value's typeof is a safe way
+  // to pick 0 / false / null for the fields this test does not name
+  // individually.
+  const nonZeroDefaults: Record<string, number | boolean> = {
+    r_recursiveaffinetriangles: true,
+    r_pixbytes: 1,
+    r_aliasuvscale: 1.0,
+    r_framecount: 1,
+    reinit_surfcache: 1,
+  };
+
+  function resetRState(): void {
+    const holder: Record<string, unknown> = rState;
+    for (const key of Object.keys(holder)) {
+      if (key in nonZeroDefaults) {
+        holder[key] = nonZeroDefaults[key];
+      } else if (typeof holder[key] === "number") {
+        holder[key] = 0;
+      } else if (typeof holder[key] === "boolean") {
+        holder[key] = false;
+      } else {
+        holder[key] = null;
+      }
+    }
+  }
+
   test("every field carries its C initial value", () => {
+    resetRState();
+
     // the six globals the C initializes to something other than zero
     expect(rState.r_recursiveaffinetriangles).toBe(true); // r_main.c
     expect(rState.r_pixbytes).toBe(1); // r_main.c
@@ -323,13 +359,7 @@ describe("rState", () => {
     expect(rState.reinit_surfcache).toBe(1); // r_main.c
     expect(rState.pfinalverts).toBeNull();
 
-    const nonZero = new Set([
-      "r_recursiveaffinetriangles",
-      "r_pixbytes",
-      "r_aliasuvscale",
-      "r_framecount",
-      "reinit_surfcache",
-    ]);
+    const nonZero = new Set(Object.keys(nonZeroDefaults));
     const holder: Record<string, unknown> = rState;
     for (const key of Object.keys(holder)) {
       if (nonZero.has(key)) continue;
@@ -341,6 +371,15 @@ describe("rState", () => {
   });
 
   test("dState starts empty", () => {
+    dState.sc_heap = null;
+    dState.sc_base = null;
+    dState.sc_rover = null;
+    dState.sc_size = 0;
+    dState.d_initial_rover = null;
+    dState.d_roverwrapped = false;
+    dState.r_cache_thrash = false;
+    dState.surfscale = 0;
+
     expect(dState.sc_heap).toBeNull();
     expect(dState.sc_base).toBeNull();
     expect(dState.sc_rover).toBeNull();

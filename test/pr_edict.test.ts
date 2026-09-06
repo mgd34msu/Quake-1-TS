@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   COM_CheckRegistered,
@@ -43,6 +43,7 @@ import {
   progs,
   type TextFileWriter,
 } from "../src/progs/pr_edict";
+import { HAVE_PROGS106 } from "./support/fixture_availability";
 
 const PROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
 
@@ -62,7 +63,10 @@ beforeAll(() => {
   // ED_Print/ED_Count/Con_Printf write through Sys_Printf; keep the suite quiet.
   sysState.nostdout = 1;
 
-  if (!existsSync(PROGS_DAT)) throw new Error(`missing test fixture ${PROGS_DAT}`);
+  // No throw: a missing progs106/progs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_PROGS106), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_PROGS106) return;
   const progsDat = new Uint8Array(readFileSync(PROGS_DAT));
 
   // gfx/pop.lmp inside id1/pak0.pak: the registered-version check's 128
@@ -104,7 +108,7 @@ function parseState(data: string): ParseState {
 
 //============================================================================
 
-describe("PR_LoadProgs", () => {
+describe.skipIf(!HAVE_PROGS106)("PR_LoadProgs", () => {
   test("CRCs the whole progs.dat file", () => {
     expect(pr.crc).toBe(24778);
   });
@@ -134,7 +138,7 @@ describe("PR_LoadProgs", () => {
   });
 });
 
-describe("ED_FindFunction / ED_FindField / ED_FindGlobal", () => {
+describe.skipIf(!HAVE_PROGS106)("ED_FindFunction / ED_FindField / ED_FindGlobal", () => {
   test("finds worldspawn and main", () => {
     expect(ED_FindFunction("worldspawn")).not.toBeNull();
     expect(ED_FindFunction("main")).not.toBeNull();
@@ -162,7 +166,7 @@ describe("ED_FindFunction / ED_FindField / ED_FindGlobal", () => {
   });
 });
 
-describe("GetEdictFieldValue", () => {
+describe.skipIf(!HAVE_PROGS106)("GetEdictFieldValue", () => {
   test("returns the field's word offset, -1 for unknown, and caches both", () => {
     const ed = EDICT_NUM(3);
     expect(GetEdictFieldValue(ed, "origin")).toBe(ENTVARS_OFS.origin);
@@ -173,7 +177,7 @@ describe("GetEdictFieldValue", () => {
   });
 });
 
-describe("ED_Alloc / ED_Free", () => {
+describe.skipIf(!HAVE_PROGS106)("ED_Alloc / ED_Free", () => {
   test("allocation starts at svs.maxclients+1, not edict 0", () => {
     svs.maxclients = 1;
     sv.num_edicts = 2;
@@ -270,7 +274,7 @@ describe("ED_Alloc / ED_Free", () => {
   });
 });
 
-describe("ED_NewString", () => {
+describe.skipIf(!HAVE_PROGS106)("ED_NewString", () => {
   test("translates \\n and leaves other backslashes alone", () => {
     expect(PR_GetString(ED_NewString("plain"))).toBe("plain");
     expect(PR_GetString(ED_NewString("a\\nb"))).toBe("a\nb");
@@ -283,7 +287,7 @@ describe("ED_NewString", () => {
   });
 });
 
-describe("PR_ValueString / PR_UglyValueString", () => {
+describe.skipIf(!HAVE_PROGS106)("PR_ValueString / PR_UglyValueString", () => {
   // one buffer under both views, exactly as pr_globals / EdictT.fields are
   const baseBuffer = new ArrayBuffer(32);
   const base = { f: new Float32Array(baseBuffer), i: new Int32Array(baseBuffer) };
@@ -368,7 +372,7 @@ describe("PR_ValueString / PR_UglyValueString", () => {
   });
 });
 
-describe("PR_GlobalString / PR_GlobalStringNoContents", () => {
+describe.skipIf(!HAVE_PROGS106)("PR_GlobalString / PR_GlobalStringNoContents", () => {
   test("pads to 20 columns and appends one more space", () => {
     const globals = pr.globals;
     expect(globals).not.toBeNull();
@@ -391,7 +395,7 @@ describe("PR_GlobalString / PR_GlobalStringNoContents", () => {
   });
 });
 
-describe("ED_ParseEdict", () => {
+describe.skipIf(!HAVE_PROGS106)("ED_ParseEdict", () => {
   test("parses the QuakeEd angle/light hacks and skips _ keys", () => {
     const ed = EDICT_NUM(20);
     ED_ClearEdict(ed);
@@ -442,7 +446,7 @@ describe("ED_ParseEdict", () => {
   });
 });
 
-describe("ED_Write", () => {
+describe.skipIf(!HAVE_PROGS106)("ED_Write", () => {
   test("emits the savegame text the C's fprintf calls produce", () => {
     const ed = EDICT_NUM(24);
     ED_ClearEdict(ed);
@@ -476,7 +480,7 @@ describe("ED_Write", () => {
   });
 });
 
-describe("ED_ParseGlobals / ED_WriteGlobals", () => {
+describe.skipIf(!HAVE_PROGS106)("ED_ParseGlobals / ED_WriteGlobals", () => {
   test("round-trips a savegame globals block", () => {
     const ps = parseState('{\n"mapname" "e1m1"\n"total_secrets" "4"\n}\n');
     expect(COM_Parse(ps)).toBe("{");
@@ -504,7 +508,7 @@ describe("ED_ParseGlobals / ED_WriteGlobals", () => {
   });
 });
 
-describe("ED_LoadFromFile", () => {
+describe.skipIf(!HAVE_PROGS106)("ED_LoadFromFile", () => {
   test("worldspawn takes edict 0, unknown classnames are freed, skill filters inhibit", () => {
     svs.maxclients = 0;
     sv.num_edicts = 1;
@@ -554,7 +558,7 @@ describe("ED_LoadFromFile", () => {
   });
 });
 
-describe("ED_Print / ED_PrintEdicts / ED_Count", () => {
+describe.skipIf(!HAVE_PROGS106)("ED_Print / ED_PrintEdicts / ED_Count", () => {
   test("run over the live edict table without throwing", () => {
     svs.maxclients = 0;
     sv.num_edicts = 4;

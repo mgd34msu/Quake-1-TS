@@ -28,6 +28,7 @@ import {
 } from "../src/server/sv_main";
 import { SvcOpsT, SU_ARMOR, SU_IDEALPITCH, SU_ITEMS, SU_ONGROUND, SU_VIEWHEIGHT, SU_WEAPON } from "../src/common/protocol";
 import { SizeBuf, SZ_Clear } from "../src/common/sizebuf";
+import { HAVE_PROGS106 } from "./support/fixture_availability";
 
 const PROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
 
@@ -48,7 +49,10 @@ beforeAll(() => {
   // through Sys_Printf; keep the suite quiet.
   sysState.nostdout = 1;
 
-  if (!existsSync(PROGS_DAT)) throw new Error(`missing test fixture ${PROGS_DAT}`);
+  // No throw: a missing progs106/progs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_PROGS106), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_PROGS106) return;
   const progsDat = new Uint8Array(readFileSync(PROGS_DAT));
 
   // gfx/pop.lmp inside id1/pak0.pak: the registered-version check's 128
@@ -86,7 +90,7 @@ function makeEdict(index: number): EdictT {
 
 //============================================================================
 
-describe("SV_Init", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_Init", () => {
   test("registers the ten sv_* cvars owned by sv_phys.ts/sv_user.ts/pr_cmds.ts", () => {
     SV_Init();
     for (const name of [
@@ -131,7 +135,7 @@ describe("SV_Init", () => {
 
 //============================================================================
 
-describe("SV_ModelIndex", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_ModelIndex", () => {
   // NOTE (reported to the coordinator): the real C's `sv.model_precache[i]`
   // is a `char *`; slot 0 always holds a non-NULL pointer to an empty string
   // (`pr_strings`), so the C's `for (i=0; ... && sv.model_precache[i]; i++)`
@@ -161,7 +165,7 @@ describe("SV_ModelIndex", () => {
 
 //============================================================================
 
-describe("SV_StartParticle", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_StartParticle", () => {
   test("writes svc_particle + coords + 3 signed dir bytes + count + color", () => {
     SZ_Clear(sv.datagram);
     SV_StartParticle(vec3(0, 0, 0), vec3(1, 0, 0), 5, 10);
@@ -180,7 +184,7 @@ describe("SV_StartParticle", () => {
 
 //============================================================================
 
-describe("SV_StartSound", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_StartSound", () => {
   const soundEnt = makeEdict(7);
   soundEnt.v.origin[0] = 8;
   soundEnt.v.origin[1] = 0;
@@ -240,7 +244,7 @@ describe("SV_StartSound", () => {
 
 //============================================================================
 
-describe("SV_WriteEntitiesToClient", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_WriteEntitiesToClient", () => {
   beforeAll(() => {
     const mod = buildBsp();
     writeGameFile(baseDir, "id1/maps/pvstest.bsp", mod);
@@ -313,7 +317,7 @@ describe("SV_WriteEntitiesToClient", () => {
 
 //============================================================================
 
-describe("SV_WriteClientdataToMessage", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_WriteClientdataToMessage", () => {
   test("health/weapon items and dmg_take produce svc_damage and the expected SU_ bits", () => {
     svs.maxclients = 1;
     svs.clients = [new ClientT()];
@@ -383,7 +387,7 @@ describe("SV_WriteClientdataToMessage", () => {
 
 //============================================================================
 
-describe("SV_UpdateToReliableMessages", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_UpdateToReliableMessages", () => {
   test("a frag change sends svc_updatefrags to every active client's message", () => {
     svs.maxclients = 2;
     const c0 = new ClientT();
@@ -416,7 +420,7 @@ describe("SV_UpdateToReliableMessages", () => {
 
 //============================================================================
 
-describe("SV_CreateBaseline", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_CreateBaseline", () => {
   test("fills sv.signon with one svc_spawnbaseline record per live edict", () => {
     SZ_Clear(sv.signon);
     sv.signon.maxsize = sv.signon_buf.length;
@@ -462,7 +466,7 @@ describe("SV_CreateBaseline", () => {
 // pr_cmds.ts is not present at test-run time.
 const hasPrCmds = existsSync(join(__dirname, "..", "src", "progs", "pr_cmds.ts"));
 
-describe("SV_SpawnServer (guarded on pr_cmds.ts)", () => {
+describe.skipIf(!HAVE_PROGS106)("SV_SpawnServer (guarded on pr_cmds.ts)", () => {
   if (!hasPrCmds) {
     test.skip("pr_cmds.ts not landed yet -- skipped", () => {});
     return;

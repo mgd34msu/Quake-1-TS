@@ -44,6 +44,7 @@ import { join } from "node:path";
 import { buildDedicatedFixture, destroyDedicatedFixture } from "./support/dedicated_fixture";
 import { buildQwclFixture, destroyQwclFixture } from "./support/qwcl_fixture";
 import { buildQwsvFixture, destroyQwsvFixture, QWSV_FIXTURE_MAP } from "./support/qwsv_fixture";
+import { HAVE_PROGS106, HAVE_QWPROGS } from "./support/fixture_availability";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -142,7 +143,7 @@ function note(scenario: string, reason: string): void {
 //=============================================================================
 
 describe("D3: process termination", () => {
-  test("q1ts dedicated +quit exits 0 promptly (baseline, unaffected by D3's menu-vs-console distinction)", async () => {
+  test.skipIf(!HAVE_PROGS106)("q1ts dedicated +quit exits 0 promptly (baseline, unaffected by D3's menu-vs-console distinction)", async () => {
     // D1 (a separate, already-flagged defect, not this unit's): q1ts always
     // binds UDP port 26000 regardless of any `-port` given, so this can
     // collide with ANY other q1ts dedicated/listen process on this shared
@@ -214,7 +215,7 @@ console.log("SYSEXIT_MUST_NOT_PRINT_AFTER_QUIT");
     }
   }, 15000);
 
-  test("qwsv: `quit` typed on stdin exits 0 with the config write skipped (dedicated) and a clean shutdown", async () => {
+  test.skipIf(!HAVE_QWPROGS)("qwsv: `quit` typed on stdin exits 0 with the config write skipped (dedicated) and a clean shutdown", async () => {
     const fixture = buildQwsvFixture("sysexit-qwsv-stdinquit-");
     try {
       const start = Date.now();
@@ -299,7 +300,7 @@ console.log("SYSEXIT_MUST_NOT_PRINT_AFTER_QUIT");
 //=============================================================================
 
 describe("D5: SIGINT/SIGTERM", () => {
-  test("q1ts dedicated: SIGINT shuts down cleanly and exits 0 within 3s", async () => {
+  test.skipIf(!HAVE_PROGS106)("q1ts dedicated: SIGINT shuts down cleanly and exits 0 within 3s", async () => {
     const fixture = buildDedicatedFixture("sysexit-q1-sigint-");
     try {
       const child = spawnChild(["bun", "src/main.ts", "-dedicated", "-basedir", fixture.baseDir, "+map", "world"]);
@@ -333,7 +334,7 @@ describe("D5: SIGINT/SIGTERM", () => {
     }
   }, 15000);
 
-  test("qwsv: SIGTERM shuts down cleanly (SV_FinalMessage + \"Shutting down.\") and exits 0 within 3s", async () => {
+  test.skipIf(!HAVE_QWPROGS)("qwsv: SIGTERM shuts down cleanly (SV_FinalMessage + \"Shutting down.\") and exits 0 within 3s", async () => {
     const fixture = buildQwsvFixture("sysexit-qwsv-sigterm-");
     try {
       const child = spawnChild(["bun", "src/qw/main_sv.ts", "-basedir", fixture.baseDir, "-port", "0", "+map", QWSV_FIXTURE_MAP]);
@@ -606,7 +607,7 @@ while (true) {
 //=============================================================================
 
 describe("Sys_ConsoleInput: two lines written to stdin in one call both execute (.orch/e2e/E.md defect B)", () => {
-  test("qwsv: `echo LINE_ONE\\necho LINE_TWO\\n` written in a single stdin write runs as two separate commands", async () => {
+  test.skipIf(!HAVE_QWPROGS)("qwsv: `echo LINE_ONE\\necho LINE_TWO\\n` written in a single stdin write runs as two separate commands", async () => {
     const fixture = buildQwsvFixture("sysexit-qwsv-multiline-");
     try {
       const child = spawnChildWithStdin(["bun", "src/qw/main_sv.ts", "-basedir", fixture.baseDir, "-port", "0", "+map", QWSV_FIXTURE_MAP]);

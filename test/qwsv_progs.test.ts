@@ -22,7 +22,7 @@ seam, exactly as pr_exec.test.ts (WinQuake) does with a hand-built program.
 */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { sysState } from "../src/platform/sys";
 import { setComSearchpaths, setComModified } from "../src/common/common";
@@ -55,6 +55,7 @@ import {
 } from "../src/qw/server/pr_edict";
 import { PRRunError, PR_ExecuteProgram, prExec, setBuiltins } from "../src/qw/server/pr_exec";
 import { svErrorState } from "../src/qw/server/sv_main";
+import { HAVE_QWPROGS } from "./support/fixture_availability";
 
 const QWPROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/QW/progs/qwprogs.dat`;
 
@@ -81,7 +82,10 @@ beforeAll(() => {
   // through Con_Printf -> Sys_Printf; keep the suite quiet.
   sysState.nostdout = 1;
 
-  if (!existsSync(QWPROGS_DAT)) throw new Error(`missing test fixture ${QWPROGS_DAT}`);
+  // No throw: a missing QW/progs/qwprogs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_QWPROGS), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_QWPROGS) return;
 
   // com_searchpaths is a process-wide singleton (shared with every WinQuake
   // and QW suite alike, per Task 1's structural fix); reset it before
@@ -141,7 +145,7 @@ function parseState(data: string): ParseState {
 
 //============================================================================
 
-describe("PR_LoadProgs", () => {
+describe.skipIf(!HAVE_QWPROGS)("PR_LoadProgs", () => {
   test("loads the real qwprogs.dat: header CRC passes, progs.crc === PROGHEADER_CRC (54730)", () => {
     expect(PROGHEADER_CRC).toBe(54730);
     expect(PR_Progs().crc).toBe(PROGHEADER_CRC);
@@ -186,7 +190,7 @@ describe("PR_LoadProgs", () => {
   });
 });
 
-describe("ED_FindFunction", () => {
+describe.skipIf(!HAVE_QWPROGS)("ED_FindFunction", () => {
   test("finds main / StartFrame / PutClientInServer / worldspawn", () => {
     expect(ED_FindFunction("main")).not.toBeNull();
     expect(ED_FindFunction("StartFrame")).not.toBeNull();
@@ -198,7 +202,7 @@ describe("ED_FindFunction", () => {
 
 //============================================================================
 
-describe("ED_Alloc / ED_Free (over sv.edicts, MAX_EDICTS QwEdictT allocated via setEdictTable)", () => {
+describe.skipIf(!HAVE_QWPROGS)("ED_Alloc / ED_Free (over sv.edicts, MAX_EDICTS QwEdictT allocated via setEdictTable)", () => {
   test("allocation starts at MAX_CLIENTS+1, not svs.maxclients (QW has no such field) and not edict 0", () => {
     sv.num_edicts = MAX_CLIENTS + 1;
     sv.time = 5;
@@ -290,7 +294,7 @@ describe("ED_Alloc / ED_Free (over sv.edicts, MAX_EDICTS QwEdictT allocated via 
 
 //============================================================================
 
-describe("ED_ParseEdict", () => {
+describe.skipIf(!HAVE_QWPROGS)("ED_ParseEdict", () => {
   test("sets classname/origin from a small entity string", () => {
     const ed = EDICT_NUM(20);
     ED_ClearEdict(ed);
@@ -338,7 +342,7 @@ describe("ED_ParseEdict", () => {
 
 //============================================================================
 
-describe("ED_LoadFromFile", () => {
+describe.skipIf(!HAVE_QWPROGS)("ED_LoadFromFile", () => {
   test("QW delta: only SPAWNFLAG_NOT_DEATHMATCH inhibits -- no deathmatch.value/skill-level filtering at all", () => {
     // realistic QW boot state: sv.num_edicts already reserves the MAX_CLIENTS
     // player slots (SV_SpawnServer's job, not this unit's), so ED_Alloc's
@@ -392,7 +396,7 @@ describe("ED_LoadFromFile", () => {
 
 //============================================================================
 
-describe("PR_ExecuteProgram", () => {
+describe.skipIf(!HAVE_QWPROGS)("PR_ExecuteProgram", () => {
   test("runs the retail qwprogs.dat's main() to completion through the stubbed builtin table", () => {
     sv.num_edicts = 1;
     sv.time = 0;
@@ -420,7 +424,7 @@ describe("PR_ExecuteProgram", () => {
 
 //============================================================================
 
-describe("ED_Print / ED_PrintEdicts / ED_PrintEdict_f / ED_Count (QW's header-line delta)", () => {
+describe.skipIf(!HAVE_QWPROGS)("ED_Print / ED_PrintEdicts / ED_PrintEdict_f / ED_Count (QW's header-line delta)", () => {
   test("run over the live edict table without throwing", () => {
     sv.num_edicts = 4;
     for (let i = 0; i < 4; i++) ED_ClearEdict(EDICT_NUM(i));
@@ -443,7 +447,7 @@ describe("ED_Print / ED_PrintEdicts / ED_PrintEdict_f / ED_Count (QW's header-li
   });
 });
 
-describe("PR_Init", () => {
+describe.skipIf(!HAVE_QWPROGS)("PR_Init", () => {
   test("registers edict/edicts/edictcount/profile and no cvars (QW's eleven WinQuake cvars are all gone)", () => {
     expect(() => PR_Init()).not.toThrow();
   });

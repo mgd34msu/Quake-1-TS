@@ -46,6 +46,7 @@ import * as sysModule from "../src/platform/sys";
 import { qwConsoleHooks, Con_Printf as WinQuakeConPrintf } from "../src/client/console";
 import { Con_Printf as SvSendConPrintf, SV_BeginRedirect } from "../src/qw/server/sv_send";
 import { RedirectT } from "../src/qw/server/server";
+import { HAVE_QWPROGS } from "./support/fixture_availability";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -233,6 +234,12 @@ let bootExitCode = -1;
 let snapshot: BootSnapshot | null = null;
 
 beforeAll(() => {
+  // No throw either way: the child script's own buildQwsvFixture() would
+  // throw "missing test fixture" with no QW/progs/qwprogs.dat reachable, but
+  // the describe() below is wrapped in describe.skipIf(!HAVE_QWPROGS), so
+  // there is no point spawning a child doomed to fail for tests that never run.
+  if (!HAVE_QWPROGS) return;
+
   const proc = Bun.spawnSync(["timeout", "120", "bun", "-e", CHILD_SCRIPT], {
     cwd: repoRoot,
     stdin: "ignore",
@@ -256,7 +263,7 @@ function requireSnapshot(): BootSnapshot {
   return snapshot;
 }
 
-describe("Sys_Main_Init + runFrames -- a real qwsv boot", () => {
+describe.skipIf(!HAVE_QWPROGS)("Sys_Main_Init + runFrames -- a real qwsv boot", () => {
   test("the boot process exits cleanly and never reaches SV_Error", () => {
     expect(bootExitCode).toBe(0);
     expect(bootStderr).toBe("");

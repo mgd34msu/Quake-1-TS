@@ -92,6 +92,7 @@ import {
   sv as qwsv,
 } from "../src/qw/server/server";
 import { SV_ClearWorld as QW_SV_ClearWorld } from "../src/qw/server/world";
+import { HAVE_PROGS106, HAVE_QWPROGS } from "./support/fixture_availability";
 
 const PROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
 const QWPROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/QW/progs/qwprogs.dat`;
@@ -176,7 +177,7 @@ describe("string_t bit patterns", () => {
 //============================================================================
 // WinQuake host
 
-describe("src/progs: engine strings survive a float-view copy", () => {
+describe.skipIf(!HAVE_PROGS106)("src/progs: engine strings survive a float-view copy", () => {
   const baseDir = join(scratchDir, "nq", "quake");
 
   beforeAll(() => {
@@ -299,7 +300,7 @@ describe("src/progs: engine strings survive a float-view copy", () => {
 //============================================================================
 // QuakeWorld host
 
-describe("src/qw/server: engine strings survive a float-view copy", () => {
+describe.skipIf(!HAVE_QWPROGS)("src/qw/server: engine strings survive a float-view copy", () => {
   const baseDir = join(scratchDir, "qw", "quake");
 
   beforeAll(() => {

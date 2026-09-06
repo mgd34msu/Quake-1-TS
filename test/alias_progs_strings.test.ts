@@ -13,7 +13,7 @@
 // cmdState) in its own beforeAll/afterAll.
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { COM_CheckRegistered, COM_InitArgv, COM_InitFilesystem, pop } from "../src/common/common";
 import { writePakToDisk } from "./support/pak_builder";
@@ -32,6 +32,7 @@ import { OFS_PARM0, OFS_RETURN } from "../src/progs/pr_comp";
 import { pr } from "../src/progs/progs";
 import { pr_builtin } from "../src/progs/pr_cmds";
 import { ClientT, sv, svs, svState } from "../src/server/server";
+import { HAVE_PROGS106 } from "./support/fixture_availability";
 
 const PROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
 
@@ -40,6 +41,10 @@ mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "alias-strings-test-"));
 const baseDir = join(scratchDir, "quake");
 
+// Set inside beforeAll below, right before this suite starts mutating
+// cmdState.source itself -- capturing it any earlier (e.g. at module load,
+// before other suites in this shared bun test process have run their own
+// tests) would restore the wrong value in afterAll.
 let savedSource = CmdSourceT.src_command;
 
 // pr.globals is `| null` until PR_LoadProgs runs; narrow once per use site.
@@ -50,7 +55,10 @@ function globals(): { f: Float32Array; i: Int32Array } {
 }
 
 beforeAll(() => {
-  if (!existsSync(PROGS_DAT)) throw new Error(`missing test fixture ${PROGS_DAT}`);
+  // No throw: a missing progs106/progs.dat means every describe() below is
+  // wrapped in describe.skipIf(!HAVE_PROGS106), so this beforeAll simply has
+  // nothing to set up for tests that never run.
+  if (!HAVE_PROGS106) return;
   const progsDat = new Uint8Array(readFileSync(PROGS_DAT));
 
   mkdirSync(join(baseDir, "id1"), { recursive: true });
@@ -79,7 +87,10 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  cmdState.source = savedSource;
+  // beforeAll only assigns savedSource (and only mutates cmdState.source at
+  // all, through the tests below) when HAVE_PROGS106 -- nothing to restore
+  // otherwise.
+  if (HAVE_PROGS106) cmdState.source = savedSource;
   svState.host_client = null;
   svState.sv_player = null;
   svs.clients = [];
@@ -94,7 +105,7 @@ afterAll(() => {
 // SV_DropClient, deliberately do NOT re-assign v.netname -- in C they don't have
 // to. The port copied the string value once, so QuakeC kept reading the old name
 // after a drop or a reconnect.
-describe("alias_ WinQuake netname follows later writes to host_client.name", () => {
+describe.skipIf(!HAVE_PROGS106)("alias_ WinQuake netname follows later writes to host_client.name", () => {
   function makeClient(): ClientT {
     const client = new ClientT();
     client.active = true;
@@ -180,7 +191,7 @@ describe("alias_ WinQuake netname follows later writes to host_client.name", () 
 // (pr_cmds.c:934, :947). Two results held at once therefore both read whatever
 // the later call wrote. Minting a fresh engine string per call also grew the
 // table without bound.
-describe("alias_ PF_ftos and PF_vtos share one pr_string_temp buffer", () => {
+describe.skipIf(!HAVE_PROGS106)("alias_ PF_ftos and PF_vtos share one pr_string_temp buffer", () => {
   test("consecutive ftos results are the same string_t and read the later value", () => {
     globals().f[OFS_PARM0] = 5;
     pr_builtin[26]();
@@ -222,7 +233,7 @@ describe("alias_ PF_ftos and PF_vtos share one pr_string_temp buffer", () => {
   });
 });
 
-describe("alias_ PR_SetEngineStringRef vs PR_SetEngineString", () => {
+describe.skipIf(!HAVE_PROGS106)("alias_ PR_SetEngineStringRef vs PR_SetEngineString", () => {
   test("a value string is frozen, a ref string tracks its owner", () => {
     const owner = { name: "before" };
     const byValue = PR_SetEngineString(owner.name);
