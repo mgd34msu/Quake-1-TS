@@ -213,7 +213,7 @@ describe("SV_AirAccelerate", () => {
 
     // prime the module's `wishspeed` to a known, large value -- SV_AirAccelerate's
     // own accelspeed formula reads the module global `wishspeed`, not the
-    // local `wishspd` it just computed (sv_user.c's own bug, kept bug-for-bug).
+    // local `wishspd` it just computed (sv_user.c's own bug, kept exactly as the C has it).
     player.v.movetype = MOVETYPE_NOCLIP;
     player.v.angles[YAW] = 0;
     cmd.forwardmove = 1000;

@@ -52,7 +52,7 @@ Deviations from PORTING.md / the C source:
 - `Host_CheckForNewClients` in SV_CheckForNewClients's `Sys_Error` string is
   a naming mismatch already present in the C source (the function itself is
   `SV_CheckForNewClients`; the error text was never updated when it was
-  renamed) -- kept verbatim, bug-for-bug.
+  renamed) -- kept verbatim, exactly as the original.
 - `GetEdictFieldValue`'s C signature returns an `eval_t *` (null when the
   field doesn't exist); this port's version (pr_edict.ts, U021) returns the
   field's word offset or `-1`. SV_WriteClientdataToMessage's `items2` lookup

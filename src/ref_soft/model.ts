@@ -64,7 +64,7 @@ Deviations from PORTING.md / the C source:
   Mod_LoadAliasFrame calls; `strcpy` there means each subframe's name
   overwrites the last, so the group's maliasframedesc_t.name ends up holding
   the LAST subframe's name once the loop finishes. That emergent behaviour
-  (not read by anything in v1.09) is preserved bug-for-bug: Mod_LoadAliasGroup
+  (not read by anything in v1.09) is preserved exactly as the C has it: Mod_LoadAliasGroup
   returns the last subframe's name and Mod_LoadAliasModel/its group path
   assigns it to the outer MaliasframedescT.name.
 - Mod_LoadAliasSkinGroup's C never sets `paliasskingroup->skindescs[i].type`

@@ -35,7 +35,7 @@ Deviations from PORTING.md / the C source:
   version is unconditional: pressing Enter/Right-arrow at options_cursor 13
   toggles `cl_hudswap` AND falls through into also toggling
   `_windowed_mouse`. Ported as a real fallthrough (no `break` between the
-  two `case` bodies), per the bug-for-bug rule, not "fixed".
+  two `case` bodies), per the exactly as the original rule, not "fixed".
 - The "Use Mouse" item (`_windowed_mouse`, options_cursor 15) is likewise
   unconditional on this port's portable (non-`_WIN32`) path: QW's
   `M_Options_Draw` wraps only the `if (modestate == MS_WINDOWED)` braces in
@@ -517,7 +517,7 @@ export function M_AdjustSliders(dir: number): void {
     // `_windowed_mouse`'s own header comment in sdl.ts). This menu item still
     // toggles and displays the cvar exactly as the C does, for config-file
     // compatibility with a saved `_windowed_mouse "0"|"1"`; it is otherwise
-    // inert. Not fixed/removed here -- bug-for-bug fidelity to the C, per
+    // inert. Not fixed/removed here -- exact fidelity to the C, per
     // standing order 4.
     case 15: // _windowed_mouse
       Cvar_SetValue("_windowed_mouse", _windowed_mouse.value ? 0 : 1);

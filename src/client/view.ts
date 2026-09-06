@@ -124,7 +124,7 @@ deltas are folded in place here rather than a wholesale src/qw/client/view.ts):
   V_AddIdle's YAW/PITCH sway on the gun model is immediately overwritten by
   CalcGunAngle and only the ROLL sway survives, where WinQuake's placement (at
   CalcGunAngle's own end, after it sets YAW/PITCH) keeps all three axes. Ported
-  bug-for-bug: CalcGunAngle only appends its three lines `if (!qw.active)`,
+  exactly as the original: CalcGunAngle only appends its three lines `if (!qw.active)`,
   V_AddIdle only appends them `if (qw.active)`.
 - `V_BoundOffsets`: bounds `cl.qw.simorg` instead of
   `cl_entities[cl.viewentity].origin`. QW's V_CalcRefdef never actually calls

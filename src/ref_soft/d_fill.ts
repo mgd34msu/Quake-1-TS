@@ -16,7 +16,7 @@ Deviations from PORTING.md / the C source:
 - `vid.buffer` is `| null` until the video backend allocates it; the C would
   dereference a null pointer, so this port raises Sys_Error.
 - PRESERVED C BUG: the bottom clamp is `rheight = vid.height - rx` (the C uses
-  rx where ry is meant). Kept bug-for-bug per PORTING.md.
+  rx where ry is meant). Kept exactly as the original per PORTING.md.
 - Dropped: nothing. d_fill.c has no #ifdef branches.
 */
 

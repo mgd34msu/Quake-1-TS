@@ -445,7 +445,7 @@ export function R_DrawSequentialPoly(s: MsurfaceT): void {
   // dead code there too (never implemented here -- it cannot run) and every
   // non-SURF_DRAWTURB surface, including plain opaque walls, falls all the
   // way through the SURF_DRAWSKY check into the underwater-warp-with-lightmap
-  // tail unconditionally. Bug-for-bug.
+  // tail unconditionally. Exactly as the original.
   if (qw.active) {
     if (s.flags & SURF_DRAWTURB) {
       GL_Bind(texinfo.texture.gl_texturenum);

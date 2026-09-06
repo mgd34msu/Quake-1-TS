@@ -32,7 +32,7 @@ Deviations from PORTING.md / the C source:
   -- walks `avelocities` as one flat array of 486 floats through the
   `avelocities[0]` sub-array, aliasing past the first vec3_t into every
   following one. A flat Float32Array reproduces that addressing exactly.
-  The lazy-init guard (`avelocities[0][0] === 0`) is preserved bug-for-bug:
+  The lazy-init guard (`avelocities[0][0] === 0`) is preserved exactly as the C has it:
   since `(rand()&255)*0.01` can legitimately produce exactly 0 (rand()&255
   == 0, a 1-in-256 chance), the C can occasionally re-run this
   "one-time" init later in the game; this port reproduces that, not "fixes" it.

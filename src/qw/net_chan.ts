@@ -27,7 +27,7 @@ Deviations from the brief / from Quake 2's net_chan.ts:
   `drop_count`, incremented by exactly 1 per drop event -- never by the gap
   size). The gap size itself lands in `net_drop`, a *module-level* global
   (`extern int net_drop;` in net.h), not a per-channel field. Ported
-  bug-for-bug: `net_drop` is this module's exported mutable binding;
+  exactly as the original: `net_drop` is this module's exported mutable binding;
   `chan.drop_count` only ever counts events. Likewise the two ring-buffer
   fields are named `outgoing_size`/`outgoing_time` in the real struct (the
   brief guessed "incoming_size/incoming_time"); both are written in

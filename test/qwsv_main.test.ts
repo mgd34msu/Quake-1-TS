@@ -316,7 +316,7 @@ describe.skipIf(!HAVE_QWPROGS)("StringToFilter", () => {
     expect(f.compare >>> 0).toBe(((1 << 16) | (168 << 8) | 192) >>> 0);
   });
 
-  test("a zero octet gets no mask byte -- id's own rule, ported bug-for-bug", () => {
+  test("a zero octet gets no mask byte -- id's own rule, ported to match the C exactly", () => {
     const f = new IpfilterT();
     expect(StringToFilter("10.0.0.1", f)).toBe(true);
     expect(f.mask >>> 0).toBe(0xff0000ff);

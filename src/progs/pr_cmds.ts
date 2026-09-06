@@ -48,7 +48,7 @@ Deviations from the C source:
   bounding-box branch is live code but permanently unreachable (not an
   `#if 0` -- the C really compiles and carries it, it just never runs). This
   port keeps both branches for the same reason PORTING.md asks for
-  bug-for-bug fidelity; the `rotate` C parameter is renamed `rotateArg` here
+  exact fidelity; the `rotate` C parameter is renamed `rotateArg` here
   purely because a second local named `rotate` (the always-false override)
   shadows it, and is otherwise unused, exactly as in the C.
 - `PF_checkclient`/`PF_newcheckclient`'s `checkpvs[MAX_MAP_LEAFS/8]` is a

@@ -70,7 +70,7 @@ Deviations from PORTING.md / the C source:
 - `strcpy (sv.name, server)` (called twice in the C, once before PR_LoadProgs
   and again after -- both assignments are identical, the second is a no-op
   repeat) is ported as two identical `sv.name = server;` assignments, kept
-  bug-for-bug rather than de-duplicated, matching PORTING.md's "preserve
+  exactly as the original rather than de-duplicated, matching PORTING.md's "preserve
   original... logic" rule (a harmless redundant write, not a bug worth
   silently dropping).
 - `sprintf (sv.modelname,"maps/%s.bsp", server)`: `%s`-only, ported as a

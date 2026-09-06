@@ -31,7 +31,7 @@ Deviations from PORTING.md / the C source:
   anything from common.ts.
 - MSG_ReadFloat has no bounds check in the C (unlike ReadChar/Byte/Short/
   Long, which all set msg_badread and return -1 past cursize) -- ported
-  bug-for-bug: no check here either. Where the C would then read whatever
+  exactly as the original: no check here either. Where the C would then read whatever
   bytes happen to sit past cursize (still inside the allocated buffer, since
   SZ_Alloc's allocation is `maxsize` bytes), this port reads the same way but
   substitutes 0 for indices past `net_message.data`'s own length (JS typed
@@ -51,7 +51,7 @@ Deviations from PORTING.md / the C source:
   which returns `(signed char)` of the raw byte) means a string byte whose
   raw value is 0xFF reads back as -1 and is indistinguishable from "no more
   data" -- MSG_ReadString stops there. This is the C's actual behavior, not
-  a porting bug, and is preserved bug-for-bug; see test/sizebuf.test.ts.
+  a porting bug, and is preserved exactly as the C has it; see test/sizebuf.test.ts.
 */
 
 import { Sys_Error } from "../platform/sys";

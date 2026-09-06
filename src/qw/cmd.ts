@@ -51,14 +51,14 @@ Deviations from PORTING.md / the C source:
   `Cvar_Command()` here checks `Cmd_Argv(0)` ("exec") against `cvar_vars`,
   which is never a defined cvar name in practice, so the call is effectively
   inert; ported verbatim (this module's own `Cvar_Command`, src/qw/cvar.ts)
-  rather than simplified, per PORTING.md's bug-for-bug rule. Also unlike
+  rather than simplified, per PORTING.md's exactly as the original rule. Also unlike
   WinQuake's landed `Cmd_Exec_f`, QW's never calls `Hunk_FreeToLowMark` on the
   "couldn't exec" failure path either (same asymmetry already noted in
   src/common/cmd.ts, preserved here too).
 - `cl_warncmd` (`cvar_t cl_warncmd = {"cl_warncmd", "0"};`, file-scope in
   cmd.c): declared but **never registered** via `Cvar_RegisterVariable`
   anywhere in the QW client tree (checked cmd.c, cl_main.c, cl_parse.c,
-  client.h) -- a real bug in the shipped source, preserved bug-for-bug per
+  client.h) -- a real bug in the shipped source, preserved exactly as the C has it per
   PORTING.md rather than "fixed" by registering it here. cl_parse.c's
   `Cbuf_AddText ("cl_warncmd 1\n")` server-forced toggle would therefore print
   "Cvar_Set: variable cl_warncmd not found" and never actually change

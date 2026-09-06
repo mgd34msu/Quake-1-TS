@@ -51,7 +51,7 @@ each verified directly against QW/client/console.c's own body (not assumed):
   `con_main`/`con_chat` -- it is a plain duplicate of `toggleconsole`, and
   `con_chat` is otherwise-dead state in retail QW 2.33 (still resized by
   Con_CheckResize, never displayed since `con` never points at it). Ported
-  bug-for-bug: both functions are separate exports with identical bodies,
+  exactly as the original: both functions are separate exports with identical bodies,
   neither touches `conState.con`. (The unit brief's TEST section assumed
   Con_ToggleChat_f swaps `con`; it does not, per the source actually read --
   see this unit's report.)
@@ -70,7 +70,7 @@ each verified directly against QW/client/console.c's own body (not assumed):
   scalar in QW at all -- the backscroll indicator in Con_DrawConsole compares
   `con->display != con->current` directly.
 - `Con_CheckResize`/`Con_Resize(console_t*)`: QW's own quirk, preserved
-  bug-for-bug -- `Con_Resize` early-returns as soon as the freshly computed
+  exactly as the original -- `Con_Resize` early-returns as soon as the freshly computed
   `(vid.width>>3)-2` equals the *global* `con_linewidth`, which the first
   call (con_main) already updated. So once `vid.width` has a real value,
   `Con_CheckResize`'s second call (con_chat) is a same-width no-op that never

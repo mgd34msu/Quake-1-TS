@@ -262,7 +262,7 @@ export function SV_AirAccelerate(wishveloc: Vec3): void {
   const addspeed = wishspd - currentspeed;
   if (addspeed <= 0) return;
   //	accelspeed = sv_accelerate.value * host_frametime;
-  let accelspeed = sv_accelerate.value * wishspeed * host.frametime; // note: the C's own `wishspeed` here is this module's global, not the local `wishspd` -- kept bug-for-bug
+  let accelspeed = sv_accelerate.value * wishspeed * host.frametime; // note: the C's own `wishspeed` here is this module's global, not the local `wishspd` -- kept exactly as the C has it
   if (accelspeed > addspeed) accelspeed = addspeed;
 
   for (let i = 0; i < 3; i++) velocity[i] += accelspeed * wishveloc[i];

@@ -35,7 +35,7 @@ Deviations from PORTING.md / the C source:
   ent->v.angles[1]; cmd.angles[0] = 0;` (inside the `ent->v.health <= 0`
   branch): the C really does assign `angles[0]` twice and never touches
   `angles[2]` -- read directly from the source, not a transcription slip.
-  Ported verbatim, bug-for-bug, per this port's "faithful port" rule; not
+  Ported verbatim, exactly as the original, per this port's "faithful port" rule; not
   "fixed" to the evidently-intended `angles[2] = 0`.
 - `cmd = cl->lastcmd;` (C struct-copy-by-value) is ported as a fresh
   `QwUsercmdT` with every field copied individually (`VectorCopy` for

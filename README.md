@@ -1,6 +1,6 @@
 # Quake 1 TS
 
-A faithful, bug-for-bug port of id Software's 1999 GPL Quake sources to
+A faithful port of id Software's 1999 GPL Quake sources to
 TypeScript, running on [Bun](https://bun.sh). It covers WinQuake 1.09 with
 **both** the software renderer and the OpenGL renderer, and QuakeWorld 2.33's
 client and server. Every `.c` file became one `.ts` module under strict

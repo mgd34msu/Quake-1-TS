@@ -207,7 +207,7 @@ describe("MSG_Write*/MSG_Read* roundtrip", () => {
   test("a 0xff byte reads back as MSG_ReadChar's -1 sentinel and truncates MSG_ReadString", () => {
     // (signed char)0xff == -1, the same value MSG_ReadChar returns for "no
     // more data" -- MSG_ReadString's `c == -1` check cannot tell them apart.
-    // This is the C's actual behavior (bug-for-bug), not a porting bug.
+    // This is the C's actual behavior (exactly as the original), not a porting bug.
     const s = String.fromCharCode(65, 66, 0xff, 67, 68);
     MSG_WriteString(buf, s);
     beginReadingFrom(buf);

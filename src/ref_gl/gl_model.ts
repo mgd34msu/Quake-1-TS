@@ -95,7 +95,7 @@ Deviations from PORTING.md / the C source:
   pixel bytes, repeatedly re-filling (and further corrupting on each
   re-entry, since 255 is left behind as a visited marker) memory that has
   nothing to do with the skin actually being uploaded that iteration. This is
-  preserved bug-for-bug: `skin` here is a single `Uint8Array.subarray` view
+  preserved exactly as the C has it: `skin` here is a single `Uint8Array.subarray` view
   computed once, reused unchanged across the whole function.
 - Mod_LoadAliasFrame/Mod_LoadAliasGroup's C assigns `frame->bboxmin.v[i]`
   TWICE in the same loop -- once from the source's bboxmin, once from its
@@ -104,7 +104,7 @@ Deviations from PORTING.md / the C source:
     frame->bboxmin.v[i] = pdaliasframe->bboxmax.v[i];
   The second write wins, so `frame.bboxmin` ends up holding the SOURCE's
   bboxMAX, and `frame.bboxmax` (MaliasframedescT's own field) is never
-  written, staying at `new TrivertxT()`'s zero default. Preserved bug-for-bug
+  written, staying at `new TrivertxT()`'s zero default. Preserved exactly as the C has it
   in both Mod_LoadAliasFrame and Mod_LoadAliasGroup below; ref_soft's
   same-named functions do NOT have this bug (model.c's software copies read
   both fields correctly), so this is a genuine gl_model.c-only defect, not a

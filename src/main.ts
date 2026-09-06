@@ -41,7 +41,7 @@ Deviations from the C:
   is ported as written, using net_main.ts's `vcrState` (`vcrFile == -1` ->
   `vcrState.playbackHandle === null`, `recording` -> `vcrState.recording`),
   which is the file's own home for those two globals (see net_main.ts's file
-  header). Standing order 4 (bug-for-bug fidelity) over a coordination
+  header). Standing order 4 (exact fidelity) over a coordination
   brief's abbreviated pseudocode that dropped this clause.
 - `parms.basedir = basedir` reads sys_linux.c's own file-scope
   `char *basedir = ".";` (line 26); ported as the literal `"."` this port's

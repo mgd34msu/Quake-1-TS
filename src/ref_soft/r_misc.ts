@@ -31,7 +31,7 @@ Deviations from PORTING.md / the C source:
 - R_SetupFrame's `r_draworder.value = 0;` writes the cvar's numeric field
   without updating its string, exactly as the C does. It is a cheat guard
   (`don't let cheaters look behind walls`), not a Cvar_Set, and is kept
-  bug-for-bug.
+  exactly as the original.
 - `VID_Update`/`VID_LockBuffer`/`VID_UnlockBuffer`/`VID_ShiftPalette` are
   members of src/client/vid.ts's `VidBackend`, reached through
   `vidBackend.current?.`, because this port picks the video backend at
@@ -64,7 +64,7 @@ QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
 - `R_TimeGraph` gains `a = graphval;` after the same commented-out debug
   expressions WinQuake has -- `graphval` is a QW file-scope `int`, exported
   here, never assigned by any QW v2.33 client file (dead debug hook, kept
-  bug-for-bug, always reads 0).
+  exactly as the original, always reads 0).
 - `R_NetGraph`/`R_ZGraph` are QW-only additions (no WinQuake counterpart in
   this file). Call site and `r_netgraph`/`r_zgraph` cvar registration are in
   r_main.ts's R_Init/R_RenderView_, matching where QW's r_main.c puts them.
@@ -368,7 +368,7 @@ let timex = 0; // static int timex
 const r_timings = new Uint8Array(MAX_TIMINGS); // static byte r_timings[MAX_TIMINGS]
 // QW r_misc.c: `int graphval;`, file-scope, never assigned anywhere in QW
 // v2.33's client tree -- dead debug hook (a = graphval; always reads 0), kept
-// bug-for-bug since PORTING.md doesn't let a worker "improve" a C oddity.
+// exactly as the original since PORTING.md doesn't let a worker "improve" a C oddity.
 export let graphval = 0;
 
 export function R_TimeGraph(): void {

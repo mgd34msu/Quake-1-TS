@@ -85,7 +85,7 @@ QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
   to the suppression check, and reads the invisibility bit from
   `cl.stats[STAT_ITEMS]` (src/qw/bothdefs.ts) instead of `cl.items`.
 - `R_InitTurb`'s loop bound is the literal 1280 under qw.active instead of
-  `SIN_BUFFER_SIZE` (1408 in this tree) -- a QW bug, kept bug-for-bug: see the
+  `SIN_BUFFER_SIZE` (1408 in this tree) -- a QW bug, kept exactly as the C has it: see the
   comment at the call site.
 - `currententity = cl_visedicts[i]` vs `&cl_visedicts[i]`: a C
   pointer-vs-value representation detail with no TS-observable difference
@@ -1061,7 +1061,7 @@ export function R_InitTurb(): void {
   // SIN_BUFFER_SIZE (1280 + CYCLE = 1408 in this tree's r_shared.h/.ts, which
   // is unchanged between WinQuake and QW): a genuine QW bug that leaves
   // sintable/intsintable[1280..1407] at their zero-initialized value. Kept
-  // bug-for-bug per PORTING.md.
+  // exactly as the original per PORTING.md.
   const bound = qw.active ? 1280 : SIN_BUFFER_SIZE;
   for (i = 0; i < bound; i++) {
     sintable[i] = (AMP + Math.sin((i * 3.14159 * 2) / CYCLE) * AMP) | 0;

@@ -5,7 +5,7 @@ Ported from WinQuake/chase.c (GNU GPL v2 or later).
 chase.c -- chase camera code
 
 Deviations from PORTING.md / the C source:
-- `TraceLine`'s `memset (&trace, 0, sizeof(trace))` is preserved bug-for-bug.
+- `TraceLine`'s `memset (&trace, 0, sizeof(trace))` is preserved exactly as the C has it.
   Every other trace_t caller this port has ported so far (SV_ClipMoveToEntity
   in src/server/world.ts, and gl_test.c's identical prologue) sets
   `trace.fraction = 1; trace.allsolid = true; VectorCopy (end, trace.endpos)`

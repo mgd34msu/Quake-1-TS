@@ -55,7 +55,7 @@ entry to index `numgltextures` WITHOUT growing the count. That means:
     an index less than the current `numgltextures`, which is the only
     range ever searched. The identifier cache -- and the "cache mismatch"
     Sys_Error inside it -- is dead code in the shipped engine, preserved
-    bug-for-bug. The test below demonstrates this directly instead of
+    exactly as the original. The test below demonstrates this directly instead of
     asserting the (incorrect) dedup premise.
 */
 
@@ -381,7 +381,7 @@ describe("gl_draw.ts (WinQuake gl_draw.c)", () => {
     }
   });
 
-  test("GL_LoadTexture's identifier cache is provably dead code (bug-for-bug, see file header)", () => {
+  test("GL_LoadTexture's identifier cache is provably dead code (exactly as the original, see file header)", () => {
     const data = new Uint8Array(64).fill(3);
 
     // two back-to-back calls with the SAME identifier and SAME dimensions:

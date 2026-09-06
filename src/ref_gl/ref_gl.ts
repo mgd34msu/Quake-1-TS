@@ -119,7 +119,7 @@ Deviations from PORTING.md / the C source:
   r_refdef.vrect.width` (the C is missing the parentheses that would make it
   `vid.width - (x + width)`), and the top rect passes `r_refdef.vrect.x +
   r_refdef.vrect.width` as its WIDTH argument rather than a width. Both are
-  ported as written, per PORTING.md's bug-for-bug rule.
+  ported as written, per PORTING.md's exactly as the original rule.
 - SCR_ScreenShot_f keeps gl_screen.c's own naming and message text: the
   local is `pcxname` and the failure prints "Couldn't create a PCX file"
   even though the file it writes is a TGA. `malloc`/`free` become one

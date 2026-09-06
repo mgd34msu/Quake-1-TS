@@ -71,7 +71,7 @@ Deviations from PORTING.md / the C source:
   one `Cvar_RegisterVariable (&gl_ztrick)` line gl_vidlinuxglx.c's VID_Init
   has -- gl_rmisc.c's R_Init does not register it.
 - `gl_doubleeyes`'s cvar NAME is "gl_doubleeys" in the C (gl_rmain.c:99, a
-  shipped typo). Kept bug-for-bug.
+  shipped typo). Kept exactly as the original.
 - The `GLfloat colors[4]` local in R_RenderView exists only for the
   commented-out "Experimental silly looking fog" block; the block stays a
   comment and the local is dropped with it.
@@ -91,7 +91,7 @@ qw.active:
   cvar_t initializer). The override is applied in gl_rmisc.ts's R_Init (this
   file only declares the cvar), see that file's header.
 - `gl_doubleeyes` (this port's `gl_doubleeys`, a shipped typo already kept
-  bug-for-bug) is dropped from QW entirely -- both its declaration and its
+  exactly as the original) is dropped from QW entirely -- both its declaration and its
   read at R_DrawAliasModel's eyes.mdl special case
   (`if (!strcmp(clmodel->name,"progs/eyes.mdl"))`, no cvar guard). Folded at
   the read site below; the cvar itself stays declared and registered (QW
@@ -135,8 +135,8 @@ qw.active:
   WinQuake has no STAT_ITEMS at all).
 - R_DrawSpriteModel: QW's gl_rmain.c has `glEnable(GL_ALPHA_TEST);
   glBegin(GL_QUADS);` twice in a row (a shipped duplicate-statement bug, not
-  a functional QW feature). Kept bug-for-bug under qw.active per PORTING.md
-  rule 4 (faithful, bug-for-bug) -- the redundant pair is harmless GL state
+  a functional QW feature). Kept exactly as the original under qw.active per PORTING.md
+  rule 4 (faithful, exactly as the original) -- the redundant pair is harmless GL state
   (re-entering an already-enabled cap, re-beginning inside no other GL call).
 - `R_Init`'s `playertextures` reservation: WinQuake reserves a fixed 16
   texture slots (`texture_extension_number += 16`); QW reserves
@@ -400,7 +400,7 @@ export function R_DrawSpriteModel(e: EntityT): void {
   qgl().qglBegin(GL_QUADS);
   if (qw.active) {
     // QW/client/gl_rmain.c has this pair twice in a row -- a shipped
-    // duplicate-statement bug (see file header), kept bug-for-bug.
+    // duplicate-statement bug (see file header), kept exactly as the C has it.
     qgl().qglEnable(GL_ALPHA_TEST);
     qgl().qglBegin(GL_QUADS);
   }

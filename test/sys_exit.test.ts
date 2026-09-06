@@ -250,7 +250,7 @@ console.log("SYSEXIT_MUST_NOT_PRINT_AFTER_QUIT");
     // file header, "CL_Quit_f's always-true if(1)... Kept verbatim"), so the
     // "quit" console command can never reach `CL_Disconnect();Sys_Quit();`
     // in the real client either -- it always opens the confirm menu. The
-    // real exit path (also faithfully bug-for-bug, src/qw/client/menu.ts's
+    // real exit path (also faithfully exactly as the original, src/qw/client/menu.ts's
     // own file header) is M_Quit_Key's 'y'/'Y' case, which calls
     // `CL_Disconnect(); Sys_Quit();` directly, bypassing CL_Quit_f entirely.
     const fixture = buildQwclFixture("sysexit-qwcl-consolequit-");

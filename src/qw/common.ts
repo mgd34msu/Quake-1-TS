@@ -226,7 +226,7 @@ Deviations from PORTING.md / the C source:
   com_filesize in the C (only the pack branch does -- read directly from the
   source, lines ~1510-1528: the non-pack branch's `return COM_filelength
   (*file);` never touches the `com_filesize` global). This is preserved
-  bug-for-bug: COM_FOpenFile itself only sets com_filesize on a pack hit.
+  exactly as the original: COM_FOpenFile itself only sets com_filesize on a pack hit.
   COM_LoadFile (this file's private wrapper, matching `len = com_filesize =
   COM_FOpenFile(path, &h);` in the C) separately assigns com_filesize from
   its own captured return value regardless of which branch matched, exactly

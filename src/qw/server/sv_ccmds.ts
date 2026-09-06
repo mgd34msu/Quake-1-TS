@@ -40,7 +40,7 @@ Deviations from PORTING.md / the C source:
   `Cmd_Argc()!=4` check below, which is also true in this branch, so it also
   prints the "Usage: floodprot ..." lines. This looks like a missing
   `return`, but it is what the source does -- ported verbatim, not "fixed"
-  with an added `return`, per this port's bug-for-bug rule.
+  with an added `return`, per this port's exactly as the original rule.
 - `SV_Fraglogfile_f`'s `sv_fraglogfile = fopen(name,"w"); if (!sv_fraglogfile)
   i=1000;`: src/platform/sys.ts's `Sys_FileOpenWrite` throws (Sys_Error) on
   failure rather than returning a null-like sentinel the way `fopen` does

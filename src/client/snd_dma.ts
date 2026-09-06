@@ -81,7 +81,7 @@ Deviations from PORTING.md / the C source:
   fails, and the subsequent `if (combine != ch)` silently no-ops. This is
   reproduced exactly with a `while` loop that increments `j`/`combineIdx` in
   lockstep the same way, preserving the C's `j === total_channels` check
-  bug-for-bug rather than "fixing" it to `j === i`.
+  exactly as the original rather than "fixing" it to `j === i`.
 
 QuakeWorld fold (PORTING.md's "QuakeWorld track", `qw.active`; see
 ../qsrc/quake/QW/client/snd_dma.c against WinQuake/snd_dma.c):

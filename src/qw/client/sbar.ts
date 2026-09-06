@@ -51,7 +51,7 @@ Deviations from PORTING.md / the C source:
   the raw 0-13 `topcolor`/`bottomcolor` ints straight through, so QW's
   `Sbar_ColorForMap` does the `*16` itself. Ported with its own (identical
   both ways) `m < 128 ? m + 8 : m + 8` tail preserved verbatim, per the
-  bug-for-bug rule, even though both branches are the same expression.
+  exactly as the original rule, even though both branches are the same expression.
 - The `#ifdef GLQUAKE` block at the end of `Sbar_Draw` (the `sb_updates = 0`
   reset and the `Draw_TileClear` call) is ported unconditionally through the
   renderer seam, per the unit brief and PORTING.md's renderer-seam section:

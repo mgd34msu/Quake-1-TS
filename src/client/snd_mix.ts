@@ -61,7 +61,7 @@ Deviations from PORTING.md / the C source:
   paint buffer instead of continuing where the first pass left off -- a
   latent bug in the original (unreachable in practice, since real loop
   lengths vastly exceed one `PAINTBUFFER_SIZE` chunk) that this port
-  preserves bug-for-bug rather than silently fixing with an offset.
+  preserves exactly as the original rather than silently fixing with an offset.
 */
 
 import {

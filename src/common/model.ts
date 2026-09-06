@@ -1675,7 +1675,7 @@ export function Mod_LoadBrushModel(mod: ModelT, buffer: Uint8Array): void {
     if (qw.active) {
       // QW/client/model.c reorders this ahead of the VectorCopy calls below,
       // so it reads the PREVIOUS submodel's mins/maxs (or the zeroed initial
-      // values on the first submodel) rather than this one's -- bug-for-bug.
+      // values on the first submodel) rather than this one's -- exactly as the original.
       model.radius = RadiusFromBounds(model.mins, model.maxs);
       VectorCopy(bm.maxs, model.maxs);
       VectorCopy(bm.mins, model.mins);

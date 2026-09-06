@@ -64,7 +64,7 @@ Deviations from PORTING.md / the C source:
   (an unreliable message), it falls straight to `VCR_ReadNext()` after
   reading just the 4-byte `ret`, leaving the recorded `len`+data bytes
   unconsumed in the stream. This is a latent bug in the shipped engine
-  (the same one PORTING.md's "bug-for-bug" rule preserves elsewhere in this
+  (the same one PORTING.md's "exactly as the original" rule preserves elsewhere in this
   unit); it is reproduced literally, not fixed.
 - `qboolean`-typed `ret` in `VCR_CanSendMessage` is read with the same
   `sizeof(int)`-wide `Sys_FileRead` the C uses (`qboolean` is a plain `enum`

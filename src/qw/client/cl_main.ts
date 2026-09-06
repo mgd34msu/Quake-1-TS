@@ -76,7 +76,7 @@ Deviations from PORTING.md / the C source:
   behind the same always-true condition.
 - CL_FullServerinfo_f reads the key `"*vesion"` (sic, a typo in the C for
   "*version"), so the version print never fires against a real server.
-  Preserved bug-for-bug.
+  Preserved exactly as the C has it.
 - `cls.qw.download` is `FILE *download` opened "wb". src/common/common.ts's
   `FileHandle` is the port's FILE* stand-in but its COM_FRead is read-only,
   so downloads are written through `Sys_FileWrite(cls.qw.download.fd, ...)`

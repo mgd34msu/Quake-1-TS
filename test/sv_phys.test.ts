@@ -279,7 +279,7 @@ describe.skipIf(!HAVE_PROGS106)("SV_Physics_Toss", () => {
     // ClipVelocity's backoff=1.5 on a (0,0,1) floor normal gives -0.5*in.
     const velocityAtImpact = -1000 - sv_gravity.value * host.frametime;
     expect(e.v.velocity[2]).toBeCloseTo(-0.5 * velocityAtImpact, 3);
-    expect(e.v.velocity[2]).toBeGreaterThan(60); // stays airborne (bug-for-bug: only <60 or non-BOUNCE stops)
+    expect(e.v.velocity[2]).toBeGreaterThan(60); // stays airborne (exactly as the original: only <60 or non-BOUNCE stops)
     expect((e.v.flags | 0) & FL_ONGROUND).toBe(0);
   });
 });

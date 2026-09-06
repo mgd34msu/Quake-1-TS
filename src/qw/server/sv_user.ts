@@ -32,7 +32,7 @@ Deviations from PORTING.md / the C source:
   decrements it inside SV_ExecuteClientMessage's replay loop. An imported
   ESM binding cannot be assigned directly, so the replay loop decrements the
   real global through net_chan.ts's exported `setNetDrop` setter, matching
-  the C's `net_drop--` bug-for-bug (Netchan_Process recomputes it on the
+  the C's `net_drop--` exactly as the original (Netchan_Process recomputes it on the
   next packet regardless).
 - `Con_Printf`/`Con_DPrintf` are QW/server/sv_send.c's own (redirect-aware)
   versions, in src/qw/server/sv_send.ts -- qwsv has no console.c, so
@@ -62,7 +62,7 @@ Deviations from PORTING.md / the C source:
 - `strncmp(name, "maps/", 6)` in SV_BeginDownload_f's `allow_download_maps`
   arm compares six bytes of a five-byte literal, i.e. it also compares the
   terminating NUL: it is true only when `name` is exactly "maps/". Preserved
-  bug-for-bug as `name === "maps/"`; the neighbouring `strncmp(name,
+  exactly as the original as `name === "maps/"`; the neighbouring `strncmp(name,
   "maps/", 5)` (pak check) really is a prefix test and is ported as one.
 - The C lowercases `name` in place, mutating `Cmd_Argv(1)`'s own buffer.
   `Cmd_Argv` returns an immutable string here, so a lowercased copy is used.

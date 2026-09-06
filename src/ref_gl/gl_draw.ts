@@ -55,7 +55,7 @@ RULINGS (reported per this unit's brief):
 
 Deviations from PORTING.md / the C source:
 - GL_LoadTexture's identifier cache has a real, reproducible bug in the
-  shipped C, ported here VERBATIM (bug-for-bug, per PORTING.md/preferences
+  shipped C, ported here VERBATIM (exactly as the original, per PORTING.md/preferences
   rule 4): when `identifier` is non-empty and NOT found in the existing
   `[0, numgltextures)` range, the C's search loop ends with
   `glt == &gltextures[numgltextures]` (i and glt both walked in lockstep to

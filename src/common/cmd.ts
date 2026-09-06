@@ -33,7 +33,7 @@ Deviations from PORTING.md / the C source:
 - `Cmd_Exec_f`: `Hunk_LowMark`/`Hunk_FreeToLowMark` (./zone) are called in
   the same order as the C, including *not* calling `Hunk_FreeToLowMark` on
   the "couldn't exec" failure path -- that asymmetry is in the original and
-  is preserved bug-for-bug. `COM_LoadHunkFile`'s
+  is preserved exactly as the C has it. `COM_LoadHunkFile`'s
   buffer carries one trailing NUL byte (common.ts's ruling); it is trimmed
   before the bytes are decoded, matching the C's `Cbuf_InsertText(f)` running
   through `Q_strlen` and stopping short of that NUL.
