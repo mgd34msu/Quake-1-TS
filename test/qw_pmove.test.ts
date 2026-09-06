@@ -524,3 +524,167 @@ describe("PlayerMove — stability", () => {
     }
   });
 });
+
+describe("PlayerMove — jump at the height a landing leaves the player at", () => {
+  // PM_CatagorizePosition ends every grounded PlayerMove with
+  // `VectorCopy (tr.endpos, pmove.origin)`, and PM_RecursiveHullCheck puts
+  // that endpos DIST_EPSILON (1/32) above the plane it stopped on. So a
+  // player standing still rests at floor + 0.03125, and the next command's
+  // one-unit ground trace (origin -> origin - 1) has to find the floor from
+  // there. These pin that height and the pressed-after-a-release jump that
+  // depends on it.
+  const RESTING = 0.03125;
+
+  test("a landed player rests DIST_EPSILON above the floor", () => {
+    VectorCopy(vec3(0, 0, 40), pmove.origin);
+    pmove.cmd.msec = 50;
+    for (let i = 0; i < 20; i++) PlayerMove();
+    expect(pmState.onground).toBe(0);
+    expect(pmove.origin[2]).toBe(RESTING);
+  });
+
+  test("the one-unit ground trace still finds the floor at that height", () => {
+    for (const z of [0, RESTING, RESTING / 2, RESTING * 2, 0.9]) {
+      VectorCopy(vec3(0, 0, z), pmove.origin);
+      pmove.velocity.fill(0);
+      PM_CatagorizePosition();
+      expect(pmState.onground).toBe(0);
+    }
+  });
+
+  test("BUTTON_JUMP pressed once after a release adds 270 from the resting height", () => {
+    VectorCopy(vec3(0, 0, RESTING), pmove.origin);
+    pmove.cmd.msec = 50;
+
+    // a released frame, exactly as PlayerMove's `else pmove.oldbuttons &= ~BUTTON_JUMP`
+    pmove.oldbuttons = BUTTON_JUMP;
+    pmove.cmd.buttons = 0;
+    PlayerMove();
+    expect(pmove.oldbuttons & BUTTON_JUMP).toBe(0);
+    expect(pmove.origin[2]).toBe(RESTING);
+
+    pmove.cmd.buttons = BUTTON_JUMP;
+    PlayerMove();
+    // 270 from JumpButton, then PM_AirMove's one frame of gravity (800 * 0.05)
+    expect(pmove.velocity[2]).toBeCloseTo(230, 3);
+    expect(pmState.onground).toBe(-1);
+    expect(pmove.oldbuttons & BUTTON_JUMP).toBe(BUTTON_JUMP);
+  });
+
+  test("oldbuttons round-trips through a hold, a release and a re-press", () => {
+    // The server keeps this latch in host_client->oldbuttons across commands
+    // (sv_user.c: pmove.oldbuttons = host_client->oldbuttons ... then
+    // host_client->oldbuttons = pmove.oldbuttons), so a whole hop's worth of
+    // held commands must produce exactly one +270.
+    VectorCopy(vec3(0, 0, RESTING), pmove.origin);
+    pmove.cmd.msec = 14;
+    pmove.cmd.buttons = BUTTON_JUMP;
+
+    let hostOldbuttons = 0;
+    let jumps = 0;
+    let airborneFrames = 0;
+    for (let i = 0; i < 60; i++) {
+      const before = pmove.velocity[2];
+      pmove.oldbuttons = hostOldbuttons; // SV_RunCmd's read
+      PlayerMove();
+      hostOldbuttons = pmove.oldbuttons; // SV_RunCmd's write-back
+      // a landing also steps velocity[2] up by ~250, so require the result
+      // to actually be moving upward
+      if (pmove.velocity[2] - before > 200 && pmove.velocity[2] > 200) jumps++;
+      if (pmState.onground === -1) airborneFrames++;
+    }
+    expect(jumps).toBe(1);
+    expect(airborneFrames).toBeGreaterThan(20);
+    expect(pmState.onground).toBe(0); // landed again, still holding
+    expect(hostOldbuttons & BUTTON_JUMP).toBe(BUTTON_JUMP);
+
+    // one released command clears the latch
+    pmove.cmd.buttons = 0;
+    pmove.oldbuttons = hostOldbuttons;
+    PlayerMove();
+    hostOldbuttons = pmove.oldbuttons;
+    expect(hostOldbuttons & BUTTON_JUMP).toBe(0);
+
+    // and the next press jumps again
+    pmove.cmd.buttons = BUTTON_JUMP;
+    pmove.oldbuttons = hostOldbuttons;
+    const before = pmove.velocity[2];
+    PlayerMove();
+    expect(pmove.velocity[2] - before).toBeGreaterThan(200);
+  });
+});
+
+describe("PlayerMove — air control", () => {
+  test("strafe jumping gains speed past movevars.maxspeed", () => {
+    // QW's PM_AirAccelerate caps the *target* speed at 30 but not
+    // `accelspeed = accel * wishspeed * frametime`, so a player who holds
+    // +forward, holds a strafe key and turns the same way keeps gaining
+    // horizontal speed hop after hop -- the bunny hop. A port that lost air
+    // control would sit at movevars.maxspeed (320) forever.
+    VectorCopy(vec3(0, 0, 0), pmove.origin);
+    const MSEC = 14;
+    let yaw = 0;
+
+    function frame(fwd: number, side: number, buttons: number): void {
+      pmove.cmd.msec = MSEC;
+      pmove.cmd.forwardmove = fwd;
+      pmove.cmd.sidemove = side;
+      pmove.cmd.upmove = 0;
+      pmove.cmd.buttons = buttons;
+      pmove.cmd.angles[0] = 0;
+      pmove.cmd.angles[1] = yaw;
+      pmove.cmd.angles[2] = 0;
+      pmove.angles[0] = 0;
+      pmove.angles[1] = yaw;
+      pmove.angles[2] = 0;
+      PlayerMove();
+    }
+
+    // run up to the ground speed cl_forwardspeed alone can reach
+    for (let i = 0; i < 60; i++) frame(200, 0, 0);
+    const runSpeed = Math.hypot(pmove.velocity[0], pmove.velocity[1]);
+    expect(runSpeed).toBeCloseTo(200, 3);
+
+    let left = true;
+    let jumpHeld = false;
+    const peaks: number[] = [];
+    for (let hop = 0; hop < 12; hop++) {
+      let peak = 0;
+      for (let f = 0; f < 60; f++) {
+        const grounded = pmState.onground !== -1;
+        let buttons = 0;
+        if (grounded && !jumpHeld) {
+          buttons = BUTTON_JUMP;
+          jumpHeld = true;
+        } else if (!grounded) {
+          jumpHeld = false;
+        }
+        yaw += left ? 0.55 : -0.55;
+        frame(200, left ? -350 : 350, buttons);
+        peak = Math.max(peak, Math.hypot(pmove.velocity[0], pmove.velocity[1]));
+        if (pmState.onground !== -1 && f > 2) break;
+      }
+      peaks.push(peak);
+      left = !left;
+    }
+
+    // every hop is at least as fast as the plain run, and the run ends well
+    // past sv_maxspeed
+    for (const p of peaks) expect(p).toBeGreaterThan(runSpeed - 1);
+    expect(peaks[peaks.length - 1]).toBeGreaterThan(movevars.maxspeed + 40);
+    // monotone once the first couple of hops have got the player moving
+    for (let i = 3; i < peaks.length; i += 2) expect(peaks[i]).toBeGreaterThan(peaks[i - 2] - 1);
+  });
+
+  test("running straight ahead never exceeds movevars.maxspeed", () => {
+    VectorCopy(vec3(0, 0, 0), pmove.origin);
+    for (let i = 0; i < 200; i++) {
+      pmove.cmd.msec = 14;
+      pmove.cmd.forwardmove = 400;
+      pmove.cmd.sidemove = 0;
+      pmove.cmd.buttons = 0;
+      PlayerMove();
+      expect(Math.hypot(pmove.velocity[0], pmove.velocity[1])).toBeLessThanOrEqual(movevars.maxspeed + 1e-3);
+    }
+  });
+});

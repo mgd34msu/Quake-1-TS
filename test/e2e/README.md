@@ -251,3 +251,37 @@ capture at all — the harness files above assert on `key_dest`/focus/fullscreen
 setting the cvar to predict the outcome. `-nomouse` is unaffected: it still disables the
 mouse outright by leaving `mouse_avail` false, which short-circuits `IN_Commands` before
 `wantMouseCapture` is ever reached.
+
+### P — QuakeWorld jump and air control (`p_*.ts`)
+Instrumented qwsv plus one in-process qwcl, for the "I press jump, hear the jump
+sound, but do not jump" report and for bunny-hop feel. Ports 27700-27799.
+
+| File | Covers |
+|---|---|
+| `p_jump_sv.ts` | the qwsv the two drivers spawn: real `src/qw/main_sv.ts` with call-through `spyOn` wrappers on `src/qw/pmove.ts`'s `PlayerMove` and `src/qw/server/sv_send.ts`'s `SV_StartSound`, appending one JSON record per client command to the file named by `-jumplog` |
+| `p_jump.ts` | repeated jump cycles while walking and turning; counts commands where QC `PlayerJump`'s `player/plyrjmp8.wav` played but `pmove.c` `JumpButton` added no +270, and prints which of `JumpButton`'s branches bailed |
+| `p_bhop.ts` | scripted strafe-jump; reports per-hop apex speed and the usercmd `msec` distribution |
+
+```
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy P_PORT=27761 P_SLEEP=5 \
+  bun test/e2e/p_jump.ts dm3 200 settle
+```
+`p_jump.ts` takes `[map] [jumps] [mode]`; the modes are `settle` (one press per
+landing), `spam` (tapped every third frame) and `hold` (pressed in mid-air and
+kept down across the landing). `P_SLEEP` is the wall-clock ms between client
+frames (5 runs the client faster than real time, 13 matches it) and `P_JITTER`
+adds random seconds to each frame time, which is what pushes `cmd->msec` up
+towards the 50 ms mark where `SV_RunCmd` splits a command in half.
+
+Each record carries `cmd.buttons`, `pmove.oldbuttons` before and after,
+`PM_CatagorizePosition`'s `onground`/`waterlevel`/`watertype`, the gap from
+`pmove.origin[2]` down to whatever is under the player, `sv_player->v.flags`
+(so QC `FL_ONGROUND`/`FL_JUMPRELEASED` can be read), `button0`/`button2`,
+`health`, and `velocity` before and after. The probe reproduces `PlayerMove`'s
+own prefix (`NudgePosition` then `PM_CatagorizePosition`) on a snapshot and
+restores it, so the numbers are exactly the ones `JumpButton` is about to see.
+
+The `p_bhop.ts` speed column is only meaningful in an open area — a scripted
+bot hits geometry within a few hops on every retail map. The deterministic
+air-control measurement lives in `test/qw_pmove.test.ts` instead, on the
+synthetic infinite floor from `test/support/bsp_builder.ts`.
