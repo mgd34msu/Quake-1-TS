@@ -67,14 +67,17 @@ import * as SvPhys from "../src/server/sv_phys";
 import * as QwCmd from "../src/qw/cmd";
 import { Host_EndGame as QwHost_EndGame, Host_Frame as QwHost_Frame } from "../src/qw/client/cl_main";
 
-const BASEDIR = "/home/buzzkill/Projects/qfiles/q1-basedir";
+// Real Quake data cannot ship in this repository, so this file's suites are
+// opt-in: point Q1TS_DATA at a base directory holding id1/pak0.pak to run them
+// (the same variable test/e2e/q1data.ts uses). With no data reachable every
+// suite below skips, which is what a checkout with no pak files -- CI, or a
+// fresh clone -- gets.
+const BASEDIR = process.env.Q1TS_DATA ?? "";
+const HAVE_DATA = BASEDIR !== "" && (existsSync(join(BASEDIR, "id1")) || existsSync(join(BASEDIR, "Id1")));
 const GAME = "e2e_hostfr";
 const MAP = "e1m1";
 
-if (!existsSync(join(BASEDIR, "Id1"))) {
-  throw new Error(`missing retail test data: ${BASEDIR}/Id1 (needed to boot a real listen-server client)`);
-}
-mkdirSync(join(BASEDIR, GAME), { recursive: true }); // Host_Shutdown writes config.cfg here
+if (HAVE_DATA) mkdirSync(join(BASEDIR, GAME), { recursive: true }); // Host_Shutdown writes config.cfg here
 
 const savedNostdout = sysState.nostdout;
 const savedIsDedicated = sysState.isDedicated;
@@ -152,7 +155,7 @@ function bootListenServer(): void {
   Sys_Main_Init(["q1ts", "-basedir", BASEDIR, "-game", GAME, "-nosound"]);
 }
 
-describe("Host_Error mid-frame (.orch/e2e/A.md's Second defect, D2)", () => {
+describe.skipIf(!HAVE_DATA)("Host_Error mid-frame (.orch/e2e/A.md's Second defect, D2)", () => {
   test("map settles into a real game (sanity, establishes the state the crash test perturbs)", () => {
     bootListenServer();
     Cbuf_AddText(`map ${MAP}\n`);
@@ -261,7 +264,7 @@ specific, previously-crashing repro, so a future change that reintroduces a
 spurious mid-spawn error on these maps fails a test instead of silently
 regressing.
 */
-describe("changelevel does not desync the client (.orch/e2e/B.md's B-3, now a regression lock)", () => {
+describe.skipIf(!HAVE_DATA)("changelevel does not desync the client (.orch/e2e/B.md's B-3, now a regression lock)", () => {
   test("map -> changelevel (same map) settles back to signon 4 with the server active, no throw", () => {
     Cbuf_AddText(`map ${MAP}\n`);
     settleUntil(() => cls.signon === SIGNONS && sv.active, 200, "map before changelevel");
@@ -280,7 +283,7 @@ describe("changelevel does not desync the client (.orch/e2e/B.md's B-3, now a re
   });
 });
 
-describe("QW's Host_Frame catches HostEndGame at the frame level too (cheap cross-check for A.md's brief)", () => {
+describe.skipIf(!HAVE_DATA)("QW's Host_Frame catches HostEndGame at the frame level too (cheap cross-check for A.md's brief)", () => {
   test("a HostEndGame thrown mid-frame (from Cbuf_Execute, QW's own first frame call) returns instead of propagating", () => {
     let calls = 0;
     const spy = spyOn(QwCmd, "Cbuf_Execute").mockImplementation(() => {

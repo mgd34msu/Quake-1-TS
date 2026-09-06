@@ -22,7 +22,7 @@ import {
   Sys_mkdir,
 } from "../src/platform/sys";
 
-const SCRATCH = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad/sys-test";
+const SCRATCH = `${process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests"}/sys-test`;
 
 beforeAll(() => {
   mkdirSync(SCRATCH, { recursive: true });

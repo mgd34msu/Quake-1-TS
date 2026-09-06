@@ -4,8 +4,9 @@ import { cl } from "../../src/client/client";
 import { PITCH, YAW } from "../../src/common/quakedef";
 import { inputBackend } from "../../src/client/input";
 import * as sdl from "../../src/platform/sdl";
+import { Q1TS_DATA } from "./q1data";
 
-const BASE = "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASE = Q1TS_DATA;
 
 boot(["-basedir", BASE, "-game", "e2e_b", "-nosound"]);
 frames(5);

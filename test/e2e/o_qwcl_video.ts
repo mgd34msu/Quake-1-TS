@@ -26,6 +26,7 @@ assertion below would fail for a reason that has nothing to do with the
 engine. Confirmed directly against libSDL2 with and without openbox running.
 
 Env:
+  Q1TS_DATA   the retail data the scratch basedir is built from (required)
   O_BASEDIR   engine -basedir (default the scratch copy, so no real config.cfg
               is ever rewritten by Host_WriteConfiguration on quit)
   O_SHOTDIR   where the renamed screenshots land
@@ -44,6 +45,7 @@ import { menuState, MStateT } from "../../src/qw/client/menu";
 import { menuState as nqMenuState, MStateT as NqMStateT } from "../../src/client/menu";
 import { VID_MenuCursor, VID_MenuSetCursorForTests } from "../../src/platform/vid_menu";
 import { con_main, conState as qwConState, CON_TEXTSIZE } from "../../src/qw/client/console";
+import { Q1TS_DATA } from "./q1data";
 
 /*
 The engine runs against a scratch -basedir built here, never the real one:
@@ -53,7 +55,7 @@ real data directory would edit the player's own bindings and video settings.
 Id1 and qwprogs.dat are symlinked (read-only use), config.cfg is COPIED, and
 screenshots land in the scratch qw/ directory.
 */
-const QDATA = process.env.O_QDATA ?? "/home/buzzkill/Projects/qfiles/q1-basedir";
+const QDATA = Q1TS_DATA;
 const BASEDIR = process.env.O_BASEDIR ?? `${tmpdir()}/o_qwcl_video_base`;
 const GAMEDIR = `${BASEDIR}/qw`; // qwcl's Host_Init forces `-game qw`
 const SHOTDIR = process.env.O_SHOTDIR ?? `${tmpdir()}/o_qwcl_video_shots`;

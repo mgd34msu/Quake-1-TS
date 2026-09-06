@@ -35,7 +35,7 @@ import { sv, MOVETYPE_PUSH, SOLID_BSP, SOLID_SLIDEBOX, FL_ONGROUND, FL_FLY } fro
 import { SV_ClearWorld } from "../src/server/world";
 import { SV_CheckBottom, SV_CloseEnough, SV_MoveToGoal, SV_NewChaseDir, SV_StepDirection, SV_movestep, svMoveCounters } from "../src/server/sv_move";
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "sv_move-test-"));
 const baseDir = join(scratchDir, "quake");

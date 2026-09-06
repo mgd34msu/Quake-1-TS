@@ -16,7 +16,7 @@ import { EntityT, r_refdef } from "../src/client/render";
 import { allocEdges, allocSurfaces, modelorg, newedges, removeedges, rState, vpn, vright, vup } from "../src/ref_soft/r_local";
 import { R_BeginFaceEdges, R_ClipEdge, R_EmitEdge, R_RenderFace } from "../src/ref_soft/r_draw";
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "refsoft-draw-test-"));
 const baseDir = join(scratchDir, "quake");

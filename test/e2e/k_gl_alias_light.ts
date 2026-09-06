@@ -8,7 +8,7 @@
 //   SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy \
 //     bun test/e2e/k_gl_alias_light.ts <shotname> [engine args...]
 //
-// Environment knobs: K_BASEDIR, K_GAME, K_SHOTDIR, K_MAP, K_FRAMES (frames to
+// Environment knobs: Q1TS_DATA (required), K_GAME, K_SHOTDIR, K_MAP, K_FRAMES (frames to
 // settle before measuring) and K_CMDS (";"-separated console commands run
 // right after the map loads; an entry of the form "FRAMES:<n>" runs n frames
 // instead, so "+forward;FRAMES:12;-forward" walks the player down a hall).
@@ -22,8 +22,9 @@ import { R_LightPoint } from "../../src/ref_gl/gl_rlight";
 import { SHADEDOT_QUANT } from "../../src/ref_soft/anorm_dots";
 import { qglHolder, type QGL } from "../../src/ref_gl/qgl";
 import { readdirSync, copyFileSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
+import { Q1TS_DATA } from "./q1data";
 
-const BASEDIR = process.env.K_BASEDIR ?? "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASEDIR = Q1TS_DATA;
 const GAMEDIR = `${BASEDIR}/${process.env.K_GAME ?? "e2e_k"}`;
 const SHOTDIR = process.env.K_SHOTDIR ?? "/tmp/k_shots";
 

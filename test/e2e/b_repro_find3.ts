@@ -1,5 +1,6 @@
 import { boot, frames, exec } from "./b_lib";
-boot(["-basedir","/home/buzzkill/Projects/qfiles/q1-basedir","-game","e2e_b","-nosound"]);
+import { Q1TS_DATA } from "./q1data";
+boot(["-basedir",Q1TS_DATA,"-game","e2e_b","-nosound"]);
 frames(5);
 console.log("MARK load1");
 exec("map e1m1", 30);

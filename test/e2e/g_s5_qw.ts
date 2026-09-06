@@ -24,8 +24,9 @@ import { QwUsercmdT } from "../../src/qw/protocol";
 import { sensitivity as nq_sensitivity, m_pitch as nq_m_pitch, m_yaw as nq_m_yaw } from "../../src/client/cl_main";
 // QW has its own console module (two console_t buffers), not WinQuake's con_text.
 import { con_main, conState as qwConState, CON_TEXTSIZE } from "../../src/qw/client/console";
+import { Q1TS_DATA } from "./q1data";
 
-const BASE = "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASE = Q1TS_DATA;
 const PORT = 27842;
 
 const results: Array<{ name: string; pass: boolean; note: string }> = [];

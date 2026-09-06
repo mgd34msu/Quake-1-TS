@@ -16,8 +16,9 @@ import { CONTENTS_EMPTY } from "../../src/common/bspfile";
 import { GetEdictFieldValue } from "../../src/progs/pr_edict";
 import * as consoleMod from "../../src/client/console";
 import { conState } from "../../src/client/console";
+import { Q1TS_DATA } from "./q1data";
 
-export const BASEDIR = "/home/buzzkill/Projects/qfiles/q1-basedir";
+export const BASEDIR = Q1TS_DATA;
 
 export function boot(extra: string[]): void {
   Sys_Main_Init(["quake", "-basedir", BASEDIR, "-game", "e2e_n", "-nosound", ...extra]);

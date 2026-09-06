@@ -20,9 +20,9 @@ import { pop } from "../../src/qw/common";
 import { writePakToDisk } from "./pak_builder";
 import { buildBsp, buildMdl, ensureDir, writeGameFile } from "./bsp_builder";
 
-const QWPROGS_DAT = "/home/buzzkill/Projects/qsrc/quake/QW/progs/qwprogs.dat";
+const QWPROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../../qsrc/quake`}/QW/progs/qwprogs.dat`;
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 
 // what qw/server.cfg sets, so a test can assert the exec happened
 export const QWSV_FIXTURE_HOSTNAME = "qwsv-scratch";

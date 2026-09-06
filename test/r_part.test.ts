@@ -31,7 +31,7 @@ import {
   ramp3,
 } from "../src/client/r_part";
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "r_part-test-"));
 

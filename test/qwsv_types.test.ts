@@ -43,7 +43,7 @@ import {
 } from "../src/qw/server/server";
 import { MAX_CLIENTS, UPDATE_BACKUP } from "../src/qw/protocol";
 
-const qwprogsPath = "/home/buzzkill/Projects/qsrc/quake/QW/progs/qwprogs.dat";
+const qwprogsPath = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/QW/progs/qwprogs.dat`;
 
 describe("progdefs.ts (QW)", () => {
   test("PROGHEADER_CRC matches the retail qwprogs.dat header word", () => {

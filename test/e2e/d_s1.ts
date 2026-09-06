@@ -10,6 +10,7 @@
 // role B's `-port` parm must be set to role A's listen port instead of its
 // own.
 import { spawnRole, waitForLog, readLog, killRole, record, results } from "./d_lib";
+import { Q1TS_DATA } from "./q1data";
 
 const PORT = 26101;
 const RUN_MS = 20000;
@@ -17,7 +18,7 @@ const RUN_MS = 20000;
 const roleA = spawnRole({
   label: "s1_A",
   engineArgs: [
-    "-basedir", "/home/buzzkill/Projects/qfiles/q1-basedir",
+    "-basedir", Q1TS_DATA,
     "-game", "e2e_d",
     "-listen", "4",
     "-port", String(PORT),
@@ -38,7 +39,7 @@ await Bun.sleep(1500);
 const roleB = spawnRole({
   label: "s1_B",
   engineArgs: [
-    "-basedir", "/home/buzzkill/Projects/qfiles/q1-basedir",
+    "-basedir", Q1TS_DATA,
     "-game", "e2e_d2",
     "-port", String(PORT),
     "-nosound",
@@ -64,7 +65,7 @@ record("S1", "A boots and maps dm3", logA.includes("Quake Initialized") && logA.
 record("S1", "B reaches signon / entered the game (either side's log)", logA.includes("entered the game") || logB.toLowerCase().includes("connected"), "");
 record("S1", "A status shows 2 players at some point", /players:\s*2 active/.test(logA), "");
 record("S1", "B's say reaches A's console (\"hello\")", logA.includes("hello"), "");
-record("S1", "B took a screenshot (quake00.pcx on disk)", await Bun.file("/home/buzzkill/Projects/qfiles/q1-basedir/e2e_d2/quake00.pcx").exists(), "");
+record("S1", "B took a screenshot (quake00.pcx on disk)", await Bun.file(`${Q1TS_DATA}/e2e_d2/quake00.pcx`).exists(), "");
 record("S1", "reconnect succeeded (no fatal error after)", !logB.includes("Sys_Main_Init threw"), "");
 
 console.log("\n=== s1_A tail ===\n" + logA.slice(-4000));

@@ -11,18 +11,22 @@ match it — a plain `bun test` run must never spawn a live SDL/UDP engine proce
 Each file is invoked directly with `bun test/e2e/<file>.ts [args...]` as its own
 process (see "How to run" below).
 
-The seven lettered families (A-G) were written by seven concurrent agents, each
-covering a different corner of the engine. The full narrative report for each —
-defects found, repro steps, log excerpts — lives in `.orch/e2e/<LETTER>.md`; this file
-is the map from that prose to the runnable drivers plus the operational details
-(env vars, data path, ports) needed to actually run them.
+The seven lettered families (A-G) each cover a different corner of the engine, and
+later letters (H-P) were added as specific areas needed drivers. This file is the map
+from each family to its runnable drivers, plus the operational details (env vars, data
+path, ports) needed to actually run them.
+
+References below to `.orch/e2e/<LETTER>.md` are the per-family narrative reports —
+defects found, repro steps, log excerpts — written while the port was being built.
+Those are development notes and are not part of the published repository; the drivers
+themselves and this file are self-contained.
 
 ## Headless recipe
 
 Every driver runs with no window and no real audio device:
 
 ```
-SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy bun test/e2e/<file>.ts
+Q1TS_DATA=/path/to/quake SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy bun test/e2e/<file>.ts
 ```
 
 - `SDL_VIDEODRIVER=dummy` — software renderer (`-vid_ref soft`, the default).
@@ -37,30 +41,49 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy bun test/e2e/<file>.ts
 - Always pass `-nosound` on the engine command line too, except in family C's sound
   scenarios (which need sound enabled to have anything to capture).
 
+`Q1TS_DATA` is required by every driver (see "Retail data" below). The per-family
+"How to run" examples further down omit it for brevity and assume it is already
+exported.
+
 ## Retail data
 
-The shared basedir all families except E use is:
+Every driver reads its base directory from one environment variable, **`Q1TS_DATA`**.
+There is no default and no fallback: `test/e2e/q1data.ts` throws at import if the
+variable is unset, because a wrong basedir shows up as a screenshot of the wrong level
+half an hour into a run.
 
 ```
-/home/buzzkill/Projects/qfiles/q1-basedir
+export Q1TS_DATA=/path/to/quake
 ```
 
-This is a symlink tree over the real retail `Id1/PAK0.PAK` + `Id1/PAK1.PAK` (capital
-`I`, resolved case-insensitively by `Sys_ResolveCase`), plus `hipnotic/` and `rogue/`
-mission-pack paks. Every family confirms "Playing registered version" in its boot log
-against this basedir. Each family uses its own `-game e2e_<letter>` subdirectory
-(`e2e_a`, `e2e_b`, `e2e_c`, `e2e_d`/`e2e_d2`, `e2e_g`, ...) under it so config.cfg,
-save games, demos and screenshots from different families never collide — **always
-pass `-game e2e_<letter>` when re-running a driver**, or its writes will land in
-another family's directory (or the shared basedir's root).
+That directory is what the engine is handed as `-basedir`. It needs `id1/pak0.pak`
+(mixed case is fine — `Sys_ResolveCase` resolves id's shipped `Id1/PAK0.PAK` +
+`Id1/PAK1.PAK` as-is), plus `hipnotic/` and `rogue/` for the mission-pack drivers and
+`qw/qwprogs.dat` for the QuakeWorld ones. Registered data is required: every family
+confirms "Playing registered version" in its boot log. A symlink tree over a read-only
+install works and is what the original runs used.
 
-Family E (QuakeWorld) is the exception: it uses an isolated basedir under the
-session scratchpad (`<scratchpad>/eb`, with `Id1` symlinked back to the retail data
-and a private writable `qw/` holding a copy of `qwprogs.dat`) so its demos/screenshots
-don't collide with the other families sharing the main basedir. That scratchpad
-directory is session-local and will not exist in a fresh session — recreate it
-(symlink `Id1`, copy `qw/qwprogs.dat`) before re-running any `e_*.ts` driver, or point
-`e_lib.ts`'s `BASEDIR` at a new isolated basedir of your own.
+Each family uses its own `-game e2e_<letter>` subdirectory (`e2e_a`, `e2e_b`, `e2e_c`,
+`e2e_d`/`e2e_d2`, `e2e_g`, ...) under it so config.cfg, save games, demos and
+screenshots from different families never collide — **always pass `-game e2e_<letter>`
+when re-running a driver**, or its writes will land in another family's directory (or
+the basedir's root).
+
+Two more variables, both optional:
+
+- **`Q1TS_SCRATCH`** — where drivers put logs, screenshots and throwaway basedirs.
+  Defaults to `/tmp/q1ts-tests`.
+- **`Q1TS_QSRC`** — id's source release, for the drivers and unit suites that read
+  `progs106/progs.dat` or `QW/progs/qwprogs.dat` as fixtures. Defaults to
+  `../qsrc/quake` relative to the repository.
+
+Family E (QuakeWorld) is the exception to the shared basedir: it builds an isolated one
+under `$Q1TS_SCRATCH/eb`, with `Id1` symlinked back to `$Q1TS_DATA` and a private
+writable `qw/` holding a copy of `qwprogs.dat`, so its demos and screenshots do not
+collide with the families sharing the main basedir. That directory is not created for
+you — make it (symlink `Id1`, copy `qw/qwprogs.dat`) before running any `e_*.ts`
+driver, or point `e_lib.ts`'s `BASEDIR` at an isolated basedir of your own.
+`o_qwcl_video.ts` does the same thing and builds its scratch basedir itself.
 
 ## Ports
 

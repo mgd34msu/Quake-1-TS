@@ -10,6 +10,7 @@ import { Cbuf_AddText, Cbuf_Execute } from "../../src/common/cmd";
 import { Key_Event } from "../../src/client/keys";
 import { conState } from "../../src/client/console";
 import * as consoleMod from "../../src/client/console";
+import { Q1TS_DATA } from "./q1data";
 
 export const results: Array<{ name: string; pass: boolean; note: string }> = [];
 
@@ -128,7 +129,7 @@ export function maxSndShowCount(lines: string[]): number {
 }
 
 // ---- screenshots ---------------------------------------------------------
-export const SHOTDIR = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad/jshots";
+export const SHOTDIR = `${process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests"}/jshots`;
 
 function shotFiles(gamedir: string): Set<string> {
   if (!existsSync(gamedir)) return new Set();
@@ -156,6 +157,6 @@ export function shot(gamedir: string, name: string): string | null {
   return null;
 }
 
-export const BASEDIR = "/home/buzzkill/Projects/qfiles/q1-basedir";
+export const BASEDIR = Q1TS_DATA;
 export const GAMEDIR_NAME = "e2e_j";
 export const GAMEDIR = `${BASEDIR}/${GAMEDIR_NAME}`;

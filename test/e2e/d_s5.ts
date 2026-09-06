@@ -5,11 +5,12 @@
 // deadlock; see .orch/e2e/D.md). One process, one status showing "1 active
 // (1 max)", one screenshot.
 import { spawnRole, waitForLog, readLog, killRole } from "./d_lib";
+import { Q1TS_DATA } from "./q1data";
 
 const role = spawnRole({
   label: "s5_loopback",
   engineArgs: [
-    "-basedir", "/home/buzzkill/Projects/qfiles/q1-basedir",
+    "-basedir", Q1TS_DATA,
     "-game", "e2e_d",
     "-nosound",
     "+map", "dm1",

@@ -73,7 +73,7 @@ import { QwUsercmdT, CM_ANGLE2, CM_FORWARD, CM_BUTTONS } from "../src/qw/protoco
 import { SizeBuf, SZ_Alloc } from "../src/common/sizebuf";
 import { writePakToDisk, ensureDir } from "./support/pak_builder";
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "qw-common-test-"));
 
@@ -410,7 +410,7 @@ describe("COM_BlockSequenceCRCByte", () => {
 
 // F.md D4 (this tree's own COM_InitArgv): see test/common.test.ts's own
 // header comment for the full analysis -- QW/client/common.c's COM_InitArgv
-// (read in full against /home/buzzkill/Projects/qsrc/quake/QW/client/common.c)
+// (read in full against ../qsrc/quake/QW/client/common.c)
 // truncates at the same MAX_NUM_ARGVS=50 (including argv[0]), silently
 // dropping anything past it, exactly as this port's own COM_InitArgv does.
 // No hang is possible here either (every loop is bounded); the per-test

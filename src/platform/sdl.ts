@@ -18,6 +18,10 @@ library themselves. glimp.ts (U056, this same unit) shares this file's one
 SDL `window` handle for the GL path -- this port runs one refresh at a time,
 never software and GL together.
 
+The library's per-OS file names, the candidate order and the Q1TS_SDL2_LIB
+environment override live in src/platform/libs.ts, which is also where the
+"tried these, none loaded" message is built.
+
 Nothing is dlopen()ed at module load. `SDL_SetBackendEnabled(true)` arms the
 backend; VID_Init (this unit's platform/vid.ts) is the only caller, and it is
 only ever reached on the client path (Host_Init's `if (!sysState.isDedicated)`
@@ -40,6 +44,7 @@ freezes its public struct layouts.
 */
 
 import { dlopen, type Pointer } from "bun:ffi";
+import { currentLibrarySearch, openLibrary } from "./libs";
 import { VID_CalcBlitRect } from "./vid_scale";
 import { setKeyEventPump, Sys_Quit } from "./sys";
 import { CvarT, Cvar_RegisterVariable } from "../common/cvar";
@@ -244,16 +249,7 @@ const symbols = {
 
 type SdlLib = ReturnType<typeof dlopen<typeof symbols>>;
 
-function libraryName(): string {
-  switch (process.platform) {
-    case "win32":
-      return "SDL2.dll";
-    case "darwin":
-      return "libSDL2.dylib";
-    default:
-      return "libSDL2-2.0.so.0";
-  }
-}
+// The per-OS file names, and the Q1TS_SDL2_LIB override, live in libs.ts.
 
 let enabled = false;
 let library: SdlLib | null = null;
@@ -267,30 +263,31 @@ export function SDL_BackendEnabled(): boolean {
   return enabled;
 }
 
-// The only dlopen in the port. Returns null (once, then remembers) when the
-// backend is disabled or the system library is missing, so every caller can
-// fall back to the headless path instead of dying.
+// Returns null (once, then remembers) when the backend is disabled or the
+// system library is missing, so every caller can fall back to the headless
+// path instead of dying.
 function lib(): SdlLib | null {
   if (!enabled || libraryFailed) return null;
   if (library) return library;
-  try {
-    library = dlopen(libraryName(), symbols);
-    // JS-side env writes (Bun.env/process.env) do not reliably reach the C
-    // runtime's getenv(), which is how SDL selects its drivers. Propagate
-    // the two driver-selection variables through SDL's own setenv so a test
-    // harness setting SDL_VIDEODRIVER=dummy is honored -- without this, test
-    // runs open real windows on the host desktop.
-    for (const name of ["SDL_VIDEODRIVER", "SDL_AUDIODRIVER"]) {
-      const v = process.env[name];
-      if (v !== undefined) {
-        library.symbols.SDL_setenv(Buffer.from(`${name}\0`), Buffer.from(`${v}\0`), 1);
-      }
-    }
-  } catch (err) {
+
+  const opened = openLibrary(currentLibrarySearch("sdl2"), symbols);
+  if (!opened.ok) {
     libraryFailed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    Con_Printf("SDL: could not load %s: %s\n", libraryName(), msg);
+    Con_Printf("SDL: %s\n", opened.message);
     return null;
+  }
+  library = opened.lib;
+
+  // JS-side env writes (Bun.env/process.env) do not reliably reach the C
+  // runtime's getenv(), which is how SDL selects its drivers. Propagate
+  // the two driver-selection variables through SDL's own setenv so a test
+  // harness setting SDL_VIDEODRIVER=dummy is honored -- without this, test
+  // runs open real windows on the host desktop.
+  for (const name of ["SDL_VIDEODRIVER", "SDL_AUDIODRIVER"]) {
+    const v = process.env[name];
+    if (v !== undefined) {
+      library.symbols.SDL_setenv(Buffer.from(`${name}\0`), Buffer.from(`${v}\0`), 1);
+    }
   }
   return library;
 }

@@ -33,7 +33,13 @@ import { tmpdir } from "node:os";
 import { CactiveT, SIGNONS } from "../src/client/client";
 import { udpLandriver } from "../src/platform/net_udp";
 
-const BASEDIR = "/home/buzzkill/Projects/qfiles/q1-basedir";
+// Real Quake data cannot ship in this repository, so this file's suites are
+// opt-in: point Q1TS_DATA at a base directory holding id1/pak0.pak to run them
+// (the same variable test/e2e/q1data.ts uses). With no data reachable every
+// suite below skips, which is what a checkout with no pak files -- CI, or a
+// fresh clone -- gets.
+const BASEDIR = process.env.Q1TS_DATA ?? "";
+const HAVE_DATA = BASEDIR !== "" && (existsSync(join(BASEDIR, "id1")) || existsSync(join(BASEDIR, "Id1")));
 const GAME = "e2e_net_t";
 const PORT = 26240;
 const MAP = "dm3";
@@ -42,10 +48,7 @@ const MAP = "dm3";
 // log instead.
 const MAP_LOADED = "maps/dm3.bsp";
 
-if (!existsSync(join(BASEDIR, "Id1"))) {
-  throw new Error(`missing retail test data: ${BASEDIR}/Id1 (needed to boot a real client)`);
-}
-mkdirSync(join(BASEDIR, GAME), { recursive: true }); // Host_Shutdown writes config.cfg here
+if (HAVE_DATA) mkdirSync(join(BASEDIR, GAME), { recursive: true }); // Host_Shutdown writes config.cfg here
 
 const logDir = mkdtempSync(join(tmpdir(), "q1-net-e2e-"));
 const serverLogPath = join(logDir, "server.log");
@@ -59,18 +62,26 @@ const headlessEnv = { ...process.env, SDL_VIDEODRIVER: "dummy", SDL_AUDIODRIVER:
 // can watch a child that is still running, with no pipe to fill up.
 const serverLogFd = openSync(serverLogPath, "w");
 
+// With no game data there is nothing for a dedicated server to serve and every
+// suite below is skipped, so the child is a bun that exits at once: the handle
+// still exists for afterAll and for the (skipped) stdin test to type-check
+// against, and no engine is started.
+const serverCmd: string[] = HAVE_DATA
+  ? [
+      process.execPath,
+      "run",
+      mainTs,
+      "-basedir", BASEDIR,
+      "-game", GAME,
+      "-dedicated", "4",
+      "-port", String(PORT),
+      "-nosound",
+      "+map", MAP,
+    ]
+  : [process.execPath, "-e", "0"];
+
 const server = Bun.spawn({
-  cmd: [
-    process.execPath,
-    "run",
-    mainTs,
-    "-basedir", BASEDIR,
-    "-game", GAME,
-    "-dedicated", "4",
-    "-port", String(PORT),
-    "-nosound",
-    "+map", MAP,
-  ],
+  cmd: serverCmd,
   env: headlessEnv,
   stdin: "pipe", // a dedicated server reads its console off real stdin
   stdout: serverLogFd,
@@ -169,7 +180,7 @@ function clientResultLine(log: string): string {
   return "";
 }
 
-describe("a real client connects to a real dedicated server over UDP", () => {
+describe.skipIf(!HAVE_DATA)("a real client connects to a real dedicated server over UDP", () => {
   test(`the -dedicated child comes up on ${MAP} and holds port ${PORT}`, async () => {
     // Wait on the log, never by probing the port: a probe that binds 26240
     // while the child is still starting steals it from the child, which then
@@ -236,7 +247,7 @@ Measured in a child process that stands up only the net stack (no Host_Init,
 no video, no sound), so the number is the connect attempt itself and not a
 boot time, and so nothing in `bun test`'s shared module registry is touched.
 */
-describe("a connect to a dead port fails in bounded time", () => {
+describe.skipIf(!HAVE_DATA)("a connect to a dead port fails in bounded time", () => {
   const DEAD_PORT = 26243; // nothing binds this
 
   // A real engine boot, then `connect` typed at the console: NET_NewQSocket
@@ -301,7 +312,7 @@ describe("a connect to a dead port fails in bounded time", () => {
   }, 120000);
 });
 
-describe("a SIGKILLed client is timed out by the server", () => {
+describe.skipIf(!HAVE_DATA)("a SIGKILLed client is timed out by the server", () => {
   test("the server drops a client whose process vanished", async () => {
     server.stdin.write("net_messagetimeout 3\n");
     server.stdin.flush();

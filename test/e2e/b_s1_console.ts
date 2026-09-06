@@ -1,8 +1,9 @@
 import { boot, frames, exec, execNow, tap, typeText, key, conLines, conHas, conTail, check, summary, Cmd_Exists, Cvar_FindVar, keyState, keybindings, conState, asDest } from "./b_lib";
 import { K_ENTER, K_TAB, K_UPARROW, K_DOWNARROW, K_PGUP, K_PGDN, K_BACKSPACE, K_ESCAPE, key_lines, KeydestT } from "../../src/client/keys";
+import { Q1TS_DATA } from "./q1data";
 
 
-const BASE = "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASE = Q1TS_DATA;
 const TILDE = "`".charCodeAt(0);
 
 boot(["-basedir", BASE, "-game", "e2e_b", "-nosound"]);

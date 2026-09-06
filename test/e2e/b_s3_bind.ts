@@ -2,8 +2,9 @@ import { boot, frames, exec, tap, key, conHas, conTail, conLines, check, summary
 import { K_MOUSE1, K_ENTER, K_UPARROW, KeydestT, Key_StringToKeynum } from "../../src/client/keys";
 import { in_attack, in_speed, in_strafe, in_mlook, in_impulse } from "../../src/client/cl_input";
 import { cl } from "../../src/client/client";
+import { Q1TS_DATA } from "./q1data";
 
-const BASE = "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASE = Q1TS_DATA;
 const X = "x".charCodeAt(0);
 
 boot(["-basedir", BASE, "-game", "e2e_b", "-nosound"]);

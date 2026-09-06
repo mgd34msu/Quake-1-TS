@@ -20,7 +20,7 @@ import { d_lightstylevalue, rState } from "../src/ref_soft/r_local";
 import { R_AnimateLight, R_LightPoint, R_PushDlights } from "../src/ref_soft/r_light";
 import { R_AddEfrags, R_RemoveEfrags, R_StoreEfrags } from "../src/ref_soft/r_efrag";
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "refsoft-light-test-"));
 const baseDir = join(scratchDir, "quake");

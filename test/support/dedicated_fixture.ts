@@ -18,9 +18,9 @@ import { writePakToDisk } from "./pak_builder";
 import { buildBsp, buildMdl, buildSpr, ensureDir, writeGameFile } from "./bsp_builder";
 import { LUMPINFO_T_SIZE, WADINFO_T_SIZE } from "../../src/common/wad";
 
-const PROGS_DAT = "/home/buzzkill/Projects/qsrc/quake/progs106/progs.dat";
+const PROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../../qsrc/quake`}/progs106/progs.dat`;
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 
 // progs106/world.qc worldspawn's precache_model list, in its C order (kept
 // in sync by hand with test/host_cmd.test.ts's own copy).

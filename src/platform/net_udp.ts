@@ -7,14 +7,17 @@ it in here) -- net_wins.c/net_bsd.c themselves are not separately ported
 (PORTING.md's platform mapping: one LAN driver).
 
 This module implements one `net_landriver_t` (net.h) directly on the same
-libc BSD-socket calls net_udp.c itself uses, bound through `bun:ffi`'s
-`dlopen("libc.so.6", ...)`: socket/bind/close/sendto/recvfrom/getsockname/
-setsockopt/ioctl/gethostname/gethostbyname, with `errno` read through
-`__errno_location()`. `struct sockaddr_in` is laid out by hand in a 16-byte
-`Uint8Array` (sin_family little-endian u16, sin_port big-endian u16,
+BSD-socket calls net_udp.c itself uses -- socket/bind/close/sendto/recvfrom/
+getsockname/setsockopt/ioctl/gethostname/gethostbyname plus `errno` -- reached
+through `src/platform/sockets.ts`, which binds them out of the host OS's own
+library (libc.so.6 / libSystem.B.dylib / ws2_32.dll) and supplies the per-OS
+constants, entry-point names and errno values. `struct sockaddr_in` is laid
+out by hand in a 16-byte `Uint8Array` (sin_family, sin_port big-endian u16,
 sin_addr 4 bytes, 8 bytes of padding) -- byte-for-byte the layout the C
 reinterprets `struct qsockaddr` as; `inet_addr`/`inet_ntoa`/`htons`/`ntohs`
-are done in TS on those bytes.
+are done in TS on those bytes. Only sin_family's encoding differs across the
+three targets (macOS's BSD `sin_len`/`sin_family` byte pair), and that is
+sockets.ts's `writeSockaddrFamily`/`readSockaddrFamily`.
 
 Why libc and not `Bun.udpSocket`: net_dgrm.c's `_Datagram_Connect` sends
 CCREQ_CONNECT and then busy-waits in a synchronous `do { dfunc.Read(...) }
@@ -36,8 +39,8 @@ Deviations from the C:
   Every place the C hands a `struct qsockaddr *` straight to a socket call,
   this file marshals that object into/out of a 16-byte scratch buffer
   (`qsockaddrToNative`/`nativeToQsockaddr`) at the identical offsets.
-- `dlopen` failure: there is no equivalent in the C (libc is linked in). If
-  the system libc cannot be opened, `UDP_Init` returns -1 -- the same result
+- Socket-library load failure: there is no equivalent in the C (libc is
+  linked in). If it cannot be opened, `UDP_Init` returns -1 -- the same result
   `-noudp` produces, so the engine runs with the loopback driver only --
   and every other entry point returns its own "no socket" error value
   instead of throwing.
@@ -88,7 +91,7 @@ Deviations from the C:
   C's observable return value (never -1).
 */
 
-import { dlopen, ptr, read } from "bun:ffi";
+import { ptr, read } from "bun:ffi";
 import { COM_CheckParm, Q_atoi, com_argc, com_argv } from "../common/common";
 import { Cvar_Set } from "../common/cvar";
 import { Con_Printf } from "../client/console";
@@ -102,74 +105,44 @@ import {
   tcpipAvailable,
 } from "../common/net_main";
 import type { NetLandriverT, QsockaddrT } from "../common/net";
+import {
+  HOSTENT_H_ADDR_LIST,
+  SOCKADDR_SIZE,
+  currentSockTarget,
+  nqReadErrnoIsSilent,
+  nqWriteErrnoIsSilent,
+  openSocketApi,
+  readSockaddrFamily,
+  sockConstants,
+  socketApiFailure,
+  writeSockaddrFamily,
+  writeSockaddrIn,
+  type SocketApi,
+} from "./sockets";
 
 export type { NetLandriverT, QsockaddrT } from "../common/net";
 
 //=============================================================================
-// <sys/socket.h>, <netinet/in.h>, <asm-generic/ioctls.h>, <asm-generic/errno-base.h>
+// <sys/socket.h>, <netinet/in.h>, <sys/ioctl.h>, <errno.h> -- see sockets.ts
+// for the per-OS values behind these names.
 
-const AF_INET = 2;
-const PF_INET = 2;
-const SOCK_DGRAM = 2;
-const IPPROTO_UDP = 17;
-const SOL_SOCKET = 1;
-const SO_BROADCAST = 6;
-const FIONBIO = 0x5421;
-const FIONREAD = 0x541b;
-const EWOULDBLOCK = 11; // EAGAIN
-const ECONNREFUSED = 111;
-
-// sizeof(struct qsockaddr) == sizeof(struct sockaddr_in) == 16
-const SOCKADDR_SIZE = 16;
+const target = currentSockTarget();
+const { AF_INET, PF_INET, SOCK_DGRAM, IPPROTO_UDP, SOL_SOCKET, SO_BROADCAST, FIONBIO, FIONREAD } = sockConstants(target);
 
 // <sys/param.h>
 const MAXHOSTNAMELEN = 64;
 
-// struct hostent, x86-64: char *h_name; char **h_aliases; int h_addrtype;
-// int h_length; char **h_addr_list;
-const HOSTENT_H_ADDR_LIST = 24;
-
 //=============================================================================
 
-const libcSymbols = {
-  socket: { args: ["i32", "i32", "i32"], returns: "i32" },
-  bind: { args: ["i32", "ptr", "u32"], returns: "i32" },
-  close: { args: ["i32"], returns: "i32" },
-  sendto: { args: ["i32", "ptr", "u64", "i32", "ptr", "u32"], returns: "i32" },
-  recvfrom: { args: ["i32", "ptr", "u64", "i32", "ptr", "ptr"], returns: "i32" },
-  getsockname: { args: ["i32", "ptr", "ptr"], returns: "i32" },
-  setsockopt: { args: ["i32", "i32", "i32", "ptr", "u32"], returns: "i32" },
-  ioctl: { args: ["i32", "u64", "ptr"], returns: "i32" },
-  gethostname: { args: ["ptr", "u64"], returns: "i32" },
-  gethostbyname: { args: ["ptr"], returns: "ptr" },
-  __errno_location: { args: [], returns: "ptr" },
-} as const;
+let reportedLibFailure = false;
 
-type LibC = ReturnType<typeof dlopen<typeof libcSymbols>>;
-
-let libc: LibC | null = null;
-let libcFailed = false;
-
-function lib(): LibC | null {
-  if (libcFailed) return null;
-  if (libc) return libc;
-  for (const name of ["libc.so.6", "libc.so"]) {
-    try {
-      libc = dlopen(name, libcSymbols);
-      return libc;
-    } catch {
-      continue;
-    }
+function lib(): SocketApi | null {
+  const api = openSocketApi();
+  if (api === null && !reportedLibFailure) {
+    reportedLibFailure = true;
+    Con_Printf("UDP_Init: %s\n", socketApiFailure());
   }
-  libcFailed = true;
-  Con_Printf("UDP_Init: could not open the system C library\n");
-  return null;
-}
-
-function errno(l: LibC): number {
-  const location = l.symbols.__errno_location();
-  if (location === null) return 0;
-  return read.i32(location, 0);
+  return api;
 }
 
 //=============================================================================
@@ -183,15 +156,15 @@ const getnameSockaddr = new Uint8Array(SOCKADDR_SIZE);
 const socklenBuf = new Uint32Array(1);
 const optvalBuf = new Int32Array(1);
 const availableBuf = new Int32Array(2); // the C's `unsigned long available`
+const INADDR_ANY = new Uint8Array(4);
 
 function qsockaddrToNative(addr: QsockaddrT, out: Uint8Array): void {
-  out[0] = addr.sa_family & 0xff;
-  out[1] = (addr.sa_family >> 8) & 0xff;
+  writeSockaddrFamily(target, out, addr.sa_family);
   out.set(addr.sa_data.subarray(0, 14), 2);
 }
 
 function nativeToQsockaddr(src: Uint8Array, addr: QsockaddrT): void {
-  addr.sa_family = src[0] | (src[1] << 8);
+  addr.sa_family = readSockaddrFamily(target, src);
   addr.sa_data.set(src.subarray(2, SOCKADDR_SIZE), 0);
 }
 
@@ -261,8 +234,8 @@ function UDP_Init(): number {
 
   // determine my name & address
   const buff = new Uint8Array(MAXHOSTNAMELEN);
-  l.symbols.gethostname(ptr(buff), MAXHOSTNAMELEN);
-  const local = l.symbols.gethostbyname(ptr(buff));
+  l.gethostname(ptr(buff), MAXHOSTNAMELEN);
+  const local = l.gethostbyname(ptr(buff));
   if (local !== null) {
     const addrList = read.ptr(local, HOSTENT_H_ADDR_LIST);
     if (addrList !== 0) {
@@ -331,23 +304,20 @@ function UDP_OpenSocket(port: number): number {
   const l = lib();
   if (!l) return -1;
 
-  const newsocket = l.symbols.socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  const newsocket = l.socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (newsocket === -1) return -1;
 
   optvalBuf[0] = 1; // qboolean _true = true
-  if (l.symbols.ioctl(newsocket, FIONBIO, ptr(optvalBuf)) === -1) {
-    l.symbols.close(newsocket);
+  if (l.ioctl(newsocket, FIONBIO, ptr(optvalBuf)) === -1) {
+    l.close(newsocket);
     return -1;
   }
 
+  // sin_addr.s_addr = INADDR_ANY; sin_port = htons(port)
   const address = new Uint8Array(SOCKADDR_SIZE);
-  address[0] = AF_INET & 0xff;
-  address[1] = (AF_INET >> 8) & 0xff;
-  address[2] = (port >> 8) & 0xff; // htons(port)
-  address[3] = port & 0xff;
-  // sin_addr.s_addr = INADDR_ANY -- the buffer is already zeroed
-  if (l.symbols.bind(newsocket, ptr(address), SOCKADDR_SIZE) === -1) {
-    l.symbols.close(newsocket);
+  writeSockaddrIn(target, address, AF_INET, port, INADDR_ANY);
+  if (l.bind(newsocket, ptr(address), SOCKADDR_SIZE) === -1) {
+    l.close(newsocket);
     return -1;
   }
 
@@ -359,7 +329,7 @@ function UDP_CloseSocket(socket: number): number {
   if (!l) return -1;
 
   if (socket === net_broadcastsocket) net_broadcastsocket = 0;
-  return l.symbols.close(socket);
+  return l.close(socket);
 }
 
 //=============================================================================
@@ -433,7 +403,7 @@ function UDP_CheckNewConnections(): number {
 
   availableBuf[0] = 0;
   availableBuf[1] = 0;
-  if (l.symbols.ioctl(net_acceptsocket, FIONREAD, ptr(availableBuf)) === -1)
+  if (l.ioctl(net_acceptsocket, FIONREAD, ptr(availableBuf)) === -1)
     Sys_Error("UDP: ioctlsocket (FIONREAD) failed\n");
   if (availableBuf[0]) return net_acceptsocket;
   return -1;
@@ -448,10 +418,9 @@ function UDP_Read(socket: number, buf: Uint8Array, len: number, addr: QsockaddrT
   const n = len < buf.length ? len : buf.length; // see header
   socklenBuf[0] = SOCKADDR_SIZE;
   readSockaddr.fill(0);
-  const ret = l.symbols.recvfrom(socket, ptr(buf), n, 0, ptr(readSockaddr), ptr(socklenBuf));
+  const ret = l.recvfrom(socket, ptr(buf), n, 0, ptr(readSockaddr), ptr(socklenBuf));
   if (ret === -1) {
-    const e = errno(l);
-    if (e === EWOULDBLOCK || e === ECONNREFUSED) return 0;
+    if (nqReadErrnoIsSilent(target, l.errno())) return 0;
     return -1;
   }
 
@@ -467,7 +436,7 @@ function UDP_MakeSocketBroadcastCapable(socket: number): number {
 
   optvalBuf[0] = 1;
   // make this socket broadcast capable
-  if (l.symbols.setsockopt(socket, SOL_SOCKET, SO_BROADCAST, ptr(optvalBuf), 4) < 0) return -1;
+  if (l.setsockopt(socket, SOL_SOCKET, SO_BROADCAST, ptr(optvalBuf), 4) < 0) return -1;
   net_broadcastsocket = socket;
 
   return 0;
@@ -496,8 +465,8 @@ function UDP_Write(socket: number, buf: Uint8Array, len: number, addr: Qsockaddr
 
   const n = len < buf.length ? len : buf.length; // see header
   qsockaddrToNative(addr, writeSockaddr);
-  const ret = l.symbols.sendto(socket, ptr(buf), n, 0, ptr(writeSockaddr), SOCKADDR_SIZE);
-  if (ret === -1 && errno(l) === EWOULDBLOCK) return 0;
+  const ret = l.sendto(socket, ptr(buf), n, 0, ptr(writeSockaddr), SOCKADDR_SIZE);
+  if (ret === -1 && nqWriteErrnoIsSilent(target, l.errno())) return 0;
   return ret;
 }
 
@@ -533,7 +502,7 @@ function UDP_GetSocketAddr(socket: number, addr: QsockaddrT): number {
 
   getnameSockaddr.fill(0);
   socklenBuf[0] = SOCKADDR_SIZE;
-  l.symbols.getsockname(socket, ptr(getnameSockaddr), ptr(socklenBuf));
+  l.getsockname(socket, ptr(getnameSockaddr), ptr(socklenBuf));
   nativeToQsockaddr(getnameSockaddr, addr);
 
   const a0 = addr.sa_data[2];

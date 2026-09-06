@@ -10,12 +10,15 @@ net_local_adr/net_from/net_message/net_message_buffer/net_socket globals),
 not a renamed net_udp.c/net_wins.c driver file. Ported here anyway under the
 net_udp.ts name per the unit brief's file mapping.
 
-The socket layer is the same libc BSD-socket set the C calls, bound through
-bun:ffi's `dlopen("libc.so.6", ...)`: socket/bind/close/sendto/recvfrom/
-getsockname/ioctl, with `errno` read through `__errno_location()` and
-messages through `strerror()`. `struct sockaddr_in` is laid out by hand in a
-16-byte Uint8Array (sin_family little-endian u16, sin_port big-endian u16,
-sin_addr 4 bytes), so NetadrToSockadr/SockadrToNetadr port literally.
+The socket layer is the same BSD-socket set the C calls -- socket/bind/close/
+sendto/recvfrom/getsockname/ioctl, with `errno` and `strerror()` -- reached
+through `src/platform/sockets.ts`, which binds them out of the host OS's own
+library (libc.so.6 / libSystem.B.dylib / ws2_32.dll) and supplies the per-OS
+constants, entry-point names and errno values. `struct sockaddr_in` is laid
+out by hand in a 16-byte Uint8Array (sin_family, sin_port big-endian u16,
+sin_addr 4 bytes), so NetadrToSockadr/SockadrToNetadr port literally; only
+sin_family's encoding differs across the three targets (macOS's BSD
+`sin_len`/`sin_family` byte pair), and that lives in sockets.ts.
 
 Why libc and not `Bun.udpSocket` (which this module used first): the C's
 NET_SendPacket and NET_GetPacket both branch on errno --
@@ -54,9 +57,9 @@ Deviations from the brief / from Quake 2's net_udp.ts:
   socket:", strerror(errno))` -- a format string with no %s, so the
   strerror() argument is silently dropped. Ported literally, argument
   included, so the message reads the same as the C's.
-- `dlopen` failure has no equivalent in the C (libc is linked in). If the
-  system C library cannot be opened, UDP_OpenSocket takes the same
-  Sys_Error path a failed socket() takes.
+- A socket-library load failure has no equivalent in the C (libc is linked
+  in). If it cannot be opened, UDP_OpenSocket takes the same Sys_Error path
+  a failed socket() takes.
 - NET_GetPacket's recvfrom is bounded by net_message_buffer's own length at
   the syscall, exactly as the C's is, so a datagram larger than the buffer
   is truncated by the kernel rather than needing a JS-side bounds check.
@@ -91,11 +94,22 @@ Deviations from the brief / from Quake 2's net_udp.ts:
   attempting any DNS lookup.
 */
 
-import { dlopen, ptr, read } from "bun:ffi";
+import { ptr } from "bun:ffi";
 import { Q_atoi, COM_CheckParm, com_argv } from "../common/common";
 import { net_message } from "../common/sizebuf";
 import { Sys_Error, Sys_Printf } from "../platform/sys";
 import { Con_Printf } from "../client/console";
+import {
+  SOCKADDR_SIZE,
+  currentSockTarget,
+  openSocketApi,
+  qwGetPacketDisposition,
+  qwSendPacketDisposition,
+  sockConstants,
+  socketApiFailure,
+  writeSockaddrIn,
+  type SocketApi,
+} from "../platform/sockets";
 
 // net.h
 export const PORT_ANY = -1;
@@ -225,60 +239,16 @@ export function NET_IsClientLegal(_adr: NetadrT): boolean {
 
 //=============================================================================
 
-// libc BSD sockets through bun:ffi -- see file header.
+// BSD sockets through src/platform/sockets.ts -- see file header.
 
-const libcSymbols = {
-  socket: { args: ["i32", "i32", "i32"], returns: "i32" },
-  bind: { args: ["i32", "ptr", "u32"], returns: "i32" },
-  close: { args: ["i32"], returns: "i32" },
-  sendto: { args: ["i32", "ptr", "u64", "i32", "ptr", "u32"], returns: "i32" },
-  recvfrom: { args: ["i32", "ptr", "u64", "i32", "ptr", "ptr"], returns: "i32" },
-  getsockname: { args: ["i32", "ptr", "ptr"], returns: "i32" },
-  ioctl: { args: ["i32", "u64", "ptr"], returns: "i32" },
-  strerror: { args: ["i32"], returns: "cstring" },
-  __errno_location: { args: [], returns: "ptr" },
-} as const;
-
-type LibC = ReturnType<typeof dlopen<typeof libcSymbols>>;
-
-let libc: LibC | null = null;
-let libcFailed = false;
-
-function lib(): LibC | null {
-  if (libcFailed) return null;
-  if (libc) return libc;
-  for (const name of ["libc.so.6", "libc.so"]) {
-    try {
-      libc = dlopen(name, libcSymbols);
-      return libc;
-    } catch {
-      continue;
-    }
-  }
-  libcFailed = true;
-  return null;
+function lib(): SocketApi | null {
+  return openSocketApi();
 }
 
-function errnoOf(l: LibC): number {
-  const location = l.symbols.__errno_location();
-  if (location === null) return 0;
-  return read.i32(location, 0);
-}
-
-function strerrorOf(l: LibC, e: number): string {
-  return l.symbols.strerror(e) ?? "";
-}
-
-// <sys/socket.h>, <netinet/in.h>, <asm-generic/ioctls.h>, <asm-generic/errno-base.h>
-const AF_INET = 2;
-const PF_INET = 2;
-const SOCK_DGRAM = 2;
-const IPPROTO_UDP = 17;
-const FIONBIO = 0x5421;
-const EWOULDBLOCK = 11; // EAGAIN
-const ECONNREFUSED = 111;
-
-const SOCKADDR_SIZE = 16; // sizeof(struct sockaddr_in)
+// <sys/socket.h>, <netinet/in.h>, <sys/ioctl.h>, <errno.h> -- see sockets.ts
+// for the per-OS values behind these names.
+const target = currentSockTarget();
+const { AF_INET, PF_INET, SOCK_DGRAM, IPPROTO_UDP, FIONBIO } = sockConstants(target);
 
 //=============================================================================
 
@@ -287,15 +257,7 @@ const SOCKADDR_SIZE = 16; // sizeof(struct sockaddr_in)
 // NET_AdrToString), so the htons()/ntohs() the C leaves implicit in
 // `s->sin_port = a->port` is done explicitly here at the byte level.
 function NetadrToSockadr(a: NetadrT, s: Uint8Array): void {
-  s.fill(0);
-  s[0] = AF_INET & 0xff;
-  s[1] = (AF_INET >> 8) & 0xff;
-  s[2] = (a.port >> 8) & 0xff;
-  s[3] = a.port & 0xff;
-  s[4] = a.ip[0];
-  s[5] = a.ip[1];
-  s[6] = a.ip[2];
-  s[7] = a.ip[3];
+  writeSockaddrIn(target, s, AF_INET, a.port, a.ip);
 }
 
 function SockadrToNetadr(s: Uint8Array, a: NetadrT): void {
@@ -317,6 +279,7 @@ const fromSockaddr = new Uint8Array(SOCKADDR_SIZE);
 const toSockaddr = new Uint8Array(SOCKADDR_SIZE);
 const socklenBuf = new Uint32Array(1);
 const optvalBuf = new Int32Array(1);
+const INADDR_ANY = new Uint8Array(4);
 
 // Test/caller seam kept from the Bun.udpSocket implementation this replaced:
 // UDP_OpenSocket's bind is synchronous again, so by the time NET_Init has
@@ -328,18 +291,16 @@ export function NET_Ready(): Promise<void> {
 
 function UDP_OpenSocket(port: number): number {
   const l = lib();
-  if (!l) Sys_Error("UDP_OpenSocket: socket:", "the system C library could not be opened");
+  if (!l) Sys_Error("UDP_OpenSocket: socket:", socketApiFailure());
 
-  const newsocket = l.symbols.socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  if (newsocket === -1) Sys_Error("UDP_OpenSocket: socket:", strerrorOf(l, errnoOf(l)));
+  const newsocket = l.socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (newsocket === -1) Sys_Error("UDP_OpenSocket: socket:", l.strerror(l.errno()));
 
   optvalBuf[0] = 1; // qboolean _true = true
-  if (l.symbols.ioctl(newsocket, FIONBIO, ptr(optvalBuf)) === -1)
-    Sys_Error("UDP_OpenSocket: ioctl FIONBIO:", strerrorOf(l, errnoOf(l)));
+  if (l.ioctl(newsocket, FIONBIO, ptr(optvalBuf)) === -1) Sys_Error("UDP_OpenSocket: ioctl FIONBIO:", l.strerror(l.errno()));
 
   const address = new Uint8Array(SOCKADDR_SIZE);
-  address[0] = AF_INET & 0xff;
-  address[1] = (AF_INET >> 8) & 0xff;
+  writeSockaddrIn(target, address, AF_INET, 0, INADDR_ANY);
 
   //ZOID -- check for interface binding option
   const ipParm = COM_CheckParm("-ip");
@@ -361,8 +322,7 @@ function UDP_OpenSocket(port: number): number {
     address[3] = port & 0xff;
   }
 
-  if (l.symbols.bind(newsocket, ptr(address), SOCKADDR_SIZE) === -1)
-    Sys_Error("UDP_OpenSocket: bind: %s", strerrorOf(l, errnoOf(l)));
+  if (l.bind(newsocket, ptr(address), SOCKADDR_SIZE) === -1) Sys_Error("UDP_OpenSocket: bind: %s", l.strerror(l.errno()));
 
   return newsocket;
 }
@@ -384,8 +344,7 @@ function NET_GetLocalAddress(): void {
   if (l) {
     const address = new Uint8Array(SOCKADDR_SIZE);
     socklenBuf[0] = SOCKADDR_SIZE;
-    if (l.symbols.getsockname(net_socket, ptr(address), ptr(socklenBuf)) === -1)
-      Sys_Error("NET_Init: getsockname:", strerrorOf(l, errnoOf(l)));
+    if (l.getsockname(net_socket, ptr(address), ptr(socklenBuf)) === -1) Sys_Error("NET_Init: getsockname:", l.strerror(l.errno()));
     net_local_adr.port = (address[2] << 8) | address[3];
   }
 
@@ -425,7 +384,7 @@ NET_Shutdown
 */
 export function NET_Shutdown(): void {
   const l = lib();
-  if (l && net_socket !== -1) l.symbols.close(net_socket);
+  if (l && net_socket !== -1) l.close(net_socket);
   net_socket = -1;
 }
 
@@ -435,19 +394,18 @@ export function NET_GetPacket(): boolean {
 
   socklenBuf[0] = SOCKADDR_SIZE;
   fromSockaddr.fill(0);
-  const ret = l.symbols.recvfrom(
-    net_socket,
-    ptr(net_message_buffer),
-    net_message_buffer.length,
-    0,
-    ptr(fromSockaddr),
-    ptr(socklenBuf),
-  );
+  const ret = l.recvfrom(net_socket, ptr(net_message_buffer), net_message_buffer.length, 0, ptr(fromSockaddr), ptr(socklenBuf));
   if (ret === -1) {
-    const e = errnoOf(l);
-    if (e === EWOULDBLOCK) return false;
-    if (e === ECONNREFUSED) return false;
-    Sys_Printf("NET_GetPacket: %s\n", strerrorOf(l, e));
+    const e = l.errno();
+    const disposition = qwGetPacketDisposition(target, e);
+    if (disposition === "silent") return false;
+    if (disposition === "oversize") {
+      // QW/client/net_wins.c's WSAEMSGSIZE branch -- see sockets.ts's header
+      SockadrToNetadr(fromSockaddr, net_from);
+      Con_Printf(`Warning:  Oversize packet from ${NET_AdrToString(net_from)}\n`);
+      return false;
+    }
+    Sys_Printf("NET_GetPacket: %s\n", l.strerror(e));
     return false;
   }
 
@@ -464,11 +422,10 @@ export function NET_SendPacket(length: number, data: Uint8Array, to: NetadrT): v
   NetadrToSockadr(to, toSockaddr);
 
   const n = length < data.length ? length : data.length;
-  const ret = l.symbols.sendto(net_socket, ptr(data), n, 0, ptr(toSockaddr), SOCKADDR_SIZE);
+  const ret = l.sendto(net_socket, ptr(data), n, 0, ptr(toSockaddr), SOCKADDR_SIZE);
   if (ret === -1) {
-    const e = errnoOf(l);
-    if (e === EWOULDBLOCK) return;
-    if (e === ECONNREFUSED) return;
-    Sys_Printf("NET_SendPacket: %s\n", strerrorOf(l, e));
+    const e = l.errno();
+    if (qwSendPacketDisposition(target, e) === "silent") return;
+    Sys_Printf("NET_SendPacket: %s\n", l.strerror(e));
   }
 }

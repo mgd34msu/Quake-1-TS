@@ -8,12 +8,13 @@
 // server console has none, so "Can't "pause", not connected" is the
 // FAITHFUL WinQuake behavior, not a bug -- see Host_Pause_f), quit.
 import { spawnRole, stdinLine, waitForLog, readLog, killRole } from "./d_lib";
+import { Q1TS_DATA } from "./q1data";
 
 const PORT = 26120;
 const role = spawnRole({
   label: "s2_dedic",
   engineArgs: [
-    "-basedir", "/home/buzzkill/Projects/qfiles/q1-basedir",
+    "-basedir", Q1TS_DATA,
     "-game", "e2e_d",
     "-dedicated", "8",
     "-port", String(PORT),

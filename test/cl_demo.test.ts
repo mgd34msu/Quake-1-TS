@@ -51,7 +51,7 @@ afterAll(() => {
 
 // -- shared scratch dir / gamedir setup --------------------------------------
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "cl-demo-test-"));
 
@@ -78,7 +78,7 @@ afterAll(() => {
 // "Couldn't spawn server maps/somemap.bsp" (the map itself is never
 // fixtured) path is what actually runs, exactly as it would whether or not
 // "map" happened to be registered yet.
-const PROGS_DAT = "/home/buzzkill/Projects/qsrc/quake/progs106/progs.dat";
+const PROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
 function initGamedir(prefix: string, opts?: { withProgs?: boolean }): void {
   const baseDir = join(scratchDir, prefix);
   mkdirSync(join(baseDir, "id1"), { recursive: true });

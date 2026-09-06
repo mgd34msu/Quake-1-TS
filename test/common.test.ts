@@ -35,7 +35,7 @@ import {
 } from "../src/common/common";
 import { buildPak, writePakToDisk, ensureDir } from "./support/pak_builder";
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "common-test-"));
 
@@ -259,7 +259,7 @@ describe("COM_CheckParm / COM_InitArgv / va", () => {
 
 // F.md D4: a command line with more than ~50 `+`/`-` tokens appeared to
 // "hang the process". WinQuake's own COM_InitArgv (common.c:1057, read in
-// full against /home/buzzkill/Projects/qsrc/quake/WinQuake/common.c) drops
+// full against ../qsrc/quake/WinQuake/common.c) drops
 // argv entries past MAX_NUM_ARGVS (50, including argv[0], the program name)
 // silently, exactly as this port's COM_InitArgv does below -- confirmed by
 // direct comparison, line for line. COM_InitArgv itself cannot hang (every

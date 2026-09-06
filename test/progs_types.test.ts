@@ -147,7 +147,7 @@ describe("pr_comp.ts", () => {
     expect(Array.from(f.parm_size)).toEqual(sizes);
   });
 
-  const progsPath = "/home/buzzkill/Projects/qsrc/quake/progs106/progs.dat";
+  const progsPath = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
 
   test("readDprograms on progs106/progs.dat matches the retail header", () => {
     if (!existsSync(progsPath)) return; // fixture not present on this machine

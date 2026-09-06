@@ -21,8 +21,9 @@ import {
   SDL_InputStateForTests,
   SDL_SetRelativeDeltaForTests,
 } from "../../src/platform/sdl";
+import { Q1TS_DATA } from "./q1data";
 
-export const BASE = "/home/buzzkill/Projects/qfiles/q1-basedir";
+export const BASE = Q1TS_DATA;
 
 export const results: Array<{ name: string; pass: boolean; note: string }> = [];
 

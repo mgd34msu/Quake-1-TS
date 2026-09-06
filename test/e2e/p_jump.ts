@@ -17,9 +17,10 @@ import { NET_Ready } from "../../src/qw/net_udp";
 import { Cbuf_AddText } from "../../src/common/cmd";
 import { cl, cls } from "../../src/client/client";
 import { existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
+import { Q1TS_DATA, Q1TS_REPO } from "./q1data";
 
-const BASEDIR = process.env.P_BASEDIR ?? "/home/buzzkill/Projects/qfiles/q1-basedir";
-const REPO = "/home/buzzkill/Projects/quake-1-ts";
+const BASEDIR = Q1TS_DATA;
+const REPO = Q1TS_REPO;
 const OUT = process.env.P_OUT ?? "/tmp/p_jump";
 const CA_ACTIVE = 5;
 

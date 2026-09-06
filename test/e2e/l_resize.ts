@@ -21,7 +21,7 @@ Every shot is decoded (PCX for the software refresh, TGA for GL) and checked
 for its dimensions and for a lit status-bar band along the bottom.
 
 Env:
-  L_BASEDIR   engine -basedir (default /home/buzzkill/Projects/qfiles/q1-basedir)
+  Q1TS_DATA   engine -basedir (required; see test/e2e/q1data.ts)
   L_GAME      engine -game    (default e2e_l)
   L_SHOTDIR   where the renamed screenshots land
 */
@@ -34,11 +34,12 @@ import { Sys_SendKeyEvents } from "../../src/platform/sys";
 import { SDL_SetWindowSizeForTests, SDLGL_GetWindowSize } from "../../src/platform/sdl";
 import { keyState, KeydestT } from "../../src/client/keys";
 import { vid } from "../../src/client/vid";
+import { Q1TS_DATA } from "./q1data";
 
-const BASEDIR = process.env.L_BASEDIR ?? "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASEDIR = Q1TS_DATA;
 const GAME = process.env.L_GAME ?? "e2e_l";
 const GAMEDIR = `${BASEDIR}/${GAME}`;
-const SHOTDIR = process.env.L_SHOTDIR ?? "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad/resize";
+const SHOTDIR = process.env.L_SHOTDIR ?? `${process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests"}/resize`;
 
 const REF = process.argv[2] === "gl" ? "gl" : "soft";
 

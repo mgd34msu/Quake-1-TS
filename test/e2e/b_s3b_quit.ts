@@ -1,7 +1,8 @@
 import { boot, frames, exec, check, summary, keyState, Cvar_VariableValue, asDest } from "./b_lib";
 import { KeydestT } from "../../src/client/keys";
+import { Q1TS_DATA } from "./q1data";
 
-const BASE = "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASE = Q1TS_DATA;
 const mode = process.argv[2] ?? "quit";
 
 boot(["-basedir", BASE, "-game", "e2e_b", "-nosound"]);

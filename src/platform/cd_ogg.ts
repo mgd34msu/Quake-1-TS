@@ -58,7 +58,8 @@ dedicated-state early return is `#if 0`'d out under QW -- folded onto the
 change is not functional.
 */
 
-import { dlopen, ptr, read as ffiRead, type Library, type Pointer } from "bun:ffi";
+import { ptr, read as ffiRead, type Library, type Pointer } from "bun:ffi";
+import { currentLibrarySearch, openLibrary } from "./libs";
 import { Con_Printf, Con_DPrintf } from "../client/console";
 import { Cmd_AddCommand, Cmd_Argc, Cmd_Argv } from "../common/cmd";
 import { COM_CheckParm, Q_atoi, Q_strcasecmp, com_gamedir } from "../common/common";
@@ -83,25 +84,23 @@ type VorbisLib = Library<typeof vorbisSymbols>;
 let vorbis: VorbisLib | null = null;
 let vorbisTried = false;
 
+// CD audio is optional: cd_linux.c's CDAudio_Init returns -1 when it cannot
+// open /dev/cdrom and every CDAudio_* entry point then early-returns on
+// `!cdValid`/`!initialized`. A missing libvorbisfile is this port's
+// equivalent, so the failure is a Con_DPrintf and a null table, never a
+// throw -- the per-OS file names and the Q1TS_VORBISFILE_LIB override live
+// in src/platform/libs.ts.
 function lib(): VorbisLib | null {
   if (vorbisTried) return vorbis;
   vorbisTried = true;
-  const names =
-    process.platform === "win32"
-      ? ["libvorbisfile-3.dll", "vorbisfile.dll", "libvorbisfile.dll"]
-      : process.platform === "darwin"
-        ? ["libvorbisfile.3.dylib", "libvorbisfile.dylib"]
-        : ["libvorbisfile.so.3", "libvorbisfile.so"];
-  for (const name of names) {
-    try {
-      vorbis = dlopen(name, vorbisSymbols);
-      return vorbis;
-    } catch {
-      // try the next name
-    }
+  const opened = openLibrary(currentLibrarySearch("vorbisfile"), vorbisSymbols);
+  if (!opened.ok) {
+    Con_DPrintf("cd_ogg: %s\n", opened.message);
+    Con_DPrintf("cd_ogg: CD audio is silent\n");
+    return null;
   }
-  Con_DPrintf("cd_ogg: libvorbisfile not available; CD audio is silent\n");
-  return null;
+  vorbis = opened.lib;
+  return vorbis;
 }
 
 // OggVorbis_File is ~944 bytes on x86-64; over-allocate for safety. The

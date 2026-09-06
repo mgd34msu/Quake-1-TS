@@ -50,7 +50,7 @@ import { SV_Multicast, SV_UpdateClientStats } from "../src/qw/server/sv_send";
 import { SV_CalcPHS } from "../src/qw/server/sv_init";
 import { svErrorState } from "../src/qw/server/sv_main";
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "qwsv-send-test-"));
 const baseDir = join(scratchDir, "quake");

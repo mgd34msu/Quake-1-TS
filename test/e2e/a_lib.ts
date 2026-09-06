@@ -5,8 +5,9 @@ import { Cbuf_AddText } from "../../src/common/cmd";
 import { cl, cls, cl_entities, SIGNONS, CactiveT } from "../../src/client/client";
 import { sv } from "../../src/server/server";
 import * as common from "../../src/common/common";
+import { Q1TS_DATA } from "./q1data";
 
-export const BASEDIR = "/home/buzzkill/Projects/qfiles/q1-basedir";
+export const BASEDIR = Q1TS_DATA;
 
 export function gamedir(): string {
   return common.com_gamedir;

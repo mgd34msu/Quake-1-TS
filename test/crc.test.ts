@@ -71,7 +71,7 @@ describe("crc", () => {
     expect(actual).toEqual(expected);
   });
 
-  const progsPath = "/home/buzzkill/Projects/qsrc/quake/progs106/progs.dat";
+  const progsPath = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
 
   test("CRC of progs106/progs.dat matches the observed constant", () => {
     if (!existsSync(progsPath)) {

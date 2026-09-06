@@ -1,8 +1,9 @@
 import { boot, frames, exec, tap, key, check, summary, shot, keyState, Cvar_VariableValue, Cvar_VariableString, keybindings, Key_KeynumToString, conHas, conTail, asDest, asMState } from "./b_lib";
 import { K_ESCAPE, K_ENTER, K_UPARROW, K_DOWNARROW, K_LEFTARROW, K_RIGHTARROW, KeydestT, Key_StringToKeynum } from "../../src/client/keys";
 import { menuState, MStateT, m_filenames, bindnames } from "../../src/client/menu";
+import { Q1TS_DATA } from "./q1data";
 
-const BASE = "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASE = Q1TS_DATA;
 const S = (n: number) => MStateT[n];
 
 boot(["-basedir", BASE, "-game", "e2e_b"]);

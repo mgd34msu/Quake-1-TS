@@ -13,7 +13,7 @@
 //     bun test/e2e/m_gl_world_light.ts <shotname> -vid_ref soft [engine args...]
 //
 // Environment knobs (same shape as test/e2e/k_gl_alias_light.ts):
-//   M_BASEDIR, M_GAME, M_SHOTDIR, M_MAP, M_FRAMES, M_CMDS (";"-separated
+//   Q1TS_DATA (required), M_GAME, M_SHOTDIR, M_MAP, M_FRAMES, M_CMDS (";"-separated
 //   console commands run after the map loads; "FRAMES:<n>" runs n frames),
 //   M_TEX (";"-separated texture names to dump mip chains for), M_TOP (how
 //   many surfaces to list, default 12).
@@ -32,8 +32,9 @@ import { GL_MipMap, gl_max_size, gl_picmip, glDrawState } from "../../src/ref_gl
 import { glRsurfState } from "../../src/ref_gl/gl_rsurf";
 import { gl_texsort, r_fullbright } from "../../src/ref_gl/gl_rmain";
 import { readdirSync, copyFileSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
+import { Q1TS_DATA } from "./q1data";
 
-const BASEDIR = process.env.M_BASEDIR ?? "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASEDIR = Q1TS_DATA;
 const GAMENAME = process.env.M_GAME ?? "e2e_k";
 const GAMEDIR = `${BASEDIR}/${GAMENAME}`;
 const SHOTDIR = process.env.M_SHOTDIR ?? "/tmp/m_shots";

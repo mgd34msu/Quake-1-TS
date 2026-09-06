@@ -1,9 +1,12 @@
 # Quake (v1.09 GPL, Dec 1999) → TypeScript port conventions
 
-Source tree: `../qsrc/quake` (id Software release, readme.txt). Runtime: bun.
-Template project: `../quake-2-ts` (PORTING.md there is the parent of this one; where
-this file is silent, that one rules). Every worker follows this file. It is the
-contract; the check gate is `bun run check`.
+Source tree: id's own GPL release of the Quake sources, unpacked next to this
+repository as `../qsrc/quake` (see its `readme.txt`). Runtime: bun. This file is
+the contract every change follows; the check gate is `bun run check`.
+
+Conventions inherited from a sibling port of the Quake 2 sources (`quake-2-ts`,
+not part of this repository) are restated here wherever they matter. References
+to it below are provenance, not a dependency: nothing in this tree needs it.
 
 Track order: WinQuake (single player + NetQuake multiplayer) is the complete,
 runnable first deliverable. QuakeWorld (`QW/client`, `QW/server`) is a second
@@ -28,6 +31,28 @@ scope entirely.
   GetProcAddress. `src/platform/` starts as a copy of `../quake-2-ts/src/platform/`
   (`sdl.ts`, `glimp.ts`, `swimp.ts`, `snd.ts`, `cd_ogg.ts`, `net_udp.ts`, `sys.ts`,
   `vid_scale.ts`) re-pointed at this engine's interfaces; it is adapted, not rewritten.
+- Every native library is opened lazily, by name, through one resolver:
+  `src/platform/libs.ts`. It holds the candidate list per library per OS (SDL2,
+  OpenGL, libvorbisfile, and the socket library), tries them in order, honours a
+  `Q1TS_SDL2_LIB`/`Q1TS_GL_LIB`/`Q1TS_VORBISFILE_LIB`/`Q1TS_LIBC_LIB` override,
+  and on failure produces one message naming every path tried. No other module
+  hardcodes a library file name. A failed load is never fatal: no SDL2 means
+  headless, no libGL means the software renderer, no libvorbisfile means no CD
+  audio, no socket library means the loopback driver only (as `-noudp`).
+- The socket calls both LAN drivers make live in `src/platform/sockets.ts`, which
+  is the port's substitute for the C shipping `net_udp.c` (BSD) and `net_wins.c`
+  (Winsock) side by side: the entry-point names, the `sockaddr_in` layout
+  (macOS's BSD `sin_len`/`sin_family` byte pair versus Linux's and Windows's
+  16-bit family), the ioctl/sockopt constants, the errno accessor
+  (`__errno_location`/`__error`/`WSAGetLastError`) and the errno classification
+  tables the C spells out per platform. Everything above the FFI boundary there
+  is a pure function of the target OS, so all three tables are unit-tested from
+  the one Linux host (`test/platform_sockets.test.ts`).
+- Release builds: `bun run build:release` cross-compiles all three binaries for
+  `linux-x64`, `windows-x64`, `darwin-arm64` and `darwin-x64` into `dist/` via
+  `scripts/release-build.sh`. Only Linux is executed and verified here; the other
+  three are shipped as untested builds, and `docs/PLATFORMS.md` says so, lists
+  what each OS needs installed, and says how to report a failure.
 - Both renderers are compiled in and selected at runtime. Quake has no such switch
   (`GLQUAKE` is a compile-time define), so this port adds one cvar, `vid_ref`
   (`soft` | `gl`, archived, default `soft`), with the same load/fallback mechanics as
@@ -77,7 +102,13 @@ scope entirely.
   this (the graceful case, and the busy-loop-defers-signals limitation)
   directly; if a future unit finds an *unbounded* synchronous loop reachable
   from a running server, that loop is the bug to fix (restore the missing
-  `await`), not this handler.
+  `await`), not this handler. Windows has no `SIGTERM` at all (libuv can only
+  watch `SIGINT`, `SIGBREAK`, `SIGHUP` and `SIGWINCH` there, and asking for
+  anything else is an error rather than a handler that never fires), so
+  `installTerminationSignals` registers `SIGINT` + `SIGBREAK` on `win32` and
+  `SIGINT` + `SIGTERM` everywhere else, each inside its own `try` so a
+  refused signal simply keeps its OS default -- which is what the C does with
+  every signal anyway.
 - Mouse capture is a documented deviation from `vid_x.c` (`src/platform/sdl.ts`):
   the reference file grabs/ungrabs the X11 pointer only on an edge of
   `_windowed_mouse`'s value, with no `key_dest` or window-focus check at all,
@@ -103,7 +134,7 @@ WinQuake is one flat directory. The port groups it; every `.c` keeps its basenam
 | `cmd`, `cvar`, `crc`, `zone`, `wad`, `host`, `host_cmd` | `src/common/<basename>.ts` |
 | `bspfile.h`, `modelgen.h`, `spritegn.h`, `protocol.h` | `src/common/bspfile.ts`, `modelgen.ts`, `spritegn.ts`, `protocol.ts` (on-disk and wire formats, DataView-parsed) |
 | `net.h`, `net_main.c`, `net_loop.c`, `net_dgrm.c`, `net_vcr.c` | `src/common/net.ts`, `net_main.ts`, `net_loop.ts`, `net_dgrm.ts`, `net_vcr.ts`. The `net_driver_t`/`net_landriver_t` tables keep their shape. |
-| `net_udp.c`, `net_wins.c`, `net_bsd.c` | `src/platform/net_udp.ts` (one `Bun.udpSocket` LAN driver). `net_ser/net_comx/net_ipx/net_wipx/net_bw/net_mp/net_dos/net_win/net_none/mplib/mplpc` are not ported. |
+| `net_udp.c`, `net_wins.c`, `net_bsd.c` | `src/platform/net_udp.ts` (one LAN driver, ported from the unix `net_udp.c`, on BSD sockets through `src/platform/sockets.ts`). `net_wins.c` is read for the Windows spellings that layer needs (`closesocket`/`ioctlsocket`/`WSAGetLastError`, the WSA error codes) but is not separately ported. `net_ser/net_comx/net_ipx/net_wipx/net_bw/net_mp/net_dos/net_win/net_none/mplib/mplpc` are not ported. |
 | `model.h`/`model.c` + `gl_model.h`/`gl_model.c` | See "Model loading" below. Shared loader in `src/common/model.ts`; renderer-specific loaders in `src/ref_soft/model.ts` and `src/ref_gl/gl_model.ts`. |
 | `progs.h`, `pr_comp.h`, `progdefs.q1` | `src/progs/progs.ts`, `pr_comp.ts`, `progdefs.ts`. `progdefs.q1` is canonical (CRC 5927); `progdefs.h` in the tree is the build's stale copy. |
 | `pr_edict.c`, `pr_exec.c`, `pr_cmds.c` | `src/progs/<basename>.ts` |
@@ -114,7 +145,8 @@ WinQuake is one flat directory. The port groups it; every `.c` keeps its basenam
 | `sound.h`, `snd_dma`, `snd_mem`, `snd_mix` | `src/client/<basename>.ts`; `snd_win/snd_dos/snd_linux/snd_sun/snd_gus/snd_next/snd_null` → `src/platform/snd.ts` (`SNDDMA_*`) |
 | `input.h`; `in_win/in_dos/in_sun/in_null` | `src/client/input.ts` (interface); implementation inside `src/platform/sdl.ts` |
 | `cdaudio.h`; `cd_win/cd_linux/cd_audio/cd_null` | `src/client/cdaudio.ts`; `src/platform/cd_ogg.ts` (music/NN.ogg via libvorbisfile, as in quake-2-ts) |
-| `sys.h`; `sys_linux/sys_win/sys_dos/sys_sun/sys_wind/sys_null/conproc/dos_v2/vregset` | `src/platform/sys.ts` (one bun implementation) |
+| `sys.h`; `sys_linux/sys_win/sys_dos/sys_sun/sys_wind/sys_null/conproc/dos_v2/vregset` | `src/platform/sys.ts` (one bun implementation; the only per-OS branch left in it is the signal list, since Windows has no `SIGTERM`) |
+| (no C equivalent: the C's linker and headers) | `src/platform/libs.ts` (which file name each native library has on each OS, plus the `Q1TS_*_LIB` overrides) and `src/platform/sockets.ts` (the per-OS socket entry points, `sockaddr_in` layout, constants and errno tables both `net_udp.ts` files sit on) |
 | `vid_win/vid_x/vid_svgalib/vid_dos/vid_ext/vid_vga/vid_sunx/vid_sunxil/vid_null`, `gl_vidnt/gl_vidlinux/gl_vidlinuxglx` | `src/platform/vid.ts` + `swimp.ts` (8-bit framebuffer → SDL streaming texture) + `glimp.ts` (SDL GL context) |
 | `r_*.c`, `d_*.c`, `draw.c`, `nonintel.c`, `r_local.h`, `r_shared.h`, `d_local.h`, `d_iface.h`, `adivtab.h`, `anorms.h`, `anorm_dots.h` | `src/ref_soft/<basename>.ts` (`r_part.c` excepted, see client row). `nonintel.c` is the `id386 == 0` path and is the one that gets ported. |
 | `gl_draw`, `gl_mesh`, `gl_refrag`, `gl_rlight`, `gl_rmain`, `gl_rmisc`, `gl_rsurf`, `gl_warp`, `gl_test`, `glquake.h`, `gl_warp_sin.h` | `src/ref_gl/<basename>.ts`; `src/ref_gl/qgl.ts` starts from quake-2-ts's table extended with the entry points `gl_*.c` uses (`glColor3f`, `glColorTableEXT`, `glMTexCoord2fSGIS`/`glSelectTextureSGIS`, the `*PointerEXT` vertex-array family, `glFogf/glFogfv/glFogi`, `glDrawBuffer/glReadBuffer`, `glDepthRange`, `glPolygonMode`) |

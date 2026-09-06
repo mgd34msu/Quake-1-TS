@@ -20,7 +20,11 @@ Deviations from the C:
   so it throws SysError; src/main.ts's top level is where the process exits.
 - The fcntl(0, ...) non-blocking-stdin toggles are dropped: bun has no
   equivalent and Sys_ConsoleInput does not use FNDELAY; see its own comment
-  below for the non-blocking-stdin replacement this port uses instead.
+  below for the non-blocking-stdin replacement this port uses instead. That
+  also removes the file's last POSIX-only call: everything left here is
+  node:fs (portable), Bun.stdin, and process.on for signals, so this module
+  needs no per-OS branch beyond the signal list in
+  installTerminationSignals.
 - Sys_Printf's byte filter (`*p &= 0x7f`, `[%02x]` for control chars) is
   ported; the `sleep(0)`-retry write loop variant and the stderr+Con_Print
   variant are the `#if 0`/dead alternates in sys_linux.c and are dropped.
@@ -137,8 +141,20 @@ export function installTerminationSignals(quit: () => void): void {
       process.exit(1);
     }
   };
-  process.on("SIGINT", handler);
-  process.on("SIGTERM", handler);
+  // Windows has no SIGTERM: libuv can only watch SIGINT, SIGBREAK, SIGHUP and
+  // SIGWINCH there, and asking for anything else is an error rather than a
+  // handler that never fires. SIGBREAK (Ctrl-Break) is the console signal
+  // with no unix counterpart, so it takes SIGTERM's place in that list.
+  const signals = process.platform === "win32" ? ["SIGINT", "SIGBREAK"] : ["SIGINT", "SIGTERM"];
+  for (const name of signals) {
+    try {
+      process.on(name, handler);
+    } catch {
+      // A runtime that refuses a signal this port asks for leaves that
+      // signal at its OS default (immediate termination), which is exactly
+      // what the C does for every signal -- see the file header.
+    }
+  }
 }
 
 let secbase = 0;

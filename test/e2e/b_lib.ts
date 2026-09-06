@@ -99,9 +99,10 @@ export function summary(label: string): void {
 
 // ---- screenshots ---------------------------------------------------------
 import { readdirSync, copyFileSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
+import { Q1TS_DATA } from "./q1data";
 
-export const GAMEDIR = "/home/buzzkill/Projects/qfiles/q1-basedir/e2e_b";
-export const SHOTDIR = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad/bshots";
+export const GAMEDIR = `${Q1TS_DATA}/e2e_b`;
+export const SHOTDIR = `${process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests"}/bshots`;
 
 function shotFiles(): Set<string> {
   if (!existsSync(GAMEDIR)) return new Set();

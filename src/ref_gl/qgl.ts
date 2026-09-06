@@ -51,6 +51,7 @@ Deviations from PORTING.md / the C source:
 */
 
 import { dlopen, FFIType, linkSymbols, type Library, type Pointer } from "bun:ffi";
+import { currentLibrarySearch, openLibrary } from "../platform/libs";
 import { Sys_Error } from "../platform/sys";
 
 // GL entry points that take `const GLfloat *` / `const GLvoid *` etc pass a
@@ -470,20 +471,13 @@ export function qgl(): QGL {
 }
 
 // gl_vidlinuxglx.c dlopen()s "libGL.so.1" (`prjobj = dlopen(...)`, line 545)
-// and dlsym()s the extension entry points off it; gl_vidnt.c uses
-// "opengl32.dll" and wglGetProcAddress. This is that loader's portable
-// bun:ffi equivalent, minus the per-OS branch (one path per PORTING.md's
-// platform-mapping rule).
-function resolveSystemGLLibraryPath(): string {
-  switch (process.platform) {
-    case "win32":
-      return "opengl32.dll";
-    case "darwin":
-      return "/System/Library/Frameworks/OpenGL.framework/OpenGL";
-    default:
-      return "libGL.so.1";
-  }
-}
+// and dlsym()s the extension entry points off it; gl_vidnt.c links
+// "opengl32.dll" and resolves extensions through wglGetProcAddress. The
+// per-OS file names for the core table live in src/platform/libs.ts
+// (libGL.so.1 / opengl32.dll / OpenGL.framework, plus the Q1TS_GL_LIB
+// override); the extension entry points below go through
+// SDL_GL_GetProcAddress whenever the caller supplies one, which is the
+// portable spelling of both glXGetProcAddress and wglGetProcAddress.
 
 const ptr = FFIType.ptr;
 const f32 = FFIType.f32;
@@ -567,7 +561,12 @@ export type GLGetProcAddressFn = (name: string) => Pointer | bigint | null;
 // `getProcAddress` (bun:ffi's linkSymbols against the resolved address) or a
 // standalone per-symbol dlopen() against the same library -- deliberately
 // never folded into the single `glSymbols` dlopen() above, since one missing
-// symbol there would fail every core entry point too. Written out
+// symbol there would fail every core entry point too. The dlopen fallback is
+// the no-context path only: on Windows opengl32.dll exports GL 1.1 and
+// nothing else, and on macOS the framework exports no vendor extensions
+// either, so there the fallback simply returns null -- the same answer
+// "this extension is unavailable" gets everywhere else, and the reason
+// GL_VidInit always passes glimp.GetProcAddress. Written out
 // individually rather than through one generic helper: a generic keyed by a
 // type parameter cannot build the `{ [name]: sig }` object bun:ffi's
 // dlopen()/linkSymbols expect without an `as` cast to widen the computed
@@ -687,14 +686,11 @@ export function QGL_Shutdown(): void {
 }
 
 export function loadQGLFromSystem(getProcAddress?: GLGetProcAddressFn): QGL {
-  const libraryPath = resolveSystemGLLibraryPath();
+  const opened = openLibrary(currentLibrarySearch("gl"), glSymbols);
+  if (!opened.ok) throw new Error(`loadQGLFromSystem: failed to load the GL library: ${opened.message}`);
 
-  let lib: Library<typeof glSymbols>;
-  try {
-    lib = dlopen(libraryPath, glSymbols);
-  } catch (err) {
-    throw new Error(`loadQGLFromSystem: failed to load ${libraryPath}: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  const libraryPath = opened.name;
+  const lib: Library<typeof glSymbols> = opened.lib;
   loadedGlLibrary = lib;
 
   const s = lib.symbols;

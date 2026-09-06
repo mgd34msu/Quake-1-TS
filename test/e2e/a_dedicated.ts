@@ -1,8 +1,9 @@
+import { Q1TS_DATA, Q1TS_REPO } from "./q1data";
 // Scenario 7: drive `bun src/main.ts -dedicated` via stdin console lines.
 export {}; // top-level await requires this file to be a module (TS1375)
 
-const REPO = "/home/buzzkill/Projects/quake-1-ts";
-const BASEDIR = "/home/buzzkill/Projects/qfiles/q1-basedir";
+const REPO = Q1TS_REPO;
+const BASEDIR = Q1TS_DATA;
 
 const proc = Bun.spawn(
   ["bun", `${REPO}/src/main.ts`, "-basedir", BASEDIR, "-game", "e2e_a", "-nosound", "-dedicated", "2", "+map", "e1m1"],

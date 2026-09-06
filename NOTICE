@@ -1,0 +1,56 @@
+Quake 1 TS
+==========
+
+This project is a TypeScript port of id Software's Quake engine source code.
+
+    Quake, QuakeWorld and GLQuake engine source
+    Copyright (C) 1996-1997 Id Software, Inc.
+
+    TypeScript port
+    Copyright (C) 2026 the Quake 1 TS contributors
+
+The original source was released by id Software on 21 December 1999 under the
+GNU General Public License, version 2. This port is a derivative work of it and
+is distributed under the same terms: GPL-2.0-or-later. The complete license text
+is in LICENSE (id's own gnu.txt, verbatim). Every ported `.ts` file carries id's
+copyright notice and names the C file it came from.
+
+
+Game data is not included
+-------------------------
+
+No Quake game data ships with this repository, and none may be added to it.
+The pak files, maps, models, sounds, music and QuakeC progs remain the property
+of id Software / ZeniMax (Bethesda) under their own, non-GPL terms. id's own
+release notes are explicit about it: "All of the Quake data files remain
+copyrighted and licensed under the original terms, so you cannot redistribute
+data from the original game."
+
+To play, supply your own data:
+
+  - The shareware episode (`pak0.pak`) may be redistributed under its own
+    terms, which are not the GPL. It contains episode 1 only.
+  - The registered game (`pak0.pak` + `pak1.pak`) must be purchased. It is sold
+    on Steam, GOG and elsewhere.
+  - The mission packs (Scourge of Armagon / `hipnotic`, Dissolution of Eternity
+    / `rogue`) are also commercial data. Their QuakeC source is not part of this
+    repository; the engine runs their shipped `progs.dat` as bytecode, the same
+    way the original does.
+  - QuakeWorld additionally needs `qw/qwprogs.dat`, which ships in id's
+    QuakeWorld release.
+
+Quake is a registered trademark of id Software LLC. This project is not
+affiliated with, endorsed by, or supported by id Software, ZeniMax Media or
+Bethesda Softworks.
+
+
+Third-party components used at runtime
+--------------------------------------
+
+Loaded from the host system through `bun:ffi`; none is bundled or linked into
+this repository:
+
+  - SDL2 (zlib license) — window, input, audio.
+  - The system OpenGL driver — used only by the `gl` renderer.
+  - libvorbisfile / libvorbis / libogg (BSD-3-Clause) — optional, for the
+    `music/NN.ogg` CD-track replacement.

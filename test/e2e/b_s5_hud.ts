@@ -3,8 +3,9 @@ import { K_TAB, KeydestT } from "../../src/client/keys";
 import { cl, cls } from "../../src/client/client";
 import * as sbarMod from "../../src/client/sbar";
 import { scrState } from "../../src/client/screen_types";
+import { Q1TS_DATA } from "./q1data";
 
-const BASE = "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASE = Q1TS_DATA;
 
 boot(["-basedir", BASE, "-game", "e2e_b"]);
 frames(5);

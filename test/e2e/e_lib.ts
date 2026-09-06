@@ -10,10 +10,11 @@ import { Cvar_VariableString, Cvar_VariableValue } from "../../src/common/cvar";
 import { cl, cls } from "../../src/client/client";
 import { con_main, conState } from "../../src/qw/client/console";
 import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import { Q1TS_REPO } from "./q1data";
 
-export const BASEDIR = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad/eb";
-export const LOGDIR = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad/elog";
-export const REPO = "/home/buzzkill/Projects/quake-1-ts";
+export const BASEDIR = `${process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests"}/eb`;
+export const LOGDIR = `${process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests"}/elog`;
+export const REPO = Q1TS_REPO;
 
 // ca_active in QW's CactiveT (the client is in the game)
 export const CA_ACTIVE = 5;

@@ -3,6 +3,7 @@ import { boot, frames, exec, check, summary, shot, keyState, Cvar_VariableString
 import { KeydestT } from "../../src/client/keys";
 import { vid } from "../../src/client/vid";
 import { cl } from "../../src/client/client";
+import { Q1TS_DATA } from "./q1data";
 
 const argv = process.argv.slice(2);
 const name = argv[0] ?? "video";
@@ -10,7 +11,7 @@ const sep = argv.indexOf("--");
 const engineArgs = sep === -1 ? argv.slice(1) : argv.slice(1, sep);
 const cmds = sep === -1 ? [] : argv.slice(sep + 1);
 
-boot(["-basedir", "/home/buzzkill/Projects/qfiles/q1-basedir", "-game", "e2e_b", ...engineArgs]);
+boot(["-basedir", Q1TS_DATA, "-game", "e2e_b", ...engineArgs]);
 frames(5);
 console.log(`  VID: ${vid.width}x${vid.height} vid_ref=${Cvar_VariableString("vid_ref")} vid_mode=${Cvar_VariableValue("vid_mode")} vid_fullscreen=${Cvar_VariableValue("vid_fullscreen")}`);
 exec("disconnect", 3);

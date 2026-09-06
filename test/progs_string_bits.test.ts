@@ -93,10 +93,10 @@ import {
 } from "../src/qw/server/server";
 import { SV_ClearWorld as QW_SV_ClearWorld } from "../src/qw/server/world";
 
-const PROGS_DAT = "/home/buzzkill/Projects/qsrc/quake/progs106/progs.dat";
-const QWPROGS_DAT = "/home/buzzkill/Projects/qsrc/quake/QW/progs/qwprogs.dat";
+const PROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/progs106/progs.dat`;
+const QWPROGS_DAT = `${process.env.Q1TS_QSRC ?? `${import.meta.dir}/../../qsrc/quake`}/QW/progs/qwprogs.dat`;
 
-const scratchRoot = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
+const scratchRoot = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
 mkdirSync(scratchRoot, { recursive: true });
 const scratchDir = mkdtempSync(join(scratchRoot, "progs-string-bits-"));
 

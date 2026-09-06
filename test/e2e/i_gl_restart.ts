@@ -28,7 +28,7 @@ Env:
   I_PREPAD    extra frames burned before the scenario runs, so a `fresh`
               reference can be put at the same animation phase as the
               restart shot it is compared against
-  I_BASEDIR   engine -basedir (default /home/buzzkill/Projects/qfiles/q1-basedir)
+  Q1TS_DATA   engine -basedir (required; see test/e2e/q1data.ts)
   I_GAME      engine -game    (default e2e_b)
   I_SHOTDIR   where the renamed .tga lands
 */
@@ -43,11 +43,12 @@ import { cl } from "../../src/client/client";
 import { glState } from "../../src/ref_gl/glquake";
 import { glWarpState } from "../../src/ref_gl/gl_warp";
 import { VID_MenuCursor } from "../../src/platform/vid_menu";
+import { Q1TS_DATA } from "./q1data";
 
-const BASEDIR = process.env.I_BASEDIR ?? "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASEDIR = Q1TS_DATA;
 const GAME = process.env.I_GAME ?? "e2e_b";
 const GAMEDIR = `${BASEDIR}/${GAME}`;
-const SHOTDIR = process.env.I_SHOTDIR ?? "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad/glrestart";
+const SHOTDIR = process.env.I_SHOTDIR ?? `${process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests"}/glrestart`;
 
 function frames(n = 1, dt = 0.05): void {
   runFrames(n, dt);

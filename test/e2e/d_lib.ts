@@ -15,6 +15,7 @@
 
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { conState, con_text } from "../../src/client/console";
+import { Q1TS_DATA, Q1TS_REPO } from "./q1data";
 
 /** Whole console scrollback as an array of trimmed lines, oldest first.
  * Only meaningful when called from inside the engine process (d_role.ts);
@@ -42,9 +43,9 @@ export function conTail(n = 20): string {
     .join("\n");
 }
 
-export const SCRATCH = "/tmp/claude-1000/-home-buzzkill-Projects-quake-1-ts/3ee4d8d6-89b6-415b-a497-e7e5aa27a1a6/scratchpad";
-export const BASEDIR = "/home/buzzkill/Projects/qfiles/q1-basedir";
-export const D_ROLE = "/home/buzzkill/Projects/quake-1-ts/test/e2e/d_role.ts";
+export const SCRATCH = (process.env.Q1TS_SCRATCH ?? "/tmp/q1ts-tests");
+export const BASEDIR = Q1TS_DATA;
+export const D_ROLE = `${Q1TS_REPO}/test/e2e/d_role.ts`;
 
 export interface CmdStep {
   atMs: number;

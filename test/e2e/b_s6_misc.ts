@@ -1,8 +1,9 @@
 import { boot, frames, exec, check, summary, shot, conHas, conTail, keyState, Cvar_VariableValue } from "./b_lib";
 import { KeydestT } from "../../src/client/keys";
 import { cl, cls } from "../../src/client/client";
+import { Q1TS_DATA } from "./q1data";
 
-const BASE = "/home/buzzkill/Projects/qfiles/q1-basedir";
+const BASE = Q1TS_DATA;
 
 // +map on the command line goes through Cmd_StuffCmds_f, which quake.rc runs.
 boot(["-basedir", BASE, "-game", "e2e_b", "-nosound", "+map", "e1m1", "+sensitivity", "6"]);
