@@ -23,6 +23,7 @@
 // the old fake's call counter.
 
 import { describe, test, expect, beforeEach, afterAll, spyOn } from "bun:test";
+import { ClientT, sv, svs } from "../src/server/server";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COM_InitArgv, COM_InitFilesystem, com_gamedir } from "../src/common/common";
@@ -155,12 +156,28 @@ describe("CL_Record_f", () => {
 
   test.skipIf(!HAVE_PROGS106)("a forced track number becomes cls.forcetrack and demorecording turns on", () => {
     initGamedir("forcetrack-", { withProgs: true });
-    cmdState.source = CmdSourceT.src_command;
-    Cmd_TokenizeString("record demoX somemap 7");
-    CL_Record_f();
-    expect(cls.forcetrack).toBe(7);
-    expect(cls.demorecording).toBe(true);
-    CL_Stop_f();
+    // `record <demo> <map>` runs `map somemap`, and SV_SpawnServer walks
+    // svs.clients[0..svs.maxclients): size the slots the way Host_FindMaxClients
+    // does for a single-player host, and put the previous state back after.
+    const savedMaxclients = svs.maxclients;
+    const savedMaxclientslimit = svs.maxclientslimit;
+    const savedClients = svs.clients;
+    svs.maxclients = 1;
+    svs.maxclientslimit = 4;
+    svs.clients = Array.from({ length: 4 }, () => new ClientT());
+    try {
+      cmdState.source = CmdSourceT.src_command;
+      Cmd_TokenizeString("record demoX somemap 7");
+      CL_Record_f();
+      expect(cls.forcetrack).toBe(7);
+      expect(cls.demorecording).toBe(true);
+      CL_Stop_f();
+    } finally {
+      sv.clear();
+      svs.maxclients = savedMaxclients;
+      svs.maxclientslimit = savedMaxclientslimit;
+      svs.clients = savedClients;
+    }
   });
 
   test("no track argument leaves forcetrack at -1", () => {

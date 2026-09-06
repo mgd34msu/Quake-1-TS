@@ -39,8 +39,17 @@ const baseDir = join(scratchDir, "quake");
 
 const savedNostdout = sysState.nostdout;
 
+const savedSvsMaxclients = svs.maxclients;
+const savedSvsMaxclientslimit = svs.maxclientslimit;
+const savedSvsClients = svs.clients;
+
 afterAll(() => {
   sysState.nostdout = savedNostdout;
+  // SV_SpawnServer left sv.active set and svs sized for this suite
+  sv.clear();
+  svs.maxclients = savedSvsMaxclients;
+  svs.maxclientslimit = savedSvsMaxclientslimit;
+  svs.clients = savedSvsClients;
   rmSync(scratchDir, { recursive: true, force: true });
 });
 

@@ -46,16 +46,9 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Cbuf_AddText, cmdHost } from "../src/common/cmd";
 import { conState } from "../src/client/console";
-import { setCvarServerHooks } from "../src/common/cvar";
+import { setCvarServerHooks, Cvar_VariableString, Cvar_Set, Cvar_FindVar } from "../src/common/cvar";
 import { HostError, Host_Error, Host_Shutdown, host } from "../src/common/host";
-import {
-  getNetHostHooks,
-  net_activeconnections,
-  net_landrivers,
-  setNetActiveConnections,
-  setNetHostHooks,
-  setNetNumLandrivers,
-} from "../src/common/net_main";
+import { getNetHostHooks, net_activeconnections, net_landrivers, setNetActiveConnections, setNetHostHooks, setNetNumLandrivers, tcpipAvailable, my_tcpip_address, setTcpipAvailable, setMyTcpipAddress } from "../src/common/net_main";
 import { setHostShutdown, sysState } from "../src/platform/sys";
 import { sv, svState, svs } from "../src/server/server";
 import { cls, CactiveT, SIGNONS } from "../src/client/client";
@@ -83,6 +76,10 @@ const savedNostdout = sysState.nostdout;
 const savedIsDedicated = sysState.isDedicated;
 const savedCmdInitialized = cmdHost.initialized;
 const savedNetHooks = getNetHostHooks();
+const savedTcpipAvailable = tcpipAvailable;
+const savedMyTcpipAddress = my_tcpip_address;
+const savedHostnameCvar = Cvar_FindVar("hostname");
+const savedHostnameValue = savedHostnameCvar !== null ? savedHostnameCvar.string : null;
 const savedMaxclients = svs.maxclients;
 const savedMaxclientslimit = svs.maxclientslimit;
 const savedClients = svs.clients;
@@ -111,6 +108,10 @@ const savedClsDemonum = cls.demonum;
 // fake if the registry is missing it.
 
 afterAll(() => {
+  setTcpipAvailable(savedTcpipAvailable);
+  setMyTcpipAddress(savedMyTcpipAddress);
+  // UDP_Init (net_udp.c) sets `hostname` from gethostname when it is still UNNAMED; put back what this file found
+  if (Cvar_FindVar("hostname") !== null) Cvar_Set("hostname", savedHostnameValue !== null ? savedHostnameValue : "UNNAMED");
   try {
     Host_Shutdown();
   } catch {

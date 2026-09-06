@@ -1,3 +1,5 @@
+import { Cvar_FindVar, Cvar_Set } from "../src/common/cvar";
+import { tcpipAvailable, my_tcpip_address, setTcpipAvailable, setMyTcpipAddress } from "../src/common/net_main";
 /*
 End-to-end test for the NetQuake `connect` handshake over real UDP between
 two OS processes: a `-dedicated` server child and a client child, both

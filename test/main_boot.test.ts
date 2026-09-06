@@ -13,16 +13,9 @@ and restored in afterAll (`bun test` runs every file in one process).
 import { describe, expect, test, afterAll } from "bun:test";
 import { cmdHost } from "../src/common/cmd";
 import { conState } from "../src/client/console";
-import { setCvarServerHooks } from "../src/common/cvar";
+import { setCvarServerHooks, Cvar_FindVar, Cvar_Set } from "../src/common/cvar";
 import { Host_Shutdown, host } from "../src/common/host";
-import {
-  getNetHostHooks,
-  net_activeconnections,
-  net_landrivers,
-  setNetActiveConnections,
-  setNetHostHooks,
-  setNetNumLandrivers,
-} from "../src/common/net_main";
+import { getNetHostHooks, net_activeconnections, net_landrivers, setNetActiveConnections, setNetHostHooks, setNetNumLandrivers, tcpipAvailable, my_tcpip_address, setTcpipAvailable, setMyTcpipAddress } from "../src/common/net_main";
 import { setHostShutdown, sysState } from "../src/platform/sys";
 import { sv, svState, svs } from "../src/server/server";
 import { Sys_Main_Init, runFrames } from "../src/main";
@@ -37,6 +30,10 @@ const savedNostdout = sysState.nostdout;
 const savedIsDedicated = sysState.isDedicated;
 const savedCmdInitialized = cmdHost.initialized;
 const savedNetHooks = getNetHostHooks();
+const savedTcpipAvailable = tcpipAvailable;
+const savedMyTcpipAddress = my_tcpip_address;
+const savedHostnameCvar = Cvar_FindVar("hostname");
+const savedHostnameValue = savedHostnameCvar !== null ? savedHostnameCvar.string : null;
 const savedMaxclients = svs.maxclients;
 const savedMaxclientslimit = svs.maxclientslimit;
 const savedClients = svs.clients;
@@ -60,6 +57,10 @@ const savedConInitialized = conState.con_initialized;
 const builtFixtures: DedicatedFixture[] = [];
 
 afterAll(() => {
+  setTcpipAvailable(savedTcpipAvailable);
+  setMyTcpipAddress(savedMyTcpipAddress);
+  // UDP_Init (net_udp.c) sets `hostname` from gethostname when it is still UNNAMED; put back what this file found
+  if (Cvar_FindVar("hostname") !== null) Cvar_Set("hostname", savedHostnameValue !== null ? savedHostnameValue : "UNNAMED");
   sysState.nostdout = savedNostdout;
   sysState.isDedicated = savedIsDedicated;
   cmdHost.initialized = savedCmdInitialized;
