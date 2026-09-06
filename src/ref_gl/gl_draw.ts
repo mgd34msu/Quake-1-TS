@@ -177,7 +177,11 @@ import { CvarT, Cvar_RegisterVariable, Cvar_Set } from "../common/cvar";
 import { Cmd_AddCommand, Cmd_Argc, Cmd_Argv } from "../common/cmd";
 import { Con_Printf } from "../client/console";
 import { d_8to24table, vid } from "../client/vid";
-import { host_basepal } from "../common/host";
+import { hostBasepal } from "../common/host";
+// host.c's `byte *host_basepal` is one global; this port has two holders for
+// it -- src/common/host.ts on the WinQuake track, and src/qw/client/cl_main.ts
+// on the qwcl one, whose own Host_Init is what loads gfx/palette.lmp there.
+// Resolved exactly as src/ref_gl/gl_vid.ts and src/ref_gl/ref_gl.ts resolve it.
 import { Sbar_Changed } from "../client/sbar";
 import { cnttextures, glState, GltextureT, MAX_GLTEXTURES, TEXTURE0_SGIS } from "./glquake";
 import {
@@ -964,6 +968,8 @@ export function Draw_TileClear(x: number, y: number, w: number, h: number): void
   q.qglEnd();
 }
 
+
+
 /*
 =============
 Draw_Fill
@@ -981,7 +987,7 @@ export function Draw_Fill(x: number, y: number, w: number, h: number, c: number)
   const q = qgl();
   q.qglDisable(GL_TEXTURE_2D);
 
-  const pal = host_basepal;
+  const pal = hostBasepal();
   if (pal) {
     q.qglColor3f(pal[c * 3] / 255.0, pal[c * 3 + 1] / 255.0, pal[c * 3 + 2] / 255.0);
   }

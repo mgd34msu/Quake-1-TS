@@ -151,7 +151,7 @@ import { COM_WriteFile, com_gamedir } from "../common/common";
 import { Con_Printf } from "../client/console";
 import { CvarT, Cvar_RegisterVariable, Cvar_Set } from "../common/cvar";
 import { Sys_FileTime } from "../platform/sys";
-import { host, host_basepal } from "../common/host";
+import { host, hostBasepal } from "../common/host";
 import { cl, CSHIFT_BONUS, CSHIFT_DAMAGE, NUM_CSHIFTS } from "../client/client";
 import { r_refdef, type Renderer } from "../client/render";
 import { d_8to24table, vid, vidBackend } from "../client/vid";
@@ -171,9 +171,6 @@ function qwClMainMod(): typeof QwClMainModule {
   return require("../qw/client/cl_main");
 }
 
-function hostBasepal(): Uint8Array | null {
-  return qw.active ? qwClMainMod().host_basepal.data : host_basepal;
-}
 import { registerRenderer } from "../platform/vid";
 import { glState } from "./glquake";
 import { GL_RGB, GL_UNSIGNED_BYTE, qgl, qglHolder, QGL_Shutdown } from "./qgl";

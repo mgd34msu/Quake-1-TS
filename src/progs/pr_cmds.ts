@@ -145,12 +145,12 @@ import {
   NUM_FOR_EDICT,
   PROG_TO_EDICT,
   PR_GetString,
-  PR_SetEngineString,
+  PR_SetEngineStringRef,
   RETURN_EDICT,
   pr,
 } from "./progs";
 import { ED_Alloc, ED_Free, ED_Print, ED_PrintEdicts, ED_PrintNum } from "./pr_edict";
-import { OFS_PARM0, OFS_PARM1, OFS_PARM2, OFS_PARM3, OFS_PARM4, OFS_RETURN } from "./pr_comp";
+import { OFS_PARM0, OFS_PARM1, OFS_PARM2, OFS_PARM3, OFS_PARM4, OFS_RETURN, type StringT } from "./pr_comp";
 import { PR_RunError, prExec, setBuiltins, type BuiltinT } from "./pr_exec";
 import {
   DAMAGE_AIM,
@@ -886,12 +886,21 @@ function PF_dprint(): void {
   Con_DPrintf("%s", PF_VarString(0));
 }
 
+// char pr_string_temp[128]; -- ONE buffer shared by PF_ftos and PF_vtos, handed
+// to progs as the fixed offset `pr_string_temp - pr_strings`. Two ftos results
+// held at once therefore both read whatever the later call wrote, which is the
+// behaviour QuakeC was written against.
+const pr_string_temp = { value: "" };
+
+function PR_StringTemp(): StringT {
+  return PR_SetEngineStringRef(pr_string_temp, () => pr_string_temp.value);
+}
+
 function PF_ftos(): void {
   const v = G_FLOAT(OFS_PARM0);
-  let s: string;
-  if (v === Math.trunc(v)) s = Com_sprintf("%d", Math.trunc(v));
-  else s = Com_sprintf("%5.1f", v);
-  globals().i[OFS_RETURN] = PR_SetEngineString(s);
+  if (v === Math.trunc(v)) pr_string_temp.value = Com_sprintf("%d", Math.trunc(v));
+  else pr_string_temp.value = Com_sprintf("%5.1f", v);
+  globals().i[OFS_RETURN] = PR_StringTemp();
 }
 
 function PF_fabs(): void {
@@ -900,8 +909,8 @@ function PF_fabs(): void {
 
 function PF_vtos(): void {
   const v = G_VECTOR(OFS_PARM0);
-  const s = Com_sprintf("'%5.1f %5.1f %5.1f'", v[0], v[1], v[2]);
-  globals().i[OFS_RETURN] = PR_SetEngineString(s);
+  pr_string_temp.value = Com_sprintf("'%5.1f %5.1f %5.1f'", v[0], v[1], v[2]);
+  globals().i[OFS_RETURN] = PR_StringTemp();
 }
 
 function PF_Spawn(): void {

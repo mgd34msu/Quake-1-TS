@@ -111,7 +111,7 @@ import { COM_WriteFile, com_gamedir } from "../common/common";
 import { Con_Printf } from "../client/console";
 import { Cvar_Set } from "../common/cvar";
 import { Sys_FileTime } from "../platform/sys";
-import { host, host_basepal, hostClientHooks } from "../common/host";
+import { host, hostBasepal, hostClientHooks } from "../common/host";
 import { cl, CSHIFT_BONUS, CSHIFT_DAMAGE, NUM_CSHIFTS } from "../client/client";
 import { re, r_origin, r_refdef, type Renderer, vpn, vright, vup } from "../client/render";
 import { vid, vidBackend, VrectT } from "../client/vid";
@@ -125,15 +125,8 @@ import { qw } from "../common/quakedef";
 // it -- src/common/host.ts on the WinQuake track, and src/qw/client/cl_main.ts
 // on the qwcl one, whose own Host_Init is what loads gfx/palette.lmp there.
 // Resolved exactly as src/platform/vid.ts resolves `host_colormap`.
-import type * as QwClMainModule from "../qw/client/cl_main";
 
-function qwClMainMod(): typeof QwClMainModule {
-  return require("../qw/client/cl_main");
-}
 
-function hostBasepal(): Uint8Array | null {
-  return qw.active ? qwClMainMod().host_basepal.data : host_basepal;
-}
 import { registerRenderer } from "../platform/vid";
 import { dState } from "./d_local";
 import { R_Init, R_NewMap, R_RenderView, R_SetVrect, R_ViewChanged } from "./r_main";

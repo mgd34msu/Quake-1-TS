@@ -200,12 +200,13 @@ import {
   PROG_TO_EDICT,
   PR_GetString,
   PR_SetString,
+  PR_SetStringRef,
   QwEdictT,
   RETURN_EDICT,
   qwpr,
 } from "./progs";
 import { ED_Alloc, ED_Free, ED_Print, ED_PrintEdicts, ED_PrintNum } from "./pr_edict";
-import { OFS_PARM0, OFS_PARM1, OFS_PARM2, OFS_PARM3, OFS_PARM4, OFS_RETURN } from "../../progs/pr_comp";
+import { OFS_PARM0, OFS_PARM1, OFS_PARM2, OFS_PARM3, OFS_PARM4, OFS_RETURN, type StringT } from "../../progs/pr_comp";
 import { PR_RunError, SV_Error, prExec, setBuiltins, type BuiltinT } from "./pr_exec";
 import {
   DAMAGE_AIM,
@@ -893,12 +894,21 @@ function PF_dprint(): void {
   Con_Printf("%s", PF_VarString(0));
 }
 
+// char pr_string_temp[128]; (pr_cmds.c:806) -- ONE buffer shared by PF_ftos and
+// PF_vtos. PR_SetString dedups by pointer (pr_exec.c:684), so it costs a single
+// pr_strtbl slot for the life of the server and two results held at once both
+// read whatever the later call wrote, which is what QuakeC was written against.
+const pr_string_temp = { value: "" };
+
+function PR_StringTemp(): StringT {
+  return PR_SetStringRef(pr_string_temp, () => pr_string_temp.value);
+}
+
 function PF_ftos(): void {
   const v = G_FLOAT(OFS_PARM0);
-  let s: string;
-  if (v === Math.trunc(v)) s = Com_sprintf("%d", Math.trunc(v));
-  else s = Com_sprintf("%5.1f", v);
-  globals().i[OFS_RETURN] = PR_SetString(s);
+  if (v === Math.trunc(v)) pr_string_temp.value = Com_sprintf("%d", Math.trunc(v));
+  else pr_string_temp.value = Com_sprintf("%5.1f", v);
+  globals().i[OFS_RETURN] = PR_StringTemp();
 }
 
 function PF_fabs(): void {
@@ -907,8 +917,8 @@ function PF_fabs(): void {
 
 function PF_vtos(): void {
   const v = G_VECTOR(OFS_PARM0);
-  const s = Com_sprintf("'%5.1f %5.1f %5.1f'", v[0], v[1], v[2]);
-  globals().i[OFS_RETURN] = PR_SetString(s);
+  pr_string_temp.value = Com_sprintf("'%5.1f %5.1f %5.1f'", v[0], v[1], v[2]);
+  globals().i[OFS_RETURN] = PR_StringTemp();
 }
 
 function PF_Spawn(): void {
@@ -1489,29 +1499,38 @@ PF_infokey
 string(entity e, string key) infokey
 ==============
 */
+// static char ov[256]; (pr_cmds.c:1555) -- PF_infokey's own buffer, holding
+// both the "ip" and the "ping" answer. PR_SetString dedups by pointer, so the
+// two branches share one pr_strtbl slot for the life of the server and a
+// QuakeC-held result changes when the next ip/ping query rewrites the buffer.
+const pf_infokey_ov = { value: "" };
+
 function PF_infokey(): void {
   const e = G_EDICT(OFS_PARM0);
   const e1 = NUM_FOR_EDICT(e);
   const key = G_STRING(OFS_PARM1);
 
-  let value: string;
+  let value: StringT;
   if (e1 === 0) {
-    value = Info_ValueForKey(svs.info, key);
-    if (value === "") value = Info_ValueForKey(localinfoState.value, key);
+    let v = Info_ValueForKey(svs.info, key);
+    if (v === "") v = Info_ValueForKey(localinfoState.value, key);
+    value = PR_SetString(v);
   } else if (e1 <= MAX_CLIENTS) {
     if (key === "ip") {
-      value = NET_BaseAdrToString(svs.clients[e1 - 1].netchan.remote_address);
+      pf_infokey_ov.value = NET_BaseAdrToString(svs.clients[e1 - 1].netchan.remote_address);
+      value = PR_SetStringRef(pf_infokey_ov, () => pf_infokey_ov.value);
     } else if (key === "ping") {
       const ping = SV_CalcPing(svs.clients[e1 - 1]);
-      value = Com_sprintf("%d", ping);
+      pf_infokey_ov.value = Com_sprintf("%d", ping);
+      value = PR_SetStringRef(pf_infokey_ov, () => pf_infokey_ov.value);
     } else {
-      value = Info_ValueForKey(svs.clients[e1 - 1].userinfo, key);
+      value = PR_SetString(Info_ValueForKey(svs.clients[e1 - 1].userinfo, key));
     }
   } else {
-    value = "";
+    value = PR_SetString("");
   }
 
-  RETURN_STRING(value);
+  globals().i[OFS_RETURN] = value; // RETURN_STRING takes the pointer, not the contents
 }
 
 /*

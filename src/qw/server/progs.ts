@@ -94,6 +94,16 @@ ported; G_VECTOR/E_VECTOR allocate a fresh subarray view per call):
   `PR_ClearEngineStrings` has no C name (num_prstr is just reset to 0 inline
   inside PR_LoadProgs) -- it is this port's reload hook, named to match
   src/progs/progs.ts's identical-purpose function.
+  One consequence of the C storing a `char *` needs its own entry kind here.
+  SV_Spawn_f does `ent->v.netname = PR_SetString(host_client->name)`, and
+  `host_client->name` is a char array *inside* client_t: SV_ExtractFromUserinfo
+  later overwrites those same bytes, so every later `PR_GetString(netname)`
+  reads the new name and QuakeC obituaries follow a rename with no further
+  engine call. A JS string is a value, so `PR_SetStringRef(owner, get)` below
+  is that aliasing: the table entry holds the reader instead of a snapshot,
+  `PR_GetString` calls it on resolve, and the entry dedups on `owner` identity
+  the way the C's scan dedups on pointer identity (so repeated renames reuse
+  one slot instead of consuming `MAX_PRSTR`).
 - `TYPE_SIZE` (pr_edict.c's `type_size[8]`) is not re-declared: it is
   identical to src/progs/progs.ts's copy (both read the same pr_comp.h
   `etype_t`), and Q011 can import it from there directly.
@@ -267,8 +277,13 @@ export const MAX_PRSTR = 1024;
 // run in the same process, but they share the hazard and the reasoning.
 export const ENGINE_STRING_BASE = 0x40000000;
 
-const engineStrings: string[] = [];
+interface EngineStringRefT {
+  readonly get: () => string;
+}
+
+const engineStrings: (string | EngineStringRefT)[] = [];
 const engineStringIndex = new Map<string, number>();
+const engineStringRefIndex = new Map<object, number>();
 
 function readNulTerminated(bytes: Uint8Array, offset: number): string {
   let end = offset;
@@ -282,7 +297,8 @@ export function PR_GetString(n: StringT): string {
   if (n >= ENGINE_STRING_BASE) {
     const index = n - ENGINE_STRING_BASE;
     if (index >= engineStrings.length) throw new SysError(`PR_GetString: bad engine string index ${n}`);
-    return engineStrings[index];
+    const entry = engineStrings[index];
+    return typeof entry === "string" ? entry : entry.get();
   }
   if (n < 0) throw new SysError(`PR_GetString: bad string offset ${n}`);
   if (qwpr.strings === null) throw new SysError("PR_GetString: qwpr.strings not set (PR_LoadProgs not called)");
@@ -293,16 +309,38 @@ export function PR_GetString(n: StringT): string {
 export function PR_SetString(s: string): StringT {
   const existing = engineStringIndex.get(s);
   if (existing !== undefined) return existing;
-  if (engineStrings.length >= MAX_PRSTR - 1) throw new SysError("PR_SetString: MAX_PRSTR");
+  // No MAX_PRSTR guard here, deliberately. `num_prstr` counts only pointers
+  // *below* pr_strings (pr_exec.c:684's `if (s - pr_strings < 0)`) and dedups
+  // them by address, so in the C, ED_NewString (hunk memory, which sits above
+  // pr_strings and so returns a plain offset), PF_setmodel and PF_precache_*
+  // cost zero slots, while pr_string_temp and Info_ValueForKey's four rotating
+  // buffers cost one apiece -- about forty in total against the 1024 cap. This
+  // table is keyed on content, not address, so it holds that whole population
+  // and would trip the cap on maps and mods the real qwsv runs indefinitely
+  // (PF_infokey's "ping" alone mints a fresh string per distinct value). The
+  // cap stays on PR_SetStringRef below, which is the true pr_strtbl analogue.
   const index = ENGINE_STRING_BASE + engineStrings.length;
   engineStrings.push(s);
   engineStringIndex.set(s, index);
   return index;
 }
 
+// The `char *` the C stores in pr_strtbl[] when that pointer aims at a buffer
+// the engine keeps rewriting (client_t's `name`) -- see this file's header.
+export function PR_SetStringRef(owner: object, get: () => string): StringT {
+  const existing = engineStringRefIndex.get(owner);
+  if (existing !== undefined) return existing;
+  if (engineStrings.length >= MAX_PRSTR - 1) throw new SysError("PR_SetString: MAX_PRSTR");
+  const index = ENGINE_STRING_BASE + engineStrings.length;
+  engineStrings.push({ get });
+  engineStringRefIndex.set(owner, index);
+  return index;
+}
+
 export function PR_ClearEngineStrings(): void {
   engineStrings.length = 0;
   engineStringIndex.clear();
+  engineStringRefIndex.clear();
 }
 
 // QW's `int num_prstr` (pr_edict.c/pr_exec.c) has no function of its own in

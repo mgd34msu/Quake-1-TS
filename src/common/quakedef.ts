@@ -188,6 +188,21 @@ export class EntityStateT {
     this.skin = 0;
     this.effects = 0;
   }
+
+  // `*a = *b` on an entity_state_t.
+  copyFrom(src: EntityStateT): void {
+    this.origin[0] = src.origin[0];
+    this.origin[1] = src.origin[1];
+    this.origin[2] = src.origin[2];
+    this.angles[0] = src.angles[0];
+    this.angles[1] = src.angles[1];
+    this.angles[2] = src.angles[2];
+    this.modelindex = src.modelindex;
+    this.frame = src.frame;
+    this.colormap = src.colormap;
+    this.skin = src.skin;
+    this.effects = src.effects;
+  }
 }
 
 //=============================================================================

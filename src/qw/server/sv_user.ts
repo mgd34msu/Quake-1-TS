@@ -106,7 +106,7 @@ dropped silently; listed here for the record):
   sv_player->v.velocity)` is the live arm.
 */
 
-import { type LinkT, QwEdictT, EDICT_NUM, EDICT_TO_PROG, NUM_FOR_EDICT, PR_GetString, PR_SetString, qwpr } from "./progs";
+import { type LinkT, QwEdictT, EDICT_NUM, EDICT_TO_PROG, NUM_FOR_EDICT, PR_GetString, PR_SetStringRef, qwpr } from "./progs";
 import { QW_GLOBAL_OFS, type QwGlobalVars } from "./progdefs";
 import { GetEdictFieldValue, prSpectator } from "./pr_edict";
 import { PR_ExecuteProgram } from "./pr_exec";
@@ -551,7 +551,10 @@ export function SV_Spawn_f(): void {
   ent.fields.f.fill(0);
   ent.v.colormap = NUM_FOR_EDICT(ent);
   ent.v.team = 0; // FIXME
-  ent.v.netname = PR_SetString(host_client.name);
+  // `PR_SetString(host_client->name)` stores a pointer into client_t's own
+  // name buffer, so SV_ExtractFromUserinfo's later overwrite of it is what a
+  // QuakeC read of netname sees -- see src/qw/server/progs.ts's header.
+  ent.v.netname = PR_SetStringRef(host_client, () => host_client.name);
 
   host_client.entgravity = 1.0;
   let val = GetEdictFieldValue(ent, "gravity");

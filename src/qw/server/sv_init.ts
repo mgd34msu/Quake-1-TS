@@ -207,8 +207,10 @@ export function SV_CreateBaseline(): void {
     //
     VectorCopy(svent.v.origin, svent.baseline.origin);
     VectorCopy(svent.v.angles, svent.baseline.angles);
-    svent.baseline.frame = svent.v.frame;
-    svent.baseline.skinnum = svent.v.skin;
+    // entity_state_t's frame/skinnum are `int` (protocol.h:259,262), so the C
+    // truncates the QuakeC float on the way in.
+    svent.baseline.frame = svent.v.frame | 0;
+    svent.baseline.skinnum = svent.v.skin | 0;
     if (entnum > 0 && entnum <= MAX_CLIENTS) {
       svent.baseline.colormap = entnum;
       svent.baseline.modelindex = SV_ModelIndex("progs/player.mdl");

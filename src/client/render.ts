@@ -271,6 +271,39 @@ export class EntityT {
     this.trivial_accept = 0;
     this.topnode = null;
   }
+
+  // QW/client/client.h:367 declares `entity_t cl_visedicts_list[2][MAX_VISEDICTS]`
+  // by VALUE, so QW/client/r_efrag.c:261's `cl_visedicts[cl_numvisedicts++] =
+  // *pent;` is a whole-struct copy where WinQuake/r_efrag.c:261 stores a bare
+  // pointer into its `entity_t *cl_visedicts[MAX_VISEDICTS]`. This is that copy.
+  copyFrom(src: EntityT): void {
+    this.forcelink = src.forcelink;
+    this.update_type = src.update_type;
+    this.baseline.copyFrom(src.baseline);
+    this.msgtime = src.msgtime;
+    for (let i = 0; i < 3; i++) {
+      this.msg_origins[0][i] = src.msg_origins[0][i];
+      this.msg_origins[1][i] = src.msg_origins[1][i];
+      this.origin[i] = src.origin[i];
+      this.msg_angles[0][i] = src.msg_angles[0][i];
+      this.msg_angles[1][i] = src.msg_angles[1][i];
+      this.angles[i] = src.angles[i];
+    }
+    this.model = src.model;
+    this.efrag = src.efrag;
+    this.frame = src.frame;
+    this.syncbase = src.syncbase;
+    this.colormap = src.colormap;
+    this.effects = src.effects;
+    this.skinnum = src.skinnum;
+    this.keynum = src.keynum;
+    this.scoreboard = src.scoreboard;
+    this.visframe = src.visframe;
+    this.dlightframe = src.dlightframe;
+    this.dlightbits = src.dlightbits;
+    this.trivial_accept = src.trivial_accept;
+    this.topnode = src.topnode;
+  }
 }
 
 // !!! if this is changed, it must be changed in asm_draw.h too !!!

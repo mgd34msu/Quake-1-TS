@@ -131,7 +131,7 @@ import { SV_SaveSpawnparms, SV_SpawnServer, SV_WriteClientdataToMessage } from "
 import { SV_LinkEdict } from "../server/world";
 import { Mod_ForName, Mod_Print, type ModelT } from "./model";
 import { my_tcpip_address, net_activeconnections, net_time, tcpipAvailable, hostname } from "./net_main";
-import { EDICT_NUM, EDICT_TO_PROG, NUM_FOR_EDICT, PR_GetString, PR_SetEngineString, pr, type EdictT } from "../progs/progs";
+import { EDICT_NUM, EDICT_TO_PROG, NUM_FOR_EDICT, PR_GetString, PR_SetEngineStringRef, pr, type EdictT } from "../progs/progs";
 import { ED_ParseEdict, ED_ParseGlobals, ED_Write, ED_WriteGlobals, GetEdictFieldValue } from "../progs/pr_edict";
 import { PR_ExecuteProgram } from "../progs/pr_exec";
 import { GLOBAL_OFS, type GlobalVars } from "../progs/progdefs";
@@ -748,7 +748,7 @@ export function Host_Name_f(): void {
     if (host_client.name !== newName) Con_Printf("%s renamed to %s\n", host_client.name, newName);
   host_client.name = newName;
   if (host_client.edict === null) Sys_Error("Host_Name_f: client has no edict");
-  host_client.edict.v.netname = PR_SetEngineString(host_client.name); // host_client->name - pr_strings
+  host_client.edict.v.netname = PR_SetEngineStringRef(host_client, () => host_client.name); // host_client->name - pr_strings
 
   // send notification to all clients
 
@@ -1007,7 +1007,7 @@ export function Host_Spawn_f(): void {
     ent.fields.i.fill(0); // memset (&ent->v, 0, progs->entityfields * 4)
     ent.v.colormap = NUM_FOR_EDICT(ent);
     ent.v.team = (host_client.colors & 15) + 1;
-    ent.v.netname = PR_SetEngineString(host_client.name); // host_client->name - pr_strings
+    ent.v.netname = PR_SetEngineStringRef(host_client, () => host_client.name); // host_client->name - pr_strings
 
     // copy spawn parms out of the client_t
 

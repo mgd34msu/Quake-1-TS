@@ -124,7 +124,7 @@ import { d_8to24table, vid, vidBackend, type VidBackend, vidMenuHooks, VrectT } 
 import { Sys_Error } from "./sys";
 import { qw } from "../common/quakedef";
 import { S_Init } from "../client/snd_dma";
-import { hostClientHooks, host_colormap } from "../common/host";
+import { hostClientHooks, hostColormap } from "../common/host";
 import type * as QwClMainModule from "../qw/client/cl_main";
 import type * as QwScreenModule from "../qw/client/screen";
 import type * as QwSbarModule from "../qw/client/sbar";
@@ -787,7 +787,7 @@ export function VID_Init(palette: Uint8Array): void {
   // QW/client/vid_x.c:379 reads the same `host_colormap` global, but in
   // the qwcl binary that global lives in QW's cl_main.c (cl_main.ts's
   // holder), not host.c's.
-  vid.colormap = qw.active ? qwClMainMod().host_colormap.data : host_colormap;
+  vid.colormap = hostColormap();
   if (vid.colormap) {
     const view = new DataView(vid.colormap.buffer, vid.colormap.byteOffset, vid.colormap.byteLength);
     vid.fullbright = 256 - view.getInt32(2048 * 4, true);

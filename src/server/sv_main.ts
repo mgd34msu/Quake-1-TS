@@ -816,7 +816,7 @@ export function SV_UpdateToReliableMessages(): void {
         MSG_WriteShort(client.message, host_client.edict.v.frags);
       }
 
-      host_client.old_frags = host_client.edict.v.frags;
+      host_client.old_frags = host_client.edict.v.frags | 0; // client_t's old_frags is `int` (server.h:108)
     }
   }
 
@@ -949,8 +949,10 @@ export function SV_CreateBaseline(): void {
     // create entity baseline
     VectorCopy(svent.v.origin, svent.baseline.origin);
     VectorCopy(svent.v.angles, svent.baseline.angles);
-    svent.baseline.frame = svent.v.frame;
-    svent.baseline.skin = svent.v.skin;
+    // entity_state_t's frame/skin are `int` (quakedef.h:224-225), so the C
+    // truncates the QuakeC float on the way in.
+    svent.baseline.frame = svent.v.frame | 0;
+    svent.baseline.skin = svent.v.skin | 0;
     if (entnum > 0 && entnum <= svs.maxclients) {
       svent.baseline.colormap = entnum;
       svent.baseline.modelindex = SV_ModelIndex("progs/player.mdl");

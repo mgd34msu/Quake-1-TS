@@ -140,7 +140,7 @@ Deviations from PORTING.md / the C source:
 import { Cmd_AddCommand } from "../common/cmd";
 import { CvarT, Cvar_RegisterVariable, Cvar_SetValue } from "../common/cvar";
 import { M_PI } from "../common/mathlib";
-import { host, host_basepal, hostClientHooks } from "../common/host";
+import { host, hostBasepal, hostClientHooks } from "../common/host";
 import type { QpicT } from "../common/wad";
 import { Sys_Error, Sys_SendKeyEvents } from "../platform/sys";
 import { svMainHooks } from "../server/sv_main";
@@ -642,7 +642,8 @@ export function SCR_BringDownConsole(): void {
   for (let i = 0; i < 20 && scrState.scr_conlines !== scrState.scr_con_current; i++) SCR_UpdateScreen();
 
   cl.cshifts[0].percent = 0; // no area contents palette on next frame
-  if (host_basepal) vidBackend.current?.VID_SetPalette(host_basepal);
+  const basepal = hostBasepal();
+  if (basepal) vidBackend.current?.VID_SetPalette(basepal);
 }
 
 /*

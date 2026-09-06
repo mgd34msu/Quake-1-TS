@@ -45,6 +45,7 @@ import { ModtypeT, type MleafT, type MnodeT, isMleaf } from "../common/model";
 import { Con_Printf } from "../client/console";
 import { Sys_Error } from "../platform/sys";
 import { cl, cl_entities, cl_visedicts, clState, MAX_VISEDICTS } from "../client/client";
+import { qw } from "../common/quakedef";
 import type { EfragT, EntityT } from "../client/render";
 import { r_emins, r_emaxs } from "./r_local";
 import { rState } from "./r_shared";
@@ -249,7 +250,18 @@ export function R_StoreEfrags(leafEfrags: EfragT | null): void {
       case ModtypeT.mod_brush:
       case ModtypeT.mod_sprite:
         if (pent.visframe !== rState.r_framecount && clState.cl_numvisedicts < MAX_VISEDICTS) {
-          cl_visedicts[clState.cl_numvisedicts++] = pent;
+          // QW's cl_visedicts points into `entity_t cl_visedicts_list[2][]`
+          // (QW/client/client.h:366-367), declared by value, so QW's
+          // r_efrag.c:261 copies the whole struct here; WinQuake's
+          // cl_visedicts is an array of pointers and its r_efrag.c:261 stores
+          // one. Under qw.active the slot already aliases
+          // cl_visedicts_list[visState.list][n], which CL_EmitEntities
+          // republishes every frame, so copying into it is the C's `= *pent`
+          // and leaves no stale packet-entity data behind it.
+          const slot = cl_visedicts[clState.cl_numvisedicts];
+          if (qw.active && slot !== null) slot.copyFrom(pent);
+          else cl_visedicts[clState.cl_numvisedicts] = pent;
+          clState.cl_numvisedicts++;
 
           // mark that we've recorded this entity for this frame
           pent.visframe = rState.r_framecount;

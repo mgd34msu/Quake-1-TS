@@ -168,7 +168,7 @@ import {
   vcrState,
   type NetSvsClientT,
 } from "./net_main";
-import { MAX_SCOREBOARD, MINIMUM_MEMORY, MINIMUM_MEMORY_LEVELPAK, type QuakeParmsT } from "./quakedef";
+import { MAX_SCOREBOARD, MINIMUM_MEMORY, MINIMUM_MEMORY_LEVELPAK, qw, type QuakeParmsT } from "./quakedef";
 import { W_LoadWadFile } from "./wad";
 import type { Vec3 } from "./mathlib";
 import { vec3_origin } from "./mathlib";
@@ -388,6 +388,34 @@ export const host = {
 // byte *host_basepal; byte *host_colormap;
 export let host_basepal: Uint8Array | null = null;
 export let host_colormap: Uint8Array | null = null;
+
+// `host_basepal` and `host_colormap` are one C global each, but this port has
+// two holders for each: these, filled by this file's Host_Init on the WinQuake
+// track, and src/qw/client/cl_main.ts's `{ data }` boxes, filled by qwcl's own
+// Host_Init. Every module that runs in BOTH binaries -- the two renderers,
+// src/platform/vid.ts, src/client/screen.ts -- must read them through these two
+// accessors, never through the bindings above: under qwcl the WinQuake binding
+// is null, which silently degrades (Draw_Fill painted every scoreboard colour
+// block white that way). `realtime`, `host_frametime` and `host_framecount` do
+// not need this -- qwcl's Host_Frame mirrors those into the shared `host`
+// holder above, so there is already one home for them.
+//
+// cl_main.ts imports this module, so the back-reference is a genuine load-time
+// cycle and is resolved with the same lazy `require()` this file already uses
+// for its server-side siblings.
+import type * as QwClMainModule from "../qw/client/cl_main";
+
+function qwClMainMod(): typeof QwClMainModule {
+  return require("../qw/client/cl_main");
+}
+
+export function hostBasepal(): Uint8Array | null {
+  return qw.active ? qwClMainMod().host_basepal.data : host_basepal;
+}
+
+export function hostColormap(): Uint8Array | null {
+  return qw.active ? qwClMainMod().host_colormap.data : host_colormap;
+}
 
 export const host_framerate = new CvarT("host_framerate", "0"); // set for slow motion
 export const host_speeds = new CvarT("host_speeds", "0"); // set for running times

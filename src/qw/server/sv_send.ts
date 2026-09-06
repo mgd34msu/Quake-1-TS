@@ -682,7 +682,7 @@ export function SV_UpdateToReliableMessages(): void {
         ClientReliableWrite_Short(client, ent.v.frags);
       }
 
-      host_client.old_frags = ent.v.frags;
+      host_client.old_frags = ent.v.frags | 0; // client_t's old_frags is `int` (server.h:164)
     }
 
     // maxspeed/entgravity changes

@@ -289,17 +289,22 @@ export function Netchan_Setup(chan: NetchanT, adr: NetadrT, qportNum: number): v
   chan.reliable_sequence = 0;
   chan.last_reliable_sequence = 0;
   chan.reliable_length = 0;
-  chan.message_buf = new Uint8Array(MAX_MSGLEN);
-  chan.reliable_buf = new Uint8Array(MAX_MSGLEN);
-  chan.outgoing_size = new Array(MAX_LATENT).fill(0);
-  chan.outgoing_time = new Array(MAX_LATENT).fill(0);
+  // message_buf/reliable_buf are inline arrays in netchan_t and message is an
+  // inline sizebuf_t, so the memset zeroes them where they are: their addresses
+  // survive the call and anything holding one stays pointed at the live buffer.
+  // src/qw/cmd.ts caches this SizeBuf as qwCmdHooks.netchanMessage and
+  // CL_PlayDemo_f's Netchan_Setup call does not re-point it, so replacing the
+  // objects here would leave that hook aimed at a detached buffer.
+  chan.message_buf.fill(0);
+  chan.reliable_buf.fill(0);
+  chan.outgoing_size.fill(0);
+  chan.outgoing_time.fill(0);
 
   // `chan->remote_address = adr;` is a struct copy in the C -- see
   // net_udp.ts's copyNetadr
   chan.remote_address = copyNetadr(adr);
   chan.last_received = netchanState.realtime;
 
-  chan.message = new SizeBuf();
   chan.message.data = chan.message_buf;
   chan.message.allowoverflow = true;
   chan.message.maxsize = chan.message_buf.length;

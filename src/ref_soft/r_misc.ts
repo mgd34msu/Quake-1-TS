@@ -99,7 +99,7 @@ import { Mod_PointInLeaf } from "../common/model";
 import { CONTENTS_WATER } from "../common/bspfile";
 import { cl, cls } from "../client/client";
 import { sv } from "../server/server";
-import { host_basepal } from "../common/host";
+import { hostBasepal } from "../common/host";
 import { vid, vidBackend, VrectT } from "../client/vid";
 import { scrState } from "../client/screen_types";
 import { lcd_x } from "../client/view";
@@ -468,7 +468,7 @@ export function WarpPalette(): void {
   basecolor[1] = 80;
   basecolor[2] = 50;
 
-  const basepal = host_basepal;
+  const basepal = hostBasepal();
   if (!basepal) return;
 
   // pull the colors halfway to bright brown

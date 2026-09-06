@@ -277,8 +277,13 @@ export function RETURN_EDICT(e: EdictT): void {
 // of the shared globals/entvars buffer.
 export const ENGINE_STRING_BASE = 0x40000000;
 
-const engineStrings: string[] = [];
+interface EngineStringRefT {
+  readonly get: () => string;
+}
+
+const engineStrings: (string | EngineStringRefT)[] = [];
 const engineStringIndex = new Map<string, number>();
+const engineStringRefIndex = new Map<object, number>();
 
 function readNulTerminated(bytes: Uint8Array, offset: number): string {
   let end = offset;
@@ -292,7 +297,8 @@ export function PR_GetString(n: StringT): string {
   if (n >= ENGINE_STRING_BASE) {
     const index = n - ENGINE_STRING_BASE;
     if (index >= engineStrings.length) throw new SysError(`PR_GetString: bad engine string index ${n}`);
-    return engineStrings[index];
+    const entry = engineStrings[index];
+    return typeof entry === "string" ? entry : entry.get();
   }
   if (n < 0) throw new SysError(`PR_GetString: bad string offset ${n}`);
   if (pr.strings === null) throw new SysError("PR_GetString: pr.strings not set (PR_LoadProgs not called)");
@@ -310,7 +316,24 @@ export function PR_SetEngineString(s: string): StringT {
   return index;
 }
 
+// `host_client->name - pr_strings` (host_cmd.c:939, host_cmd.c:1311) and
+// `pr_string_temp - pr_strings` (pr_cmds.c:934, pr_cmds.c:947) are pointers at
+// engine buffers the engine keeps rewriting, so every later write to the buffer
+// is what a QuakeC read of that string_t sees. A JS string is a value, so the
+// pointer becomes a live getter, keyed on the owning object the way the C keys
+// on the buffer's address. QW's progs.ts carries the same PR_SetStringRef.
+export function PR_SetEngineStringRef(owner: object, get: () => string): StringT {
+  const existing = engineStringRefIndex.get(owner);
+  if (existing !== undefined) return existing;
+  const index = ENGINE_STRING_BASE + engineStrings.length;
+  if (index >= 0x7f800000) throw new SysError("PR_SetEngineString: engine string table overflow");
+  engineStrings.push({ get });
+  engineStringRefIndex.set(owner, index);
+  return index;
+}
+
 export function PR_ClearEngineStrings(): void {
   engineStrings.length = 0;
   engineStringIndex.clear();
+  engineStringRefIndex.clear();
 }

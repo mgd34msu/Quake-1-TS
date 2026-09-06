@@ -825,15 +825,27 @@ CL_NewTranslation
 export function CL_NewTranslation(slot: number): void {
   if (slot > MAX_CLIENTS) Sys_Error("CL_NewTranslation: slot > MAX_CLIENTS");
 
+  const player = cl.qw.players[slot];
+
+  // The C's two halves are `#ifdef GLQUAKE`/`#else`: exactly one of them is
+  // compiled, and each evaluates the "colors changed" test once and then syncs
+  // _topcolor/_bottomcolor. This port compiles both renderers in and runs both
+  // halves, so the test has to be evaluated once for the pair -- gl_rmisc.c's
+  // R_TranslatePlayerSkin performs the identical test and consumes it by
+  // syncing, which under GL left the software table below permanently unbuilt
+  // and a later `vid_restart` to soft drawing players with a stale one.
+  // Sampling the two fields before the seam call keeps both halves acting on
+  // the same evaluation, whichever renderer is live.
+  const prev_topcolor = player._topcolor;
+  const prev_bottomcolor = player._bottomcolor;
+
   // #ifdef GLQUAKE branch, through the renderer seam -- see file header
   getRenderer().R_TranslatePlayerSkin(slot);
-
-  const player = cl.qw.players[slot];
 
   const s = COM_StripExtension(Info_ValueForKey(player.userinfo, "skin"));
   if (player.skin && Q_strcasecmp(s, player.skin.name) === 0) player.skin = null;
 
-  if (player._topcolor !== player.topcolor || player._bottomcolor !== player.bottomcolor || !player.skin) {
+  if (prev_topcolor !== player.topcolor || prev_bottomcolor !== player.bottomcolor || !player.skin) {
     player._topcolor = player.topcolor;
     player._bottomcolor = player.bottomcolor;
 
